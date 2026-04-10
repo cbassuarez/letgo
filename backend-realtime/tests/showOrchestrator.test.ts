@@ -1,0 +1,33 @@
+import { describe, expect, it } from "vitest";
+import { ShowOrchestrator } from "../src/services/showOrchestrator";
+
+describe("ShowOrchestrator", () => {
+  it("builds deterministic cue IDs when given deterministic times", () => {
+    const show = new ShowOrchestrator();
+
+    const cueA = show.applyAction("start", 1000);
+    const cueB = show.applyAction("jump", 5000, "introduction");
+
+    expect(cueA.cueId).toBe("preshow:0");
+    expect(cueB.cueId).toBe("introduction:4000");
+  });
+
+  it("enables fixed + dynamic layers in main", () => {
+    const show = new ShowOrchestrator();
+    show.applyAction("start", 1000);
+    show.applyAction("jump", 2000, "introduction");
+    const mainCue = show.applyAction("jump", 3000, "main");
+
+    expect(mainCue.payload.layers).toEqual({ showFixed: true, showDynamic: true });
+  });
+
+  it("treats repeated start in preshow as idempotent", () => {
+    const show = new ShowOrchestrator();
+    const first = show.applyAction("start", 1000);
+    const second = show.applyAction("start", 3000);
+
+    expect(first.showState).toBe("preshow");
+    expect(second.showState).toBe("preshow");
+    expect(second.cueId).toBe("preshow:2000");
+  });
+});

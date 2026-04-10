@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: conductor-backend
+    env: node
+    rootDir: backend-realtime
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8787
+      - key: SESSION_SALT
+        generateValue: true
+      - key: MAX_CLIENT_DRIFT_MS
+        value: 100
+      - key: REDIS_URL
+        sync: false
+      - key: POSTGRES_URL
+        sync: false
+
+  - type: web
+    name: conductor-web
+    env: static
+    rootDir: web-client
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    pullRequestPreviewsEnabled: true
+    envVars:
+      - key: VITE_BACKEND_WS_URL
+        value: wss://conductor-backend.onrender.com
