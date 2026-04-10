@@ -1,13 +1,15 @@
 import type { WireEnvelope } from "@conductor/protocol";
 
-export const createSessionSocket = (hashedId: string): WebSocket => {
-  const explicit = import.meta.env.VITE_BACKEND_WS_URL as string | undefined;
-  if (explicit) {
-    return new WebSocket(`${explicit.replace(/\/$/, "")}/ws/device/${hashedId}`);
-  }
+export const BACKEND_HOST = "letgo-backend.onrender.com";
+export const BACKEND_HEALTH_URL = `https://${BACKEND_HOST}/health`;
+export const HARNESS_WS_URL = `wss://${BACKEND_HOST}/ws/harness`;
+export const DEVICE_WS_BASE_URL = `wss://${BACKEND_HOST}/ws/device`;
 
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  return new WebSocket(`${protocol}://${window.location.host}/ws/device/${hashedId}`);
+export const buildDeviceWsUrl = (hashedId: string): string =>
+  `${DEVICE_WS_BASE_URL}/${encodeURIComponent(hashedId)}`;
+
+export const createSessionSocket = (hashedId: string): WebSocket => {
+  return new WebSocket(buildDeviceWsUrl(hashedId));
 };
 
 export const sendEnvelope = <T>(socket: WebSocket, kind: WireEnvelope<T>["kind"], data: T): void => {

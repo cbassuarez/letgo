@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LetGo Ops Link Console</title>
+    <style>
+      :root {
+        --bg: #0d1118;
+        --panel: #121924;
+        --ink: #d4deea;
+        --muted: #8b9bb4;
+        --ok: #63d77a;
+        --warn: #f0b14e;
+        --err: #ff6d6d;
+        --line: #243244;
+      }
+      body {
+        margin: 0;
+        font-family: "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        background: radial-gradient(circle at 15% 15%, #182133 0%, var(--bg) 40%);
+        color: var(--ink);
+      }
+      .wrap {
+        max-width: 980px;
+        margin: 32px auto;
+        padding: 0 18px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 22px;
+        letter-spacing: 0.06em;
+      }
+      .sub {
+        color: var(--muted);
+        margin-bottom: 18px;
+      }
+      .grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 1fr 1fr;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px;
+      }
+      .card h2 {
+        margin: 0 0 10px;
+        font-size: 13px;
+        color: var(--muted);
+        letter-spacing: 0.08em;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        margin: 4px 0;
+      }
+      .label {
+        min-width: 120px;
+        color: var(--muted);
+      }
+      .value {
+        word-break: break-all;
+      }
+      button {
+        margin-top: 8px;
+        margin-right: 8px;
+        padding: 8px 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--ink);
+        background: #1a2536;
+        cursor: pointer;
+      }
+      button:hover { border-color: #3c5472; }
+      .ok { color: var(--ok); }
+      .warn { color: var(--warn); }
+      .err { color: var(--err); }
+      ul { margin: 8px 0 0 18px; padding: 0; }
+      li { margin-bottom: 6px; color: var(--muted); }
+      pre {
+        background: #0a0f18;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px;
+        max-height: 260px;
+        overflow: auto;
+        color: #c8d4e4;
+        font-size: 12px;
+      }
+      @media (max-width: 850px) {
+        .grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>LETGO OPS LINK CONSOLE</h1>
+      <div class="sub">Production endpoint diagnostics for launch control connectivity.</div>
+
+      <div class="grid">
+        <section class="card">
+          <h2>ENDPOINTS</h2>
+          <div class="row"><div class="label">HEALTH</div><div class="value" id="health-url"></div></div>
+          <div class="row"><div class="label">HARNESS WS</div><div class="value" id="harness-url"></div></div>
+          <div class="row"><div class="label">DEVICE WS</div><div class="value" id="device-url"></div></div>
+        </section>
+
+        <section class="card">
+          <h2>LIVE STATUS</h2>
+          <div class="row"><div class="label">HEALTH CHECK</div><div class="value" id="health-status">PENDING</div></div>
+          <div class="row"><div class="label">WS PROBE</div><div class="value" id="ws-status">PENDING</div></div>
+          <button id="btn-health">Run Health Check</button>
+          <button id="btn-ws">Run WS Probe</button>
+        </section>
+
+        <section class="card">
+          <h2>NOT LINKED RUNBOOK</h2>
+          <ul>
+            <li>Confirm backend health endpoint returns <code>ok: true</code>.</li>
+            <li>If health fails, verify Render service <code>letgo-backend</code> is live.</li>
+            <li>If WS fails but health passes, check backend logs for socket open/close/error events by role.</li>
+            <li>In harness, wait for auto-retry backoff to clear; link must reach ONLINE before show-critical controls unlock.</li>
+            <li>If link flaps, inspect network egress/TLS policy from operator machine.</li>
+          </ul>
+        </section>
+
+        <section class="card">
+          <h2>RAW OUTPUT</h2>
+          <pre id="raw"></pre>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const BACKEND_HOST = "letgo-backend.onrender.com";
+      const HEALTH_URL = `https://${BACKEND_HOST}/health`;
+      const HARNESS_WS_URL = `wss://${BACKEND_HOST}/ws/harness`;
+      const DEVICE_WS_BASE_URL = `wss://${BACKEND_HOST}/ws/device`;
+
+      const healthStatus = document.getElementById("health-status");
+      const wsStatus = document.getElementById("ws-status");
+      const raw = document.getElementById("raw");
+
+      document.getElementById("health-url").textContent = HEALTH_URL;
+      document.getElementById("harness-url").textContent = HARNESS_WS_URL;
+      document.getElementById("device-url").textContent = `${DEVICE_WS_BASE_URL}/:hashedId`;
+
+      function setStatus(node, text, cls) {
+        node.textContent = text;
+        node.className = cls;
+      }
+
+      function appendRaw(title, payload) {
+        const stamp = new Date().toISOString();
+        raw.textContent = `[${stamp}] ${title}\n${JSON.stringify(payload, null, 2)}\n\n` + raw.textContent;
+      }
+
+      async function runHealthCheck() {
+        setStatus(healthStatus, "RUNNING", "warn");
+        try {
+          const res = await fetch(HEALTH_URL, { cache: "no-store" });
+          const json = await res.json();
+          appendRaw("health", json);
+          if (res.ok && json.ok) {
+            setStatus(healthStatus, "OK", "ok");
+          } else {
+            setStatus(healthStatus, "UNHEALTHY", "err");
+          }
+        } catch (error) {
+          setStatus(healthStatus, "FAILED", "err");
+          appendRaw("health_error", { message: String(error) });
+        }
+      }
+
+      function runWsProbe() {
+        setStatus(wsStatus, "RUNNING", "warn");
+        let settled = false;
+        const ws = new WebSocket(HARNESS_WS_URL);
+        const timeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          ws.close();
+          setStatus(wsStatus, "TIMEOUT", "err");
+          appendRaw("ws_timeout", { url: HARNESS_WS_URL });
+        }, 8000);
+
+        ws.onopen = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          setStatus(wsStatus, "OPEN", "ok");
+          appendRaw("ws_open", { url: HARNESS_WS_URL });
+          ws.close();
+        };
+
+        ws.onmessage = (event) => {
+          appendRaw("ws_message", { data: event.data });
+        };
+
+        ws.onerror = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          setStatus(wsStatus, "ERROR", "err");
+          appendRaw("ws_error", { url: HARNESS_WS_URL });
+        };
+
+        ws.onclose = (event) => {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timeout);
+            setStatus(wsStatus, `CLOSED (${event.code})`, "warn");
+          }
+          appendRaw("ws_close", { code: event.code, reason: event.reason || "" });
+        };
+      }
+
+      document.getElementById("btn-health").addEventListener("click", runHealthCheck);
+      document.getElementById("btn-ws").addEventListener("click", runWsProbe);
+      runHealthCheck();
+    </script>
+  </body>
+</html>

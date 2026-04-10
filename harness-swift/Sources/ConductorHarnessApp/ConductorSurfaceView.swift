@@ -2,15 +2,48 @@ import AVKit
 import ConductorCore
 import SwiftUI
 
+private enum ImportModuleKind: Identifiable {
+    case scene(ShowState)
+    case interstitial
+    case fixedLane
+    case coreML
+
+    var id: String {
+        switch self {
+        case .scene(let scene):
+            return "scene-\(scene.rawValue)"
+        case .interstitial:
+            return "interstitial"
+        case .fixedLane:
+            return "fixed-lane"
+        case .coreML:
+            return "coreml"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .scene(let scene):
+            return "Load \(scene.rawValue.capitalized) Media"
+        case .interstitial:
+            return "Load Interstitial Media"
+        case .fixedLane:
+            return "Add Static Lane Media"
+        case .coreML:
+            return "Import CoreML Bundle"
+        }
+    }
+}
+
 struct ConductorSurfaceView: View {
     @ObservedObject var model: ConductorHarnessViewModel
 
-    @State private var wsURL: String = "ws://localhost:8787/ws/harness"
     @State private var blinkOn = false
     @State private var inspectorOpen = false
+    @State private var activeImportModal: ImportModuleKind?
 
     private let blinkTimer = Timer.publish(every: 0.45, on: .main, in: .common).autoconnect()
-    private let sceneImportOrder: [ShowState] = [.preshow, .introduction, .main, .ending]
+    private let sceneImportOrder: [ShowState] = [.preshow, .introduction, .ending]
 
     var body: some View {
         VStack(spacing: 12) {
@@ -39,6 +72,10 @@ struct ConductorSurfaceView: View {
         .preferredColorScheme(.dark)
         .onReceive(blinkTimer) { _ in
             blinkOn.toggle()
+        }
+        .sheet(item: $activeImportModal) { module in
+            ImportModuleSheet(module: module, model: model)
+                .preferredColorScheme(.dark)
         }
     }
 
@@ -69,7 +106,7 @@ struct ConductorSurfaceView: View {
                 StatusLamp(
                     label: "LINK",
                     state: linkLampState,
-                    pulse: model.connectionStatus.contains("Connecting"),
+                    pulse: model.linkState == .connecting || model.linkState == .backoff,
                     blinkOn: blinkOn
                 )
                 StatusLamp(
@@ -481,18 +518,18 @@ struct ConductorSurfaceView: View {
                     Text("WEBSOCKET")
                         .font(ConsoleTheme.smallTagFont(size: 9))
                         .foregroundStyle(Color.white.opacity(0.45))
-                    HStack {
-                        TextField("ws://...", text: $wsURL)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: .infinity)
-                        Button("LINK") { model.connect(to: wsURL) }
-                            .buttonStyle(.bordered)
-                        Button("DROP") { model.disconnect() }
-                            .buttonStyle(.bordered)
+                    VStack(alignment: .leading, spacing: 4) {
+                        linkDiagRow("STATE", value: model.connectionStatus.uppercased())
+                        linkDiagRow("URL", value: model.fixedHarnessLinkURL)
+                        linkDiagRow("HEALTH", value: model.fixedHealthURL)
+                        if let retryInSeconds = model.retryInSeconds, model.linkState == .backoff {
+                            linkDiagRow("RETRY", value: "\(retryInSeconds)s")
+                        }
+                        linkDiagRow("HANDSHAKE", value: model.lastHandshakeAt.map(formatTimestamp) ?? "never")
+                        if let lastLinkError = model.lastLinkError, !lastLinkError.isEmpty {
+                            linkDiagRow("LAST ERR", value: lastLinkError)
+                        }
                     }
-                    Text(model.connectionStatus.uppercased())
-                        .font(ConsoleTheme.telemetryFont(size: 10))
-                        .foregroundStyle(Color.white.opacity(0.55))
 
                     Divider().overlay(Color.white.opacity(0.08))
 
@@ -506,7 +543,7 @@ struct ConductorSurfaceView: View {
                                 .font(ConsoleTheme.telemetryFont(size: 10))
                                 .frame(width: 80, alignment: .leading)
                                 .foregroundStyle(Color.white.opacity(0.65))
-                            Button("LOAD") { model.importSceneMedia(for: scene) }
+                            Button("LOAD") { activeImportModal = .scene(scene) }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                             Text(model.mediaFilename(for: scene))
@@ -520,7 +557,7 @@ struct ConductorSurfaceView: View {
                             .font(ConsoleTheme.telemetryFont(size: 10))
                             .frame(width: 80, alignment: .leading)
                             .foregroundStyle(Color.white.opacity(0.65))
-                        Button("LOAD") { model.importInterstitialMedia() }
+                        Button("LOAD") { activeImportModal = .interstitial }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                         Text(model.interstitialFilename())
@@ -533,7 +570,7 @@ struct ConductorSurfaceView: View {
                             .font(ConsoleTheme.telemetryFont(size: 10))
                             .frame(width: 80, alignment: .leading)
                             .foregroundStyle(Color.white.opacity(0.65))
-                        Button("ADD") { model.importShowFixedLaneMedia() }
+                        Button("ADD") { activeImportModal = .fixedLane }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                         Text("\(model.showFixedLanes.count) LANES")
@@ -592,7 +629,7 @@ struct ConductorSurfaceView: View {
                             .foregroundStyle(Color.white.opacity(0.4))
                     }
                     HStack(spacing: 6) {
-                        Button("IMPORT") { model.importModelBundleFromDisk() }
+                        Button("IMPORT") { activeImportModal = .coreML }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                         Button("REFRESH") { model.refreshModelCatalog() }
@@ -673,14 +710,37 @@ struct ConductorSurfaceView: View {
         }
     }
 
+    private func linkDiagRow(_ label: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label)
+                .font(ConsoleTheme.smallTagFont(size: 8))
+                .tracking(1.0)
+                .foregroundStyle(Color.white.opacity(0.45))
+                .frame(width: 58, alignment: .leading)
+            Text(value)
+                .font(ConsoleTheme.telemetryFont(size: 10))
+                .foregroundStyle(Color.white.opacity(0.72))
+                .lineLimit(2)
+        }
+    }
+
+    private func formatTimestamp(_ date: Date) -> String {
+        date.formatted(date: .omitted, time: .standard)
+    }
+
     // MARK: - Lamp helpers
 
     private var linkLampState: LampState {
-        let s = model.connectionStatus
-        if s.contains("Connected") { return .nominal }
-        if s.contains("Connecting") { return .caution }
-        if s.contains("error") || s.contains("failed") { return .fault }
-        return .standby
+        switch model.linkState {
+        case .online:
+            return .nominal
+        case .connecting, .degraded, .backoff:
+            return .caution
+        case .offline:
+            return .fault
+        case .idle:
+            return .standby
+        }
     }
 
     private var mlLampState: LampState {
@@ -696,6 +756,122 @@ struct ConductorSurfaceView: View {
         case .healthy: return ConsoleTheme.lampGreen
         case .degraded: return ConsoleTheme.lampAmber
         case .unavailable: return ConsoleTheme.lampRed
+        }
+    }
+}
+
+private struct ImportModuleSheet: View {
+    let module: ImportModuleKind
+    @ObservedObject var model: ConductorHarnessViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(module.title)
+                .font(.system(size: 18, weight: .black, design: .monospaced))
+                .tracking(1.6)
+                .foregroundStyle(Color.white.opacity(0.9))
+
+            statusSection
+
+            Spacer(minLength: 0)
+
+            HStack {
+                Button("Cancel") {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+
+                Button(primaryButtonTitle) {
+                    performImport()
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(18)
+        .frame(minWidth: 480, minHeight: 230)
+        .background(ConsoleTheme.consoleBackground)
+    }
+
+    private var primaryButtonTitle: String {
+        switch module {
+        case .fixedLane:
+            return "Add Lane From Disk"
+        case .coreML:
+            return "Import .mlmodelc"
+        case .scene, .interstitial:
+            return "Load From Disk"
+        }
+    }
+
+    @ViewBuilder
+    private var statusSection: some View {
+        switch module {
+        case .scene(let scene):
+            statusRow("Module", value: scene.rawValue.uppercased())
+            statusRow(
+                "Current",
+                value: model.sceneMediaURLs[scene] == nil ? "none" : model.mediaFilename(for: scene)
+            )
+        case .interstitial:
+            statusRow("Module", value: "INTERSTITIAL")
+            statusRow(
+                "Current",
+                value: model.interstitialMediaURL == nil ? "none" : model.interstitialFilename()
+            )
+        case .fixedLane:
+            statusRow("Module", value: "STATIC LANE BANK")
+            statusRow("Current lanes", value: "\(model.showFixedLanes.count)")
+        case .coreML:
+            statusRow("Health", value: model.modelHealthLevel.rawValue.uppercased())
+            statusRow("Summary", value: model.modelHealthSummary)
+            statusRow("Selected", value: selectedModelLabel)
+        }
+    }
+
+    private var selectedModelLabel: String {
+        if let selected = model.modelCandidates.first(where: { $0.id == model.selectedModelCandidateID }) {
+            return selected.name
+        }
+        return "none"
+    }
+
+    private func statusRow(_ label: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(label.uppercased())
+                .font(ConsoleTheme.smallTagFont(size: 9))
+                .tracking(1.2)
+                .foregroundStyle(Color.white.opacity(0.48))
+                .frame(width: 88, alignment: .leading)
+            Text(value)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color.white.opacity(0.75))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(ConsoleTheme.panelInnerFill)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(ConsoleTheme.panelStroke, lineWidth: 0.7)
+        )
+    }
+
+    private func performImport() {
+        switch module {
+        case .scene(let scene):
+            model.importSceneMedia(for: scene)
+        case .interstitial:
+            model.importInterstitialMedia()
+        case .fixedLane:
+            model.importShowFixedLaneMedia()
+        case .coreML:
+            model.importModelBundleFromDisk()
         }
     }
 }

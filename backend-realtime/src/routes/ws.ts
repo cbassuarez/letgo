@@ -69,6 +69,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
 
   wsApp.get("/ws/harness", { websocket: true }, (socket) => {
     harnessSockets.add(socket);
+    logger.info("ws socket opened", { role: "harness" });
 
     send(socket, {
       kind: "show_snapshot",
@@ -76,8 +77,16 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       sentAt: Date.now()
     } satisfies WireEnvelope);
 
-    socket.on("close", () => {
+    socket.on("close", (code, reason) => {
+      logger.info("ws socket closed", {
+        role: "harness",
+        code,
+        reason: decodeCloseReason(reason)
+      });
       harnessSockets.delete(socket);
+    });
+    socket.on("error", (error) => {
+      logger.warn("ws socket error", { role: "harness", message: String(error) });
     });
 
     socket.on("message", async (raw: Buffer) => {
@@ -173,6 +182,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       }
 
       deviceSockets.set(hashedId, socket);
+      logger.info("ws socket opened", { role: "device", hashedId });
 
       const existing = await deps.sessions.get(hashedId);
       if (!existing) {
@@ -185,8 +195,21 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         sentAt: Date.now()
       } satisfies WireEnvelope);
 
-      socket.on("close", () => {
+      socket.on("close", (code, reason) => {
+        logger.info("ws socket closed", {
+          role: "device",
+          hashedId,
+          code,
+          reason: decodeCloseReason(reason)
+        });
         deviceSockets.delete(hashedId);
+      });
+      socket.on("error", (error) => {
+        logger.warn("ws socket error", {
+          role: "device",
+          hashedId,
+          message: String(error)
+        });
       });
 
       socket.on("message", async (raw: Buffer) => {
@@ -289,4 +312,11 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       send(socket, envelope);
     }
   }
+};
+
+const decodeCloseReason = (reason: Buffer): string => {
+  if (!reason || reason.length === 0) {
+    return "";
+  }
+  return reason.toString("utf8");
 };

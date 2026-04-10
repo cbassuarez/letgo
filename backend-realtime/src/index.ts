@@ -36,7 +36,7 @@ const bootstrap = async (): Promise<void> => {
 
   const replayService = new ReplayService(replayStore);
 
-  await registerHealthRoute(app);
+  await registerHealthRoute(app, config);
   await registerIdentityRoutes(app, {
     identityService,
     sessions: sessionStore

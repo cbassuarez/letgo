@@ -145,8 +145,11 @@ export const DeviceRoute = (): JSX.Element => {
 
           <aside className="absolute left-4 top-4 rounded-xl border border-fog/20 bg-ink/65 px-3 py-2 text-[11px] uppercase tracking-[0.16em] text-fog/80 backdrop-blur">
             <p>{session.connected ? "Live" : "Offline"}</p>
+            <p>Link {session.linkState}</p>
+            {session.retryInMs !== null ? <p>Retry {(session.retryInMs / 1000).toFixed(1)}s</p> : null}
             <p>Drift {session.driftMs.toFixed(1)}ms</p>
             <p>{session.fallbackActive ? "Fallback" : "Synced"}</p>
+            {session.fallbackActive ? <p>FallbackAge {(session.fallbackAgeMs / 1000).toFixed(1)}s</p> : null}
             <p>Engine {engineRunning ? "ON" : "OFF"}</p>
             <p>Mode {outputMode}</p>
           </aside>

@@ -52,10 +52,58 @@ private struct MediaManifest: Codable {
 
     static let fileName = "conductor_media.json"
 
-    static func fileURL() -> URL {
-        URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    static func preferredFileURL() -> URL {
+        if let explicitPath = ProcessInfo.processInfo.environment["CONDUCTOR_MEDIA_MANIFEST_PATH"],
+           !explicitPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: explicitPath)
+        }
+
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support", isDirectory: true)
+        return appSupport
+            .appendingPathComponent("ConductorHarness", isDirectory: true)
             .appendingPathComponent(fileName)
     }
+
+    static func candidateFileURLs() -> [URL] {
+        var urls: [URL] = [preferredFileURL()]
+
+        let fm = FileManager.default
+        let cwdURL = URL(fileURLWithPath: fm.currentDirectoryPath).appendingPathComponent(fileName)
+        urls.append(cwdURL)
+
+        let env = ProcessInfo.processInfo.environment
+        let candidateEnvKeys = ["CONDUCTOR_MEDIA_MANIFEST_PATH", "SRCROOT", "PROJECT_DIR", "PWD"]
+        for key in candidateEnvKeys {
+            guard let value = env[key], !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                continue
+            }
+            let candidate: URL
+            if key == "CONDUCTOR_MEDIA_MANIFEST_PATH" || value.hasSuffix(".json") {
+                candidate = URL(fileURLWithPath: value)
+            } else {
+                candidate = URL(fileURLWithPath: value).appendingPathComponent(fileName)
+            }
+            urls.append(candidate)
+        }
+
+        var seen = Set<String>()
+        return urls.filter { url in
+            let path = url.standardizedFileURL.path
+            if seen.contains(path) {
+                return false
+            }
+            seen.insert(path)
+            return true
+        }
+    }
+}
+
+private enum BackendEndpoints {
+    static let host = "letgo-backend.onrender.com"
+    static let healthURL = URL(string: "https://\(host)/health")!
+    static let harnessWebSocketURL = URL(string: "wss://\(host)/ws/harness")!
+    static let deviceWebSocketBase = "wss://\(host)/ws/device"
 }
 
 private struct OutputProfile {
@@ -89,6 +137,10 @@ final class ConductorHarnessViewModel: ObservableObject {
     @Published var generatedLine: String = ""
     @Published var devices: [DeviceTelemetry] = []
     @Published var connectionStatus: String = "Disconnected"
+    @Published private(set) var linkState: WebSocketConductorClient.LinkState = .idle
+    @Published private(set) var retryInSeconds: Int?
+    @Published private(set) var lastLinkError: String?
+    @Published private(set) var lastHandshakeAt: Date?
 
     @Published var modelHealthLevel: ModelHealthLevel = .unavailable
     @Published var modelHealthSummary: String = "No CoreML model loaded"
@@ -184,6 +236,18 @@ final class ConductorHarnessViewModel: ObservableObject {
         return formatter
     }()
 
+    var fixedHarnessLinkURL: String {
+        BackendEndpoints.harnessWebSocketURL.absoluteString
+    }
+
+    var fixedHealthURL: String {
+        BackendEndpoints.healthURL.absoluteString
+    }
+
+    var isLinkHealthy: Bool {
+        linkState == .online
+    }
+
     init() {
         let preferredModelName = ProcessInfo.processInfo.environment["CONDUCTOR_COREML_MODEL_NAME"]
         let scoringModel = CoreMLScoringModelAdapter(preferredModelName: preferredModelName)
@@ -195,12 +259,66 @@ final class ConductorHarnessViewModel: ObservableObject {
                 self?.handleBackendMessage(text)
             }
         }
+        websocket.onStateChange = { [weak self] nextState in
+            Task { @MainActor in
+                self?.linkState = nextState
+                self?.connectionStatus = Self.connectionStatusText(for: nextState)
+            }
+        }
+        websocket.onOpen = { [weak self] in
+            Task { @MainActor in
+                self?.pushStatus(StatusLineEvent(
+                    message: "WS link online",
+                    severity: .success,
+                    timestamp: Date()
+                ))
+            }
+        }
+        websocket.onClose = { [weak self] code, reason in
+            Task { @MainActor in
+                let suffix = reason.map { ": \($0)" } ?? ""
+                self?.pushStatus(StatusLineEvent(
+                    message: "WS link closed (\(code))\(suffix)",
+                    severity: .warn,
+                    timestamp: Date()
+                ))
+            }
+        }
+        websocket.onRetryScheduled = { [weak self] delay in
+            Task { @MainActor in
+                self?.pushStatus(StatusLineEvent(
+                    message: "WS retry scheduled in \(Int(ceil(delay)))s",
+                    severity: .info,
+                    timestamp: Date()
+                ))
+            }
+        }
+        websocket.onError = { [weak self] message in
+            Task { @MainActor in
+                guard let self else { return }
+                self.lastLinkError = message
+                self.pushStatus(StatusLineEvent(
+                    message: "WS link error: \(message)",
+                    severity: .warn,
+                    timestamp: Date()
+                ))
+            }
+        }
+        websocket.onDiagnostics = { [weak self] diagnostics in
+            Task { @MainActor in
+                guard let self else { return }
+                self.retryInSeconds = diagnostics.retryInSeconds
+                self.lastHandshakeAt = diagnostics.lastHandshakeAt
+                self.lastLinkError = diagnostics.lastError
+            }
+        }
 
         refreshModelCatalog()
         applyModelHealth(scoringModel.currentHealth())
         syncLatchState(latchController.snapshot, now: Date())
         startLatchTimer()
         loadMediaManifest()
+        websocket.start(url: BackendEndpoints.harnessWebSocketURL)
     }
 
     deinit {
@@ -209,6 +327,7 @@ final class ConductorHarnessViewModel: ObservableObject {
         }
         latchTimer?.invalidate()
         abortCoverTimer?.invalidate()
+        websocket.stop()
     }
 
     // MARK: - Status helpers
@@ -252,7 +371,7 @@ final class ConductorHarnessViewModel: ObservableObject {
     }
 
     var canFireWithMasterArm: Bool {
-        canFireGO && masterArmKey == .armed
+        canFireGO && masterArmKey == .armed && isLinkHealthy
     }
 
     // MARK: - Abort safety cover
@@ -330,22 +449,7 @@ final class ConductorHarnessViewModel: ObservableObject {
     }
 
     var transportLaneDescriptors: [TransportLaneDescriptor] {
-        var descriptors: [TransportLaneDescriptor] = []
-
-        if sceneMediaURLs[.main] != nil {
-            let laneId = "main-base"
-            descriptors.append(
-                TransportLaneDescriptor(
-                    id: laneId,
-                    label: laneId,
-                    canArm: true,
-                    isArmed: pendingLaneId == laneId,
-                    isActive: activeStaticLaneId == laneId || state == .main
-                )
-            )
-        }
-
-        descriptors.append(contentsOf: showFixedLanes.map { lane in
+        showFixedLanes.map { lane in
             TransportLaneDescriptor(
                 id: lane.id,
                 label: lane.label,
@@ -353,27 +457,40 @@ final class ConductorHarnessViewModel: ObservableObject {
                 isArmed: pendingLaneId == lane.id,
                 isActive: activeStaticLaneId == lane.id
             )
-        })
-
-        return descriptors
-    }
-
-    func connect(to urlString: String) {
-        guard let url = URL(string: urlString) else {
-            connectionStatus = "Invalid websocket URL"
-            return
         }
-        websocket.connect(url: url)
-        connectionStatus = "Connecting"
-    }
-
-    func disconnect() {
-        websocket.disconnect()
-        connectionStatus = "Disconnected"
     }
 
     func canApply(action: CueAction, target: ShowState? = nil) -> Bool {
         machine.canApply(action: action, targetState: target)
+    }
+
+    private static func connectionStatusText(for state: WebSocketConductorClient.LinkState) -> String {
+        switch state {
+        case .idle:
+            return "Idle"
+        case .connecting:
+            return "Connecting"
+        case .online:
+            return "Connected"
+        case .degraded:
+            return "Connected (Degraded)"
+        case .offline:
+            return "Offline"
+        case .backoff:
+            return "Retry Backoff"
+        }
+    }
+
+    private func guardLinkHealthy(for actionLabel: String) -> Bool {
+        guard isLinkHealthy else {
+            pushStatus(StatusLineEvent(
+                message: "Blocked: \(actionLabel) requires WS LINK ONLINE",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return false
+        }
+        return true
     }
 
     func apply(
@@ -432,7 +549,12 @@ final class ConductorHarnessViewModel: ObservableObject {
                     )
                 } catch {
                     await MainActor.run {
-                        self.connectionStatus = "Command dispatch failed: \(error.localizedDescription)"
+                        self.lastLinkError = error.localizedDescription
+                        self.pushStatus(StatusLineEvent(
+                            message: "Command dispatch failed: \(error.localizedDescription)",
+                            severity: .error,
+                            timestamp: Date()
+                        ))
                     }
                 }
 
@@ -479,7 +601,11 @@ final class ConductorHarnessViewModel: ObservableObject {
                 }
             }
         } catch {
-            connectionStatus = "Transition error: \(error.localizedDescription)"
+            pushStatus(StatusLineEvent(
+                message: "Transition error: \(error.localizedDescription)",
+                severity: .error,
+                timestamp: Date()
+            ))
         }
     }
 
@@ -491,7 +617,12 @@ final class ConductorHarnessViewModel: ObservableObject {
                 try await websocket.sendVector(vector)
             } catch {
                 await MainActor.run {
-                    self.connectionStatus = "Vector dispatch failed: \(error.localizedDescription)"
+                    self.lastLinkError = error.localizedDescription
+                    self.pushStatus(StatusLineEvent(
+                        message: "Vector dispatch failed: \(error.localizedDescription)",
+                        severity: .error,
+                        timestamp: Date()
+                    ))
                 }
             }
 
@@ -523,7 +654,11 @@ final class ConductorHarnessViewModel: ObservableObject {
         Task {
             let events = await replay.freezeFrame(center: Date())
             await MainActor.run {
-                self.connectionStatus = "Freeze captured: \(events.count) events"
+                self.pushStatus(StatusLineEvent(
+                    message: "Freeze captured: \(events.count) events",
+                    severity: .info,
+                    timestamp: Date()
+                ))
             }
         }
     }
@@ -539,6 +674,10 @@ final class ConductorHarnessViewModel: ObservableObject {
     }
 
     func fireOutputGO() {
+        guard guardLinkHealthy(for: "GO") else {
+            return
+        }
+
         guard engineRunning else {
             pushStatus(StatusLineEvent(
                 message: "Blocked: start engine first",
@@ -603,6 +742,10 @@ final class ConductorHarnessViewModel: ObservableObject {
     }
 
     func startEngine() {
+        guard guardLinkHealthy(for: "ENGINE START") else {
+            return
+        }
+
         guard !engineRunning else {
             pushStatus(StatusLineEvent(
                 message: "Engine already running",
@@ -631,6 +774,10 @@ final class ConductorHarnessViewModel: ObservableObject {
     }
 
     func stopEngine() {
+        guard guardLinkHealthy(for: "ENGINE STOP") else {
+            return
+        }
+
         guard engineRunning else {
             pushStatus(StatusLineEvent(
                 message: "Engine already stopped",
@@ -687,6 +834,10 @@ final class ConductorHarnessViewModel: ObservableObject {
         targetState: ShowState,
         completionState: ShowState
     ) {
+        guard guardLinkHealthy(for: "TIMELINE STEP") else {
+            return
+        }
+
         guard engineRunning else {
             pushStatus(StatusLineEvent(
                 message: "Blocked: start engine first",
@@ -767,7 +918,11 @@ final class ConductorHarnessViewModel: ObservableObject {
 
     func loadSelectedModelBundle() {
         guard let candidate = modelCandidates.first(where: { $0.id == selectedModelCandidateID }) else {
-            connectionStatus = "No .mlmodelc bundle selected"
+            pushStatus(StatusLineEvent(
+                message: "No .mlmodelc bundle selected",
+                severity: .warn,
+                timestamp: Date()
+            ))
             return
         }
 
@@ -791,7 +946,11 @@ final class ConductorHarnessViewModel: ObservableObject {
         }
 
         guard let modelBundleURL = resolveModelBundleURL(from: selectedURL) else {
-            connectionStatus = "No .mlmodelc bundle found in selected location"
+            pushStatus(StatusLineEvent(
+                message: "No .mlmodelc bundle found in selected location",
+                severity: .warn,
+                timestamp: Date()
+            ))
             return
         }
 
@@ -811,6 +970,15 @@ final class ConductorHarnessViewModel: ObservableObject {
     }
 
     func importSceneMedia(for scene: ShowState) {
+        guard scene != .main else {
+            pushStatus(StatusLineEvent(
+                message: "Main media import is disabled (main is lane-driven)",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+
         let panel = NSOpenPanel()
         panel.title = "Import Media for \(scene.rawValue.capitalized)"
         panel.prompt = "Import"
@@ -1017,9 +1185,6 @@ final class ConductorHarnessViewModel: ObservableObject {
         if let privileged = privilegedLaneStateMap[laneId] {
             return privileged
         }
-        if laneId == "main-base" {
-            return .main
-        }
         if showFixedLanes.contains(where: { $0.id == laneId }) {
             return .main
         }
@@ -1029,9 +1194,6 @@ final class ConductorHarnessViewModel: ObservableObject {
     private func laneMediaURL(for laneId: String) -> URL? {
         if let state = privilegedLaneStateMap[laneId] {
             return sceneMediaURLs[state]
-        }
-        if laneId == "main-base" {
-            return sceneMediaURLs[.main]
         }
         return showFixedLanes.first(where: { $0.id == laneId })?.mediaURL
     }
@@ -1188,9 +1350,12 @@ final class ConductorHarnessViewModel: ObservableObject {
     // MARK: - Media persistence
 
     private func saveMediaManifest() {
+        let destinationURL = MediaManifest.preferredFileURL()
         let manifest = MediaManifest(
             sceneMedia: Dictionary(
-                uniqueKeysWithValues: sceneMediaURLs.map { ($0.key.rawValue, $0.value.path) }
+                uniqueKeysWithValues: sceneMediaURLs
+                    .filter { $0.key != .main }
+                    .map { ($0.key.rawValue, $0.value.path) }
             ),
             interstitialMedia: interstitialMediaURL?.path,
             fixedLanes: showFixedLanes.map {
@@ -1199,8 +1364,15 @@ final class ConductorHarnessViewModel: ObservableObject {
         )
 
         do {
+            let directoryURL = destinationURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(manifest)
-            try data.write(to: MediaManifest.fileURL(), options: .atomic)
+            try data.write(to: destinationURL, options: .atomic)
+            pushStatus(StatusLineEvent(
+                message: "Saved media manifest: \(destinationURL.path)",
+                severity: .info,
+                timestamp: Date()
+            ))
         } catch {
             pushStatus(StatusLineEvent(
                 message: "Media manifest save failed: \(error.localizedDescription)",
@@ -1211,8 +1383,17 @@ final class ConductorHarnessViewModel: ObservableObject {
     }
 
     private func loadMediaManifest() {
-        let url = MediaManifest.fileURL()
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let candidates = MediaManifest.candidateFileURLs()
+        guard let url = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
+            if let preferred = candidates.first {
+                pushStatus(StatusLineEvent(
+                    message: "No media manifest found (checked: \(preferred.path))",
+                    severity: .info,
+                    timestamp: Date()
+                ))
+            }
+            return
+        }
 
         do {
             let data = try Data(contentsOf: url)
@@ -1220,7 +1401,7 @@ final class ConductorHarnessViewModel: ObservableObject {
 
             let fm = FileManager.default
             for (rawState, path) in manifest.sceneMedia {
-                guard let state = ShowState(rawValue: rawState), fm.fileExists(atPath: path) else { continue }
+                guard let state = ShowState(rawValue: rawState), state != .main, fm.fileExists(atPath: path) else { continue }
                 sceneMediaURLs[state] = URL(fileURLWithPath: path)
             }
 
@@ -1243,7 +1424,7 @@ final class ConductorHarnessViewModel: ObservableObject {
             let count = sceneMediaURLs.count + (interstitialMediaURL != nil ? 1 : 0) + showFixedLanes.count
             if count > 0 {
                 pushStatus(StatusLineEvent(
-                    message: "Restored \(count) media entries from manifest",
+                    message: "Restored \(count) media entries from \(url.path)",
                     severity: .success,
                     timestamp: Date()
                 ))
@@ -1262,14 +1443,18 @@ final class ConductorHarnessViewModel: ObservableObject {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let kind = json["kind"] as? String
         else {
-            connectionStatus = "Connected"
             return
         }
 
         if kind == "error",
            let payload = json["data"] as? [String: Any],
            let message = payload["message"] as? String {
-            connectionStatus = "Backend error: \(message)"
+            lastLinkError = message
+            pushStatus(StatusLineEvent(
+                message: "Backend error: \(message)",
+                severity: .error,
+                timestamp: Date()
+            ))
             return
         }
 
@@ -1279,7 +1464,5 @@ final class ConductorHarnessViewModel: ObservableObject {
            let snapshotState = ShowState(rawValue: rawState) {
             state = snapshotState
         }
-
-        connectionStatus = "Connected"
     }
 }
