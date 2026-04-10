@@ -28,6 +28,11 @@ describe("health route", () => {
     expect(typeof body.time).toBe("string");
     expect(body.wsHarnessPath).toBe("/ws/harness");
     expect(body.wsDevicePath).toBe("/ws/device/:hashedId");
+    expect(body.lightingStatePath).toBe("/lighting/state");
+    expect(body.lightingStreamPath).toBe("/lighting/stream");
+    expect(body.lightingEngineerPath).toBe("/lighting/engineer");
+    expect(body.audioStatePath).toBe("/audio/state");
+    expect(body.audioStreamPath).toBe("/audio/stream");
     expect(body.maxClientDriftMs).toBe(100);
   });
 });

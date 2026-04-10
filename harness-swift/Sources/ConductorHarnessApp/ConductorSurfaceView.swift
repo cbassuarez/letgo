@@ -7,6 +7,9 @@ private enum ImportModuleKind: Identifiable {
     case interstitial
     case fixedLane
     case coreML
+    case synthPreset
+    case samplePack
+    case choirProfile
 
     var id: String {
         switch self {
@@ -18,6 +21,12 @@ private enum ImportModuleKind: Identifiable {
             return "fixed-lane"
         case .coreML:
             return "coreml"
+        case .synthPreset:
+            return "synth-preset"
+        case .samplePack:
+            return "sample-pack"
+        case .choirProfile:
+            return "choir-profile"
         }
     }
 
@@ -31,6 +40,12 @@ private enum ImportModuleKind: Identifiable {
             return "Add Static Lane Media"
         case .coreML:
             return "Import CoreML Bundle"
+        case .synthPreset:
+            return "Load Synth Preset Pack"
+        case .samplePack:
+            return "Load Sample Pack Manifest"
+        case .choirProfile:
+            return "Load Choir Profile"
         }
     }
 }
@@ -405,8 +420,12 @@ struct ConductorSurfaceView: View {
                             Text("LAST CUE  \(cue.cueId)")
                                 .font(ConsoleTheme.telemetryFont(size: 10))
                                 .foregroundStyle(Color.white.opacity(0.4))
-                        }
+                            }
                     }
+
+                    Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 2)
+
+                    soundControlDeck
                 }
             }
         }
@@ -451,6 +470,179 @@ struct ConductorSurfaceView: View {
             minWidth: 90,
             minHeight: 36,
             action: action
+        )
+    }
+
+    private var soundControlDeck: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("CYBERNETIC SOUND LAYER")
+                .font(ConsoleTheme.smallTagFont(size: 9))
+                .tracking(1.4)
+                .foregroundStyle(Color.white.opacity(0.45))
+
+            HStack(alignment: .top, spacing: 10) {
+                soundModule(title: "SOUND ENGINE", accent: ConsoleTheme.lampGreen) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(model.quadRouteReady ? "QUAD READY" : "QUAD NOGO")
+                            .font(ConsoleTheme.smallTagFont(size: 8))
+                            .foregroundStyle(model.quadRouteReady ? ConsoleTheme.lampGreen : ConsoleTheme.lampAmber)
+                        Text("Route \(model.quadRouteChannelCount)ch")
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.58))
+                        HStack(spacing: 6) {
+                            Button("CHECK") { model.refreshQuadRouteStatus() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            Text("RMS \(Int(model.latestAudioFeatures.rms * 100))%")
+                                .font(ConsoleTheme.telemetryFont(size: 9))
+                                .foregroundStyle(Color.white.opacity(0.5))
+                            Text("FLUX \(Int(model.latestAudioFeatures.flux * 100))%")
+                                .font(ConsoleTheme.telemetryFont(size: 9))
+                                .foregroundStyle(Color.white.opacity(0.5))
+                        }
+                    }
+                }
+
+                soundModule(title: "SYNTH", accent: ConsoleTheme.lampBlue) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Stepper(value: $model.choirNote, in: 36 ... 96) {
+                            Text("NOTE \(model.choirNote)")
+                                .font(ConsoleTheme.telemetryFont(size: 9))
+                                .foregroundStyle(Color.white.opacity(0.62))
+                        }
+                        HStack(spacing: 6) {
+                            Button("NOTE ON") { model.triggerSynthNoteOn() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            Button("NOTE OFF") { model.triggerSynthNoteOff() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                    }
+                }
+
+                soundModule(title: "SAMPLES", accent: ConsoleTheme.lampAmber) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(model.sampleEntrySummary().uppercased())
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.62))
+                        HStack(spacing: 6) {
+                            Button("TRIGGER") { model.triggerSamplePlayback() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            Button("PHONE") { model.triggerPhoneSample() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                    }
+                }
+
+                soundModule(title: "PHONE CHOIR", accent: ConsoleTheme.lampRed) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(model.phoneAudioGateCommitted
+                             ? "GATE COMMIT"
+                             : (model.phoneAudioGateArmed ? "GATE ARMED" : "GATE SAFE"))
+                            .font(ConsoleTheme.smallTagFont(size: 8))
+                            .foregroundStyle(
+                                model.phoneAudioGateCommitted
+                                    ? ConsoleTheme.lampGreen
+                                    : (model.phoneAudioGateArmed ? ConsoleTheme.lampAmber : Color.white.opacity(0.45))
+                            )
+                        Text("POOL \(model.phoneAudioAvailableDevices.count) · VOICES \(model.phoneAudioActiveVoices.count)")
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.6))
+                        Picker("Target", selection: $model.phoneAudioTargetMode) {
+                            ForEach(PhoneAudioTargetMode.allCases) { mode in
+                                Text(mode.rawValue.uppercased()).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .controlSize(.small)
+
+                        if model.phoneAudioTargetMode == .single {
+                            Picker("Device", selection: $model.phoneAudioSingleTargetID) {
+                                if model.phoneAudioAvailableDevices.isEmpty {
+                                    Text("NO DEVICES").tag("")
+                                } else {
+                                    ForEach(model.phoneAudioAvailableDevices, id: \.self) { deviceID in
+                                        Text(deviceID).tag(deviceID)
+                                    }
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .controlSize(.small)
+                        }
+
+                        if model.phoneAudioTargetMode == .subset {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 4) {
+                                    ForEach(model.phoneAudioAvailableDevices, id: \.self) { deviceID in
+                                        let selected = model.phoneAudioSubsetTargetIDs.contains(deviceID)
+                                        Button(deviceID) {
+                                            model.togglePhoneAudioSubsetTarget(deviceID)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .font(ConsoleTheme.telemetryFont(size: 8))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 3)
+                                        .background(selected ? ConsoleTheme.lampBlue.opacity(0.35) : Color.white.opacity(0.06))
+                                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                                    }
+                                }
+                            }
+                        }
+
+                        HStack(spacing: 6) {
+                            Button("TAKE") { model.takePhoneAudioGate() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            Button("GO") { model.goPhoneAudioGate() }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            Button("SAFE") { model.safePhoneAudioGate() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                        HStack(spacing: 6) {
+                            Button("NOTE ON") { model.triggerPhoneChoirNoteOn() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            Button("OFF") { model.triggerPhoneChoirNoteOff() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            Button("AMBI") { model.triggerPhoneAmbientNoise() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            Button("STOP") { model.stopAllPhoneAudio() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func soundModule<Content: View>(
+        title: String,
+        accent: Color,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(ConsoleTheme.smallTagFont(size: 8))
+                .tracking(1.2)
+                .foregroundStyle(accent)
+            content()
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ConsoleTheme.panelInnerFill)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(ConsoleTheme.panelStroke, lineWidth: 0.6)
         )
     }
 
@@ -621,13 +813,61 @@ struct ConductorSurfaceView: View {
                             .font(ConsoleTheme.telemetryFont(size: 9))
                             .foregroundStyle(Color.white.opacity(0.4))
                     }
+
+                    Divider().overlay(Color.white.opacity(0.08))
+
+                    Text("SOUND MODULES")
+                        .font(ConsoleTheme.smallTagFont(size: 9))
+                        .foregroundStyle(Color.white.opacity(0.45))
+
+                    HStack {
+                        Text("SYNTH")
+                            .font(ConsoleTheme.telemetryFont(size: 10))
+                            .frame(width: 80, alignment: .leading)
+                            .foregroundStyle(Color.white.opacity(0.65))
+                        Button("LOAD") { activeImportModal = .synthPreset }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        Text(model.synthPresetFilename())
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                            .lineLimit(1)
+                    }
+
+                    HStack {
+                        Text("SAMPLES")
+                            .font(ConsoleTheme.telemetryFont(size: 10))
+                            .frame(width: 80, alignment: .leading)
+                            .foregroundStyle(Color.white.opacity(0.65))
+                        Button("LOAD") { activeImportModal = .samplePack }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        Text(model.samplePackFilename())
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                            .lineLimit(1)
+                    }
+
+                    HStack {
+                        Text("CHOIR")
+                            .font(ConsoleTheme.telemetryFont(size: 10))
+                            .frame(width: 80, alignment: .leading)
+                            .foregroundStyle(Color.white.opacity(0.65))
+                        Button("LOAD") { activeImportModal = .choirProfile }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        Text(model.choirProfileFilename())
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                            .lineLimit(1)
+                    }
                 }
             }
             .frame(maxWidth: .infinity)
 
             ConsolePanel("PREVIEW MONITOR", accent: ConsoleTheme.lampAmber) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("MODE \(model.effectiveOutputMode.rawValue.uppercased())  ·  \(model.previewStatus)")
+                    Text("MODE \(model.effectiveOutputMode.uiLabel.uppercased())  ·  \(model.previewStatus)")
                         .font(ConsoleTheme.telemetryFont(size: 9))
                         .foregroundStyle(Color.white.opacity(0.5))
                         .lineLimit(1)
@@ -732,8 +972,8 @@ struct ConductorSurfaceView: View {
         FlightOutputMode.allCases.map { mode in
             BusRow(
                 id: mode.rawValue,
-                label: mode.rawValue,
-                subtitle: mode == .static ? "fixed lane" : (mode == .dynamic ? "live render" : "silent"),
+                label: mode.uiLabel,
+                subtitle: mode == .static ? "fixed lane" : (mode == .dynamic ? "live render" : "interstitial loop"),
                 canSelect: true
             )
         }
@@ -846,6 +1086,12 @@ private struct ImportModuleSheet: View {
             return "Add Lane From Disk"
         case .coreML:
             return "Import .mlmodelc"
+        case .synthPreset:
+            return "Import Preset Pack"
+        case .samplePack:
+            return "Import Sample Manifest"
+        case .choirProfile:
+            return "Import Choir Profile"
         case .scene, .interstitial:
             return "Load From Disk"
         }
@@ -873,6 +1119,16 @@ private struct ImportModuleSheet: View {
             statusRow("Health", value: model.modelHealthLevel.rawValue.uppercased())
             statusRow("Summary", value: model.modelHealthSummary)
             statusRow("Selected", value: selectedModelLabel)
+        case .synthPreset:
+            statusRow("Module", value: "SYNTH PRESET PACK")
+            statusRow("Current", value: model.synthPresetFilename())
+        case .samplePack:
+            statusRow("Module", value: "SAMPLE PACK MANIFEST")
+            statusRow("Current", value: model.samplePackFilename())
+            statusRow("Entries", value: model.sampleEntrySummary())
+        case .choirProfile:
+            statusRow("Module", value: "PHONE CHOIR PROFILE")
+            statusRow("Current", value: model.choirProfileFilename())
         }
     }
 
@@ -916,6 +1172,12 @@ private struct ImportModuleSheet: View {
             model.importShowFixedLaneMedia()
         case .coreML:
             model.importModelBundleFromDisk()
+        case .synthPreset:
+            model.importSynthPresetPackFromDisk()
+        case .samplePack:
+            model.importSamplePackManifestFromDisk()
+        case .choirProfile:
+            model.importChoirProfileFromDisk()
         }
     }
 }

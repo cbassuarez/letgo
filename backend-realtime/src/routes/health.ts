@@ -12,6 +12,11 @@ export const registerHealthRoute = async (
     time: new Date().toISOString(),
     wsHarnessPath: "/ws/harness",
     wsDevicePath: "/ws/device/:hashedId",
+    lightingStatePath: "/lighting/state",
+    lightingStreamPath: "/lighting/stream",
+    lightingEngineerPath: "/lighting/engineer",
+    audioStatePath: "/audio/state",
+    audioStreamPath: "/audio/stream",
     maxClientDriftMs: config.MAX_CLIENT_DRIFT_MS
   }));
 };

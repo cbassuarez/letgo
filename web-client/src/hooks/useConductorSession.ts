@@ -1,4 +1,9 @@
 import {
+  type AudioFeaturePayload,
+  type CrowdPickResultPayload,
+  type CrowdPickVotePayload,
+  type CrowdPickWindowPayload,
+  type LightingStatePayload,
   normalizeVector,
   type AudienceVectorPayload,
   type CueCommand,
@@ -6,7 +11,11 @@ import {
   type DeviceZone,
   type ParticipantVectorPayload,
   type ParamVector,
+  type PhoneAudioAckPayload,
+  type PhoneAudioCommandPayload,
+  type PhoneAudioPoolStatePayload,
   type SyncPacket,
+  type TextScenePayload,
   type WireEnvelope
 } from "@conductor/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -27,9 +36,18 @@ interface SessionState {
   retryInMs: number | null;
   logicalNow: number;
   audienceVector: AudienceVectorPayload;
+  lightingState: LightingStatePayload;
+  audioFeatures: AudioFeaturePayload;
+  phoneAudioPoolState: PhoneAudioPoolStatePayload;
+  crowdPickWindow: CrowdPickWindowPayload | null;
+  crowdPickResult: CrowdPickResultPayload | null;
+  textScene: TextScenePayload;
+  phoneAudioCommand: PhoneAudioCommandPayload | null;
   sendPermissions: (permissions: DevicePermissions) => void;
   sendZoneUpdate: (zone: DeviceZone) => void;
   sendParticipantVector: (payload: ParticipantVectorPayload) => void;
+  sendPhoneAudioAck: (payload: PhoneAudioAckPayload) => void;
+  sendCrowdPickVote: (payload: CrowdPickVotePayload) => void;
 }
 
 const defaultVector = normalizeVector({});
@@ -38,6 +56,57 @@ const defaultAudienceVector: AudienceVectorPayload = {
   participantCount: 0,
   updatedAt: 0,
   compositorModes: {}
+};
+
+const defaultLightingState: LightingStatePayload = {
+  targetColor: {
+    oklch: { l: 0.56, c: 0.12, h: 220 },
+    hex: "#2f5f8e"
+  },
+  confidence: 0,
+  entropy: 0,
+  stability: 1,
+  trend: "hold",
+  participantCount: 0,
+  updatedAt: 0,
+  zoneField: []
+};
+
+const defaultAudioFeatures: AudioFeaturePayload = {
+  rms: 0,
+  spectralCentroid: 0.5,
+  flux: 0.5,
+  transientDensity: 0,
+  updatedAt: 0
+};
+
+const defaultPhoneAudioPoolState: PhoneAudioPoolStatePayload = {
+  gateArmed: false,
+  gateCommitted: false,
+  quadRouteReady: false,
+  availableDevices: [],
+  activeVoices: {},
+  updatedAt: 0
+};
+
+const defaultTextScene: TextScenePayload = {
+  sceneVersion: 0,
+  pickEpoch: 0,
+  cueId: "idle:0",
+  anchor: "center-center",
+  lineCount: 1,
+  cutMode: "hold",
+  alpha: 0.85,
+  fontScale: 1,
+  weight: 0.6,
+  durationMs: 4200,
+  lines: [],
+  guardrails: {
+    maxOffsetX: 0.08,
+    maxOffsetY: 0.06,
+    minContrast: 4.5,
+    minDurationMs: 2400
+  }
 };
 
 export const computeReconnectDelayMs = (attempt: number, jitterSeed: number = 0.5): number => {
@@ -73,6 +142,15 @@ export const useConductorSession = (hashedId: string): SessionState => {
   const [linkState, setLinkState] = useState<SessionLinkState>("connecting");
   const [retryInMs, setRetryInMs] = useState<number | null>(null);
   const [audienceVector, setAudienceVector] = useState<AudienceVectorPayload>(defaultAudienceVector);
+  const [lightingState, setLightingState] = useState<LightingStatePayload>(defaultLightingState);
+  const [audioFeatures, setAudioFeatures] = useState<AudioFeaturePayload>(defaultAudioFeatures);
+  const [phoneAudioPoolState, setPhoneAudioPoolState] = useState<PhoneAudioPoolStatePayload>(
+    defaultPhoneAudioPoolState
+  );
+  const [crowdPickWindow, setCrowdPickWindow] = useState<CrowdPickWindowPayload | null>(null);
+  const [crowdPickResult, setCrowdPickResult] = useState<CrowdPickResultPayload | null>(null);
+  const [textScene, setTextScene] = useState<TextScenePayload>(defaultTextScene);
+  const [phoneAudioCommand, setPhoneAudioCommand] = useState<PhoneAudioCommandPayload | null>(null);
 
   const clockRef = useRef(new SyncClock());
   const cueRef = useRef<CueCommand | null>(fallback?.cue ?? null);
@@ -113,6 +191,20 @@ export const useConductorSession = (hashedId: string): SessionState => {
   const sendParticipantVector = useCallback(
     (payload: ParticipantVectorPayload): void => {
       sendWithSocket("participant_vector", payload);
+    },
+    [sendWithSocket]
+  );
+
+  const sendPhoneAudioAck = useCallback(
+    (payload: PhoneAudioAckPayload): void => {
+      sendWithSocket("phone_audio_ack", payload);
+    },
+    [sendWithSocket]
+  );
+
+  const sendCrowdPickVote = useCallback(
+    (payload: CrowdPickVotePayload): void => {
+      sendWithSocket("crowd_pick_vote", payload);
     },
     [sendWithSocket]
   );
@@ -248,6 +340,35 @@ export const useConductorSession = (hashedId: string): SessionState => {
           });
         }
 
+        if (envelope.kind === "lighting_state") {
+          const payload = envelope.data as LightingStatePayload;
+          setLightingState(payload);
+        }
+
+        if (envelope.kind === "audio_features") {
+          setAudioFeatures(envelope.data as AudioFeaturePayload);
+        }
+
+        if (envelope.kind === "phone_audio_pool_state") {
+          setPhoneAudioPoolState(envelope.data as PhoneAudioPoolStatePayload);
+        }
+
+        if (envelope.kind === "crowd_pick_window") {
+          setCrowdPickWindow(envelope.data as CrowdPickWindowPayload);
+        }
+
+        if (envelope.kind === "crowd_pick_result") {
+          setCrowdPickResult(envelope.data as CrowdPickResultPayload);
+        }
+
+        if (envelope.kind === "text_scene") {
+          setTextScene(envelope.data as TextScenePayload);
+        }
+
+        if (envelope.kind === "phone_audio_command") {
+          setPhoneAudioCommand(envelope.data as PhoneAudioCommandPayload);
+        }
+
         if (envelope.kind === "sync") {
           const packet = envelope.data as SyncPacket;
           if (packet.kind === "ping") {
@@ -334,8 +455,17 @@ export const useConductorSession = (hashedId: string): SessionState => {
     retryInMs,
     logicalNow,
     audienceVector,
+    lightingState,
+    audioFeatures,
+    phoneAudioPoolState,
+    crowdPickWindow,
+    crowdPickResult,
+    textScene,
+    phoneAudioCommand,
     sendPermissions,
     sendZoneUpdate,
-    sendParticipantVector
+    sendParticipantVector,
+    sendPhoneAudioAck,
+    sendCrowdPickVote
   };
 };

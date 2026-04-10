@@ -4,9 +4,9 @@ import { BACKEND_HOST, buildDeviceWsUrl } from "../src/lib/wsClient";
 
 describe("web linking helpers", () => {
   it("builds fixed-host device websocket urls", () => {
-    expect(BACKEND_HOST).toBe("letgo-fe0a.onrender.com");
-    expect(buildDeviceWsUrl("abc123")).toBe("wss://letgo-fe0a.onrender.com/ws/device/abc123");
-    expect(buildDeviceWsUrl("abc/123")).toBe("wss://letgo-fe0a.onrender.com/ws/device/abc%2F123");
+    expect(BACKEND_HOST).toBe("letgo-backend.onrender.com");
+    expect(buildDeviceWsUrl("abc123")).toBe("wss://letgo-backend.onrender.com/ws/device/abc123");
+    expect(buildDeviceWsUrl("abc/123")).toBe("wss://letgo-backend.onrender.com/ws/device/abc%2F123");
   });
 
   it("computes bounded reconnect delays", () => {

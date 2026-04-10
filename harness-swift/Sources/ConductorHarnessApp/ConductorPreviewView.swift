@@ -11,7 +11,7 @@ struct ConductorPreviewView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Preview Window")
                         .font(.system(size: 24, weight: .bold, design: .rounded))
-                    Text("Scene: \(model.previewScene.rawValue) • mode: \(model.effectiveOutputMode.rawValue) • \(model.previewStatus)")
+                    Text("Scene: \(model.previewScene.rawValue) • mode: \(model.effectiveOutputMode.uiLabel) • \(model.previewStatus)")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }

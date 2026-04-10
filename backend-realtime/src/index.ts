@@ -4,14 +4,21 @@ import websocket from "@fastify/websocket";
 import Redis from "ioredis";
 import { Pool } from "pg";
 import { config } from "./config";
+import { registerAudioRoutes } from "./routes/audio";
 import { registerHealthRoute } from "./routes/health";
 import { registerIdentityRoutes } from "./routes/identity";
+import { registerLightingRoutes } from "./routes/lighting";
 import { registerLogbookRoutes } from "./routes/logbook";
 import { registerWsRoutes } from "./routes/ws";
+import { AudioOpsStateHub } from "./services/audioOpsStateHub";
+import { CrowdPickPulseService } from "./services/crowdPickPulse";
+import { CrowdLightingField } from "./services/crowdLightingField";
 import { IdentityService } from "./services/identityService";
+import { PhoneAudioPoolService } from "./services/phoneAudioPool";
 import { ReplayService } from "./services/replayService";
 import { ShowOrchestrator } from "./services/showOrchestrator";
 import { SyncService } from "./services/syncService";
+import { TextSceneComposerService } from "./services/textSceneComposer";
 import {
   GoogleSheetsLogbookStore,
   MemoryLogbookStore
@@ -30,6 +37,11 @@ const bootstrap = async (): Promise<void> => {
   const identityService = new IdentityService(config.SESSION_SALT);
   const show = new ShowOrchestrator();
   const sync = new SyncService(config.MAX_CLIENT_DRIFT_MS);
+  const lightingField = new CrowdLightingField();
+  const phoneAudioPool = new PhoneAudioPoolService();
+  const crowdPickPulse = new CrowdPickPulseService();
+  const textSceneComposer = new TextSceneComposerService();
+  const audioOpsStateHub = new AudioOpsStateHub();
 
   const sessionStore = config.REDIS_URL
     ? new RedisSessionStore(new Redis(config.REDIS_URL))
@@ -66,13 +78,24 @@ const bootstrap = async (): Promise<void> => {
     sessions: sessionStore,
     store: logbookStore
   });
+  await registerLightingRoutes(app, {
+    field: lightingField
+  });
+  await registerAudioRoutes(app, {
+    stateHub: audioOpsStateHub
+  });
   await registerWsRoutes(app, {
     config,
+    audioOpsStateHub,
+    crowdPickPulse,
     identityService,
+    lightingField,
+    phoneAudioPool,
     replayService,
     show,
     sync,
-    sessions: sessionStore
+    sessions: sessionStore,
+    textSceneComposer
   });
 
   await app.listen({ port: config.PORT, host: config.HOST });

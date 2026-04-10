@@ -146,6 +146,11 @@ public final class WebSocketConductorClient: NSObject {
         try await send(data)
     }
 
+    public func sendEnvelope<T: Codable>(kind: String, data payload: T) async throws {
+        let data = try JSONEncoder().encode(HarnessOutboundEnvelope(kind: kind, data: payload))
+        try await send(data)
+    }
+
     private func connectNow() {
         guard !intentionallyStopped, let managedURL else {
             return

@@ -106,14 +106,23 @@
           <div class="row"><div class="label">HEALTH</div><div class="value" id="health-url"></div></div>
           <div class="row"><div class="label">HARNESS WS</div><div class="value" id="harness-url"></div></div>
           <div class="row"><div class="label">DEVICE WS</div><div class="value" id="device-url"></div></div>
+          <div class="row"><div class="label">LIGHTING STATE</div><div class="value" id="lighting-state-url"></div></div>
+          <div class="row"><div class="label">LIGHTING STREAM</div><div class="value" id="lighting-stream-url"></div></div>
+          <div class="row"><div class="label">ENGINEER FEED</div><div class="value"><a id="lighting-engineer-url" target="_blank" rel="noreferrer"></a></div></div>
+          <div class="row"><div class="label">AUDIO STATE</div><div class="value" id="audio-state-url"></div></div>
+          <div class="row"><div class="label">AUDIO STREAM</div><div class="value" id="audio-stream-url"></div></div>
         </section>
 
         <section class="card">
           <h2>LIVE STATUS</h2>
           <div class="row"><div class="label">HEALTH CHECK</div><div class="value" id="health-status">PENDING</div></div>
           <div class="row"><div class="label">WS PROBE</div><div class="value" id="ws-status">PENDING</div></div>
+          <div class="row"><div class="label">LIGHTING STREAM</div><div class="value" id="lighting-status">PENDING</div></div>
+          <div class="row"><div class="label">AUDIO STREAM</div><div class="value" id="audio-status">PENDING</div></div>
           <button id="btn-health">Run Health Check</button>
           <button id="btn-ws">Run WS Probe</button>
+          <button id="btn-lighting">Run Lighting Probe</button>
+          <button id="btn-audio">Run Audio Probe</button>
         </section>
 
         <section class="card">
@@ -124,6 +133,13 @@
             <li>If WS fails but health passes, check backend logs for socket open/close/error events by role.</li>
             <li>In harness, wait for auto-retry backoff to clear; link must reach ONLINE before show-critical controls unlock.</li>
             <li>If link flaps, inspect network egress/TLS policy from operator machine.</li>
+          </ul>
+          <h2 style="margin-top: 14px;">LIGHTING CONSENSUS RUNBOOK</h2>
+          <ul>
+            <li>If confidence is below 0.35, call a short color prompt to participants and hold scene transitions.</li>
+            <li>If entropy rises above 0.55, treat guidance as split crowd; use CAUTION palette and slower transitions.</li>
+            <li>If participant count drops abruptly, hold current cue color and wait for stream recovery before re-cueing.</li>
+            <li>Use engineer feed as source of truth: <code>/lighting/engineer</code> (manual-follow, no software integration).</li>
           </ul>
         </section>
 
@@ -139,14 +155,27 @@
       const HEALTH_URL = `https://${BACKEND_HOST}/health`;
       const HARNESS_WS_URL = `wss://${BACKEND_HOST}/ws/harness`;
       const DEVICE_WS_BASE_URL = `wss://${BACKEND_HOST}/ws/device`;
+      const LIGHTING_STATE_URL = `https://${BACKEND_HOST}/lighting/state`;
+      const LIGHTING_STREAM_URL = `https://${BACKEND_HOST}/lighting/stream`;
+      const LIGHTING_ENGINEER_URL = `https://${BACKEND_HOST}/lighting/engineer`;
+      const AUDIO_STATE_URL = `https://${BACKEND_HOST}/audio/state`;
+      const AUDIO_STREAM_URL = `https://${BACKEND_HOST}/audio/stream`;
 
       const healthStatus = document.getElementById("health-status");
       const wsStatus = document.getElementById("ws-status");
+      const lightingStatus = document.getElementById("lighting-status");
+      const audioStatus = document.getElementById("audio-status");
       const raw = document.getElementById("raw");
 
       document.getElementById("health-url").textContent = HEALTH_URL;
       document.getElementById("harness-url").textContent = HARNESS_WS_URL;
       document.getElementById("device-url").textContent = `${DEVICE_WS_BASE_URL}/:hashedId`;
+      document.getElementById("lighting-state-url").textContent = LIGHTING_STATE_URL;
+      document.getElementById("lighting-stream-url").textContent = LIGHTING_STREAM_URL;
+      document.getElementById("lighting-engineer-url").textContent = LIGHTING_ENGINEER_URL;
+      document.getElementById("lighting-engineer-url").href = LIGHTING_ENGINEER_URL;
+      document.getElementById("audio-state-url").textContent = AUDIO_STATE_URL;
+      document.getElementById("audio-stream-url").textContent = AUDIO_STREAM_URL;
 
       function setStatus(node, text, cls) {
         node.textContent = text;
@@ -218,8 +247,84 @@
         };
       }
 
+      function runLightingProbe() {
+        setStatus(lightingStatus, "RUNNING", "warn");
+        let settled = false;
+        const es = new EventSource(LIGHTING_STREAM_URL);
+        const timeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          es.close();
+          setStatus(lightingStatus, "TIMEOUT", "err");
+          appendRaw("lighting_timeout", { url: LIGHTING_STREAM_URL });
+        }, 9000);
+
+        es.onopen = () => {
+          appendRaw("lighting_open", { url: LIGHTING_STREAM_URL });
+        };
+        es.onerror = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          es.close();
+          setStatus(lightingStatus, "ERROR", "err");
+          appendRaw("lighting_error", { url: LIGHTING_STREAM_URL });
+        };
+        es.addEventListener("state", (event) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          setStatus(lightingStatus, "LIVE", "ok");
+          try {
+            appendRaw("lighting_state", JSON.parse(event.data));
+          } catch {
+            appendRaw("lighting_state_parse_error", { data: event.data });
+          }
+          es.close();
+        });
+      }
+
+      function runAudioProbe() {
+        setStatus(audioStatus, "RUNNING", "warn");
+        let settled = false;
+        const es = new EventSource(AUDIO_STREAM_URL);
+        const timeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          es.close();
+          setStatus(audioStatus, "TIMEOUT", "err");
+          appendRaw("audio_timeout", { url: AUDIO_STREAM_URL });
+        }, 9000);
+
+        es.onopen = () => {
+          appendRaw("audio_open", { url: AUDIO_STREAM_URL });
+        };
+        es.onerror = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          es.close();
+          setStatus(audioStatus, "ERROR", "err");
+          appendRaw("audio_error", { url: AUDIO_STREAM_URL });
+        };
+        es.addEventListener("state", (event) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          setStatus(audioStatus, "LIVE", "ok");
+          try {
+            appendRaw("audio_state", JSON.parse(event.data));
+          } catch {
+            appendRaw("audio_state_parse_error", { data: event.data });
+          }
+          es.close();
+        });
+      }
+
       document.getElementById("btn-health").addEventListener("click", runHealthCheck);
       document.getElementById("btn-ws").addEventListener("click", runWsProbe);
+      document.getElementById("btn-lighting").addEventListener("click", runLightingProbe);
+      document.getElementById("btn-audio").addEventListener("click", runAudioProbe);
       runHealthCheck();
     </script>
   </body>

@@ -1,4 +1,4 @@
-import type { DeviceProfile } from "@conductor/protocol";
+import type { AudioOpsStatePayload, DeviceProfile, LightingStatePayload } from "@conductor/protocol";
 
 export interface ParticipantIdentityResponse {
   profile: DeviceProfile;
@@ -18,4 +18,12 @@ export interface PublicLogbookEntry extends LogbookEntry {
 export interface LogbookFeedResponse {
   entries: PublicLogbookEntry[];
   nextCursor: string | null;
+}
+
+export interface LightingStateResponse {
+  state: LightingStatePayload;
+}
+
+export interface AudioOpsStateResponse {
+  state: AudioOpsStatePayload;
 }

@@ -11,6 +11,17 @@ enum FlightOutputMode: String, CaseIterable, Identifiable {
     case dynamic
 
     var id: String { rawValue }
+
+    var uiLabel: String {
+        switch self {
+        case .off:
+            return "inter"
+        case .static:
+            return "static"
+        case .dynamic:
+            return "dynamic"
+        }
+    }
 }
 
 enum EffectiveOutputMode: String {
@@ -18,6 +29,17 @@ enum EffectiveOutputMode: String {
     case dynamic
     case interstitial
     case off
+
+    var uiLabel: String {
+        switch self {
+        case .interstitial, .off:
+            return "inter"
+        case .static:
+            return "static"
+        case .dynamic:
+            return "dynamic"
+        }
+    }
 }
 
 struct ShowFixedLane: Identifiable, Equatable {
@@ -39,10 +61,21 @@ enum MasterArmKeyState {
     case armed
 }
 
+enum PhoneAudioTargetMode: String, CaseIterable, Identifiable {
+    case rotating
+    case single
+    case subset
+
+    var id: String { rawValue }
+}
+
 private struct MediaManifest: Codable {
     var sceneMedia: [String: String]
     var interstitialMedia: String?
     var fixedLanes: [FixedLaneEntry]
+    var synthPresetPack: String?
+    var samplePackManifest: String?
+    var choirProfile: String?
 
     struct FixedLaneEntry: Codable {
         let id: String
@@ -100,10 +133,19 @@ private struct MediaManifest: Codable {
 }
 
 private enum BackendEndpoints {
-    static let host = "letgo-fe0a.onrender.com"
+    static let host = "letgo-backend.onrender.com"
     static let healthURL = URL(string: "https://\(host)/health")!
     static let harnessWebSocketURL = URL(string: "wss://\(host)/ws/harness")!
     static let deviceWebSocketBase = "wss://\(host)/ws/device"
+}
+
+private struct SamplePackManifest: Codable {
+    struct SampleEntry: Codable {
+        let id: String
+        let path: String
+    }
+
+    let samples: [SampleEntry]
 }
 
 private struct OutputProfile {
@@ -165,6 +207,24 @@ final class ConductorHarnessViewModel: ObservableObject {
     @Published var effectiveOutputMode: EffectiveOutputMode = .off
     @Published var activeStaticLaneId: String?
     @Published var engineRunning = false
+    @Published private(set) var quadRouteChannelCount = 0
+    @Published private(set) var quadRouteReady = false
+    @Published private(set) var latestAudioFeatures: QuadAudioFeatures = .zero
+
+    @Published private(set) var phoneAudioGateArmed = false
+    @Published private(set) var phoneAudioGateCommitted = false
+    @Published private(set) var phoneAudioAvailableDevices: [String] = []
+    @Published private(set) var phoneAudioActiveVoices: [String: Int] = [:]
+    @Published var phoneAudioTargetMode: PhoneAudioTargetMode = .rotating
+    @Published var phoneAudioSingleTargetID: String = ""
+    @Published var phoneAudioSubsetTargetIDs: Set<String> = []
+
+    @Published var synthPresetPackURL: URL?
+    @Published var samplePackManifestURL: URL?
+    @Published var choirProfileURL: URL?
+    @Published private(set) var samplePackEntries: [String: URL] = [:]
+    @Published var selectedSampleID: String = "default"
+    @Published var choirNote: Int = 60
 
     @Published var pendingOutputMode: FlightOutputMode?
     @Published var pendingLaneId: String?
@@ -223,13 +283,16 @@ final class ConductorHarnessViewModel: ObservableObject {
     private let telemetry = TelemetryHub()
     private let replay = ReplayRecorder()
     private let websocket = WebSocketConductorClient()
+    private let quadAudioEngine = QuadAudioEngine()
 
     private var importedModelCandidates: [CompiledModelCandidate] = []
     private var previewLoopObserver: NSObjectProtocol?
     private var latchController = OutputLatchController(timeoutSeconds: 8)
     private var latchTimer: Timer?
+    private var audioFeaturePumpTimer: Timer?
     private var showFixedCounter = 0
     private var sequenceWorkItems: [DispatchWorkItem] = []
+    private var phoneCommandSequence = 0
 
     private let privilegedLaneStateMap: [String: ShowState] = [
         "preshow": .preshow,
@@ -291,6 +354,8 @@ final class ConductorHarnessViewModel: ObservableObject {
         }
         websocket.onOpen = { [weak self] in
             Task { @MainActor in
+                self?.publishPhoneAudioPoolState()
+                self?.publishLatestAudioFeatures()
                 self?.pushStatus(StatusLineEvent(
                     message: "WS link online",
                     severity: .success,
@@ -337,10 +402,17 @@ final class ConductorHarnessViewModel: ObservableObject {
             }
         }
 
+        quadAudioEngine.onFeatures = { [weak self] features in
+            Task { @MainActor in
+                self?.latestAudioFeatures = features
+            }
+        }
+
         refreshModelCatalog()
         applyModelHealth(scoringModel.currentHealth())
         syncLatchState(latchController.snapshot, now: Date())
         startLatchTimer()
+        refreshQuadRouteStatus()
         loadMediaManifest()
         websocket.start(url: BackendEndpoints.harnessWebSocketURL)
     }
@@ -350,7 +422,9 @@ final class ConductorHarnessViewModel: ObservableObject {
             NotificationCenter.default.removeObserver(observer)
         }
         latchTimer?.invalidate()
+        audioFeaturePumpTimer?.invalidate()
         abortCoverTimer?.invalidate()
+        quadAudioEngine.stop()
         websocket.stop()
     }
 
@@ -395,7 +469,7 @@ final class ConductorHarnessViewModel: ObservableObject {
     }
 
     var canFireWithMasterArm: Bool {
-        canFireGO && masterArmKey == .armed && isLinkHealthy
+        canFireGO && masterArmKey == .armed && isLinkHealthy && quadRouteReady
     }
 
     // MARK: - Abort safety cover
@@ -719,6 +793,15 @@ final class ConductorHarnessViewModel: ObservableObject {
             return
         }
 
+        guard quadRouteReady else {
+            pushStatus(StatusLineEvent(
+                message: "GO blocked: quad route requires >=4 output channels",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+
         let now = Date()
         let fireDecision = latchController.fire(now: now)
         syncLatchState(latchController.snapshot, now: now)
@@ -822,12 +905,42 @@ final class ConductorHarnessViewModel: ObservableObject {
 
         cancelSequenceWork()
         engineRunning = true
+        do {
+            let route = try quadAudioEngine.start()
+            quadRouteChannelCount = route.channelCount
+            quadRouteReady = route.quadReady
+            if route.quadReady {
+                pushStatus(StatusLineEvent(
+                    message: "Quad route ready (\(route.channelCount)ch)",
+                    severity: .success,
+                    timestamp: Date()
+                ))
+            } else {
+                pushStatus(StatusLineEvent(
+                    message: "Quad route NOGO (\(route.channelCount)ch). Requires >=4ch for GO",
+                    severity: .warn,
+                    timestamp: Date()
+                ))
+            }
+        } catch {
+            quadRouteReady = false
+            quadRouteChannelCount = 0
+            pushStatus(StatusLineEvent(
+                message: "Audio engine failed to start: \(error.localizedDescription)",
+                severity: .error,
+                timestamp: Date()
+            ))
+        }
+
+        phoneAudioGateArmed = false
+        phoneAudioGateCommitted = false
+        publishPhoneAudioPoolState()
+        startAudioFeaturePump()
+
         committedOutputMode = .off
-        effectiveOutputMode = .off
+        effectiveOutputMode = .interstitial
         activeStaticLaneId = nil
-        configurePreviewLoop(shouldLoop: false)
-        previewPlayer.pause()
-        previewStatus = "Output OFF"
+        previewStatus = "Output INTER"
         let now = Date()
         let snapshot = latchController.reset(now: now, message: "Engine started")
         syncLatchState(snapshot, now: now)
@@ -858,6 +971,14 @@ final class ConductorHarnessViewModel: ObservableObject {
 
         cancelSequenceWork()
         engineRunning = false
+        quadAudioEngine.stop()
+        stopAudioFeaturePump()
+        quadRouteReady = false
+        quadRouteChannelCount = 0
+        phoneAudioGateArmed = false
+        phoneAudioGateCommitted = false
+        publishPhoneAudioPoolState()
+        publishLatestAudioFeatures(forceZero: true)
         committedOutputMode = .off
         activeStaticLaneId = nil
         let now = Date()
@@ -950,6 +1071,14 @@ final class ConductorHarnessViewModel: ObservableObject {
     func resetShowRun() {
         cancelSequenceWork()
         engineRunning = false
+        quadAudioEngine.stop()
+        stopAudioFeaturePump()
+        quadRouteReady = false
+        quadRouteChannelCount = 0
+        phoneAudioGateArmed = false
+        phoneAudioGateCommitted = false
+        publishPhoneAudioPoolState()
+        publishLatestAudioFeatures(forceZero: true)
         committedOutputMode = .off
         activeStaticLaneId = nil
         effectiveOutputMode = .off
@@ -964,6 +1093,521 @@ final class ConductorHarnessViewModel: ObservableObject {
                 "sequenceStep": "idle"
             ]
         )
+    }
+
+    func refreshQuadRouteStatus() {
+        let status = quadAudioEngine.routeStatus()
+        quadRouteChannelCount = status.channelCount
+        quadRouteReady = status.quadReady
+        publishPhoneAudioPoolState()
+    }
+
+    func takePhoneAudioGate() {
+        guard guardLinkHealthy(for: "PHONE AUDIO TAKE") else {
+            return
+        }
+        guard engineRunning else {
+            pushStatus(StatusLineEvent(
+                message: "PHONE AUDIO TAKE blocked: start engine first",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+        phoneAudioGateArmed = true
+        phoneAudioGateCommitted = false
+        publishPhoneAudioPoolState()
+        pushStatus(StatusLineEvent(
+            message: "PHONE AUDIO gate armed (TAKE)",
+            severity: .info,
+            timestamp: Date()
+        ))
+    }
+
+    func goPhoneAudioGate() {
+        guard guardLinkHealthy(for: "PHONE AUDIO GO") else {
+            return
+        }
+        guard phoneAudioGateArmed else {
+            pushStatus(StatusLineEvent(
+                message: "PHONE AUDIO GO blocked: TAKE first",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+        guard quadRouteReady else {
+            pushStatus(StatusLineEvent(
+                message: "PHONE AUDIO GO blocked: quad route requires >=4ch",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+        phoneAudioGateCommitted = true
+        publishPhoneAudioPoolState()
+        pushStatus(StatusLineEvent(
+            message: "PHONE AUDIO gate committed (GO)",
+            severity: .success,
+            timestamp: Date()
+        ))
+    }
+
+    func safePhoneAudioGate() {
+        phoneAudioGateArmed = false
+        phoneAudioGateCommitted = false
+        publishPhoneAudioPoolState()
+        pushStatus(StatusLineEvent(
+            message: "PHONE AUDIO gate returned SAFE",
+            severity: .info,
+            timestamp: Date()
+        ))
+    }
+
+    func triggerSynthNoteOn() {
+        guard engineRunning else {
+            pushStatus(StatusLineEvent(
+                message: "SYNTH blocked: engine is stopped",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+        quadAudioEngine.playSynthNote(note: choirNote, velocity: 0.82, gain: 0.30)
+        pushStatus(StatusLineEvent(
+            message: "SYNTH note_on \(choirNote)",
+            severity: .info,
+            timestamp: Date()
+        ))
+    }
+
+    func triggerSynthNoteOff() {
+        quadAudioEngine.stopSynthNote(note: choirNote)
+        pushStatus(StatusLineEvent(
+            message: "SYNTH note_off \(choirNote)",
+            severity: .info,
+            timestamp: Date()
+        ))
+    }
+
+    func triggerSamplePlayback() {
+        guard engineRunning else {
+            pushStatus(StatusLineEvent(
+                message: "SAMPLE blocked: engine is stopped",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+
+        guard let sampleURL = sampleURLForSelectedID() else {
+            pushStatus(StatusLineEvent(
+                message: "SAMPLE blocked: load sample pack first",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+
+        do {
+            try quadAudioEngine.triggerSample(url: sampleURL, gain: 0.34)
+            pushStatus(StatusLineEvent(
+                message: "SAMPLE triggered: \(sampleURL.lastPathComponent)",
+                severity: .info,
+                timestamp: Date()
+            ))
+        } catch {
+            pushStatus(StatusLineEvent(
+                message: "SAMPLE failed: \(error.localizedDescription)",
+                severity: .error,
+                timestamp: Date()
+            ))
+        }
+    }
+
+    func triggerPhoneChoirNoteOn() {
+        guard guardPhoneAudioDispatchReady(label: "CHOIR NOTE ON") else { return }
+        let command = makePhoneCommand(
+            kind: .noteOn,
+            note: choirNote,
+            velocity: 0.84,
+            gain: 0.34
+        )
+        dispatchPhoneAudioCommand(command, label: "CHOIR NOTE ON")
+    }
+
+    func triggerPhoneChoirNoteOff() {
+        guard guardPhoneAudioDispatchReady(label: "CHOIR NOTE OFF") else { return }
+        let command = makePhoneCommand(
+            kind: .noteOff,
+            note: choirNote
+        )
+        dispatchPhoneAudioCommand(command, label: "CHOIR NOTE OFF")
+    }
+
+    func triggerPhoneAmbientNoise() {
+        guard guardPhoneAudioDispatchReady(label: "PHONE AMBIENT") else { return }
+        quadAudioEngine.startAmbientNoise(gain: 0.09)
+        let command = makePhoneCommand(
+            kind: .ambientNoise,
+            gain: 0.08,
+            seed: Int.random(in: 1 ... Int.max)
+        )
+        dispatchPhoneAudioCommand(command, label: "PHONE AMBIENT")
+    }
+
+    func triggerPhoneSample() {
+        guard guardPhoneAudioDispatchReady(label: "PHONE SAMPLE") else { return }
+        let sampleID = selectedSampleID
+        let command = makePhoneCommand(
+            kind: .sampleTrigger,
+            sampleId: sampleID,
+            gain: 0.34
+        )
+        dispatchPhoneAudioCommand(command, label: "PHONE SAMPLE")
+    }
+
+    func stopAllPhoneAudio() {
+        quadAudioEngine.stopAmbientNoise()
+        let command = makePhoneCommand(kind: .stopAll)
+        dispatchPhoneAudioCommand(command, label: "PHONE STOP ALL")
+    }
+
+    private func guardPhoneAudioDispatchReady(label: String) -> Bool {
+        guard engineRunning else {
+            pushStatus(StatusLineEvent(
+                message: "\(label) blocked: engine is stopped",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return false
+        }
+
+        guard phoneAudioGateCommitted else {
+            pushStatus(StatusLineEvent(
+                message: "\(label) blocked: PHONE AUDIO gate not committed",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return false
+        }
+        return true
+    }
+
+    private func makePhoneCommand(
+        kind: PhoneAudioCommandKind,
+        note: Int? = nil,
+        velocity: Double? = nil,
+        sampleId: String? = nil,
+        gain: Double? = nil,
+        seed: Int? = nil
+    ) -> HarnessPhoneAudioCommandPayload {
+        phoneCommandSequence += 1
+        let issuedAt = Date().timeIntervalSince1970 * 1000
+        return HarnessPhoneAudioCommandPayload(
+            commandId: "cmd-\(Int(issuedAt))-\(phoneCommandSequence)",
+            kind: kind,
+            targetHashedIds: resolvedPhoneTargets(),
+            note: note,
+            velocity: velocity,
+            sampleId: sampleId,
+            gain: gain,
+            seed: seed,
+            issuedAt: issuedAt
+        )
+    }
+
+    private func dispatchPhoneAudioCommand(_ command: HarnessPhoneAudioCommandPayload, label: String) {
+        guard phoneAudioGateCommitted else {
+            pushStatus(StatusLineEvent(
+                message: "\(label) blocked: PHONE AUDIO gate not committed",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+        guard quadRouteReady else {
+            pushStatus(StatusLineEvent(
+                message: "\(label) blocked: quad route not ready",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+        guard guardLinkHealthy(for: label) else {
+            return
+        }
+
+        Task {
+            do {
+                try await websocket.sendEnvelope(kind: "phone_audio_command", data: command)
+                await MainActor.run {
+                    self.pushStatus(StatusLineEvent(
+                        message: "\(label) dispatched",
+                        severity: .info,
+                        timestamp: Date()
+                    ))
+                }
+            } catch {
+                await MainActor.run {
+                    self.lastLinkError = error.localizedDescription
+                    self.pushStatus(StatusLineEvent(
+                        message: "\(label) dispatch failed: \(error.localizedDescription)",
+                        severity: .error,
+                        timestamp: Date()
+                    ))
+                }
+            }
+        }
+    }
+
+    private func startAudioFeaturePump() {
+        audioFeaturePumpTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.publishLatestAudioFeatures()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        audioFeaturePumpTimer = timer
+    }
+
+    private func stopAudioFeaturePump() {
+        audioFeaturePumpTimer?.invalidate()
+        audioFeaturePumpTimer = nil
+    }
+
+    private func publishLatestAudioFeatures(forceZero: Bool = false) {
+        guard linkState == .online || linkState == .degraded else { return }
+        let source = forceZero ? QuadAudioFeatures.zero : latestAudioFeatures
+        let payload = HarnessAudioFeaturePayload(
+            rms: source.rms,
+            spectralCentroid: source.spectralCentroid,
+            flux: source.flux,
+            transientDensity: source.transientDensity,
+            updatedAt: source.updatedAt
+        )
+        Task {
+            do {
+                try await websocket.sendEnvelope(kind: "audio_features", data: payload)
+            } catch {
+                await MainActor.run {
+                    self.lastLinkError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func publishPhoneAudioPoolState() {
+        guard linkState == .online || linkState == .degraded else { return }
+        let payload = HarnessPhoneAudioPoolStatePayload(
+            gateArmed: phoneAudioGateArmed,
+            gateCommitted: phoneAudioGateCommitted,
+            quadRouteReady: quadRouteReady,
+            availableDevices: phoneAudioAvailableDevices,
+            activeVoices: phoneAudioActiveVoices,
+            updatedAt: Date().timeIntervalSince1970 * 1000
+        )
+        Task {
+            do {
+                try await websocket.sendEnvelope(kind: "phone_audio_pool_state", data: payload)
+            } catch {
+                await MainActor.run {
+                    self.lastLinkError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func importSynthPresetPackFromDisk() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Synth Preset Pack"
+        panel.prompt = "Import"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.json, .data]
+
+        guard panel.runModal() == .OK, let selectedURL = panel.url else {
+            return
+        }
+
+        synthPresetPackURL = selectedURL
+        saveMediaManifest()
+        pushStatus(StatusLineEvent(
+            message: "Loaded synth preset pack: \(selectedURL.lastPathComponent)",
+            severity: .success,
+            timestamp: Date()
+        ))
+    }
+
+    func importSamplePackManifestFromDisk() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Sample Pack Manifest"
+        panel.prompt = "Import"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.json, .audio, .movie]
+
+        guard panel.runModal() == .OK, let selectedURL = panel.url else {
+            return
+        }
+
+        do {
+            let entries = try resolveSamplePackEntries(from: selectedURL)
+            samplePackManifestURL = selectedURL
+            samplePackEntries = entries
+            if let firstID = entries.keys.sorted().first {
+                selectedSampleID = firstID
+            }
+            saveMediaManifest()
+            pushStatus(StatusLineEvent(
+                message: "Loaded sample pack (\(entries.count) entries)",
+                severity: .success,
+                timestamp: Date()
+            ))
+        } catch {
+            pushStatus(StatusLineEvent(
+                message: "Sample pack import failed: \(error.localizedDescription)",
+                severity: .error,
+                timestamp: Date()
+            ))
+        }
+    }
+
+    func importChoirProfileFromDisk() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Choir Profile"
+        panel.prompt = "Import"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.json, .text]
+
+        guard panel.runModal() == .OK, let selectedURL = panel.url else {
+            return
+        }
+
+        choirProfileURL = selectedURL
+        saveMediaManifest()
+        pushStatus(StatusLineEvent(
+            message: "Loaded choir profile: \(selectedURL.lastPathComponent)",
+            severity: .success,
+            timestamp: Date()
+        ))
+    }
+
+    func synthPresetFilename() -> String {
+        synthPresetPackURL?.lastPathComponent ?? "none"
+    }
+
+    func samplePackFilename() -> String {
+        samplePackManifestURL?.lastPathComponent ?? "none"
+    }
+
+    func choirProfileFilename() -> String {
+        choirProfileURL?.lastPathComponent ?? "none"
+    }
+
+    func sampleEntrySummary() -> String {
+        if samplePackEntries.isEmpty {
+            return "none"
+        }
+        return "\(samplePackEntries.count) entries"
+    }
+
+    func togglePhoneAudioSubsetTarget(_ hashedId: String) {
+        if phoneAudioSubsetTargetIDs.contains(hashedId) {
+            phoneAudioSubsetTargetIDs.remove(hashedId)
+        } else {
+            phoneAudioSubsetTargetIDs.insert(hashedId)
+        }
+    }
+
+    private func sampleURLForSelectedID() -> URL? {
+        if let selected = samplePackEntries[selectedSampleID] {
+            return selected
+        }
+        return samplePackEntries.values.first
+    }
+
+    private func resolveSamplePackEntries(from selectedURL: URL) throws -> [String: URL] {
+        if selectedURL.pathExtension.lowercased() != "json" {
+            return ["default": selectedURL]
+        }
+
+        let data = try Data(contentsOf: selectedURL)
+        let decoder = JSONDecoder()
+        if let manifest = try? decoder.decode(SamplePackManifest.self, from: data) {
+            return resolveSampleEntries(manifest.samples, baseURL: selectedURL.deletingLastPathComponent())
+        }
+
+        if let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let samples = root["samples"] as? [String: String] {
+                return samples.reduce(into: [String: URL]()) { result, entry in
+                    let url = resolveMediaURL(path: entry.value, baseURL: selectedURL.deletingLastPathComponent())
+                    if FileManager.default.fileExists(atPath: url.path) {
+                        result[entry.key] = url
+                    }
+                }
+            }
+            if let samples = root["samples"] as? [[String: Any]] {
+                var resolved: [String: URL] = [:]
+                for sample in samples {
+                    guard let id = sample["id"] as? String,
+                          let path = sample["path"] as? String else { continue }
+                    let url = resolveMediaURL(path: path, baseURL: selectedURL.deletingLastPathComponent())
+                    if FileManager.default.fileExists(atPath: url.path) {
+                        resolved[id] = url
+                    }
+                }
+                if !resolved.isEmpty {
+                    return resolved
+                }
+            }
+        }
+
+        throw NSError(
+            domain: "ConductorHarness",
+            code: 1902,
+            userInfo: [NSLocalizedDescriptionKey: "Manifest format unsupported"]
+        )
+    }
+
+    private func resolveSampleEntries(_ entries: [SamplePackManifest.SampleEntry], baseURL: URL) -> [String: URL] {
+        entries.reduce(into: [String: URL]()) { result, entry in
+            let url = resolveMediaURL(path: entry.path, baseURL: baseURL)
+            if FileManager.default.fileExists(atPath: url.path) {
+                result[entry.id] = url
+            }
+        }
+    }
+
+    private func resolveMediaURL(path: String, baseURL: URL) -> URL {
+        let direct = URL(fileURLWithPath: path)
+        if direct.path.hasPrefix("/") {
+            return direct
+        }
+        return baseURL.appendingPathComponent(path)
+    }
+
+    private func resolvedPhoneTargets() -> [String] {
+        switch phoneAudioTargetMode {
+        case .rotating:
+            return []
+        case .single:
+            if phoneAudioAvailableDevices.contains(phoneAudioSingleTargetID), !phoneAudioSingleTargetID.isEmpty {
+                return [phoneAudioSingleTargetID]
+            }
+            return phoneAudioAvailableDevices.first.map { [$0] } ?? []
+        case .subset:
+            let sorted = phoneAudioAvailableDevices.filter { phoneAudioSubsetTargetIDs.contains($0) }
+            if sorted.isEmpty {
+                return Array(phoneAudioAvailableDevices.prefix(2))
+            }
+            return sorted
+        }
     }
 
     func refreshModelCatalog() {
@@ -1163,7 +1807,13 @@ final class ConductorHarnessViewModel: ObservableObject {
 
         guard profile.showFixed else {
             configurePreviewLoop(shouldLoop: false)
-            previewStatus = profile.mode == .off ? "Output OFF" : "Dynamic-only mode (no fixed preview video)"
+            if profile.mode == .off {
+                previewStatus = "Engine stopped (video output inactive)"
+            } else if profile.mode == .interstitial {
+                previewStatus = "No interstitial loop media imported"
+            } else {
+                previewStatus = "Dynamic-only mode (no fixed preview video)"
+            }
             previewPlayer.pause()
             return
         }
@@ -1209,12 +1859,22 @@ final class ConductorHarnessViewModel: ObservableObject {
     ) -> OutputProfile {
         switch committedOutputMode {
         case .off:
+            guard engineRunning else {
+                return OutputProfile(
+                    mode: .off,
+                    showFixed: false,
+                    showDynamic: false,
+                    loopsIndefinitely: false,
+                    usesInterstitialMedia: false,
+                    showFixedLaneId: nil
+                )
+            }
             return OutputProfile(
-                mode: .off,
-                showFixed: false,
+                mode: .interstitial,
+                showFixed: true,
                 showDynamic: false,
-                loopsIndefinitely: false,
-                usesInterstitialMedia: false,
+                loopsIndefinitely: true,
+                usesInterstitialMedia: true,
                 showFixedLaneId: nil
             )
         case .dynamic:
@@ -1339,7 +1999,7 @@ final class ConductorHarnessViewModel: ObservableObject {
 
         guard let duration = staticMediaDuration(for: mediaURL) else {
             pushStatus(StatusLineEvent(
-                message: "Static clip duration unavailable; output stays \(committedOutputMode.rawValue.uppercased())",
+                message: "Static clip duration unavailable; output stays \(committedOutputMode.uiLabel.uppercased())",
                 severity: .warn,
                 timestamp: Date()
             ))
@@ -1361,7 +2021,7 @@ final class ConductorHarnessViewModel: ObservableObject {
                 target: targetState,
                 extraPayload: [
                     "sequence": "static_complete",
-                    "sequenceStep": "off",
+                    "sequenceStep": "inter",
                     "sourceCueId": sourceCueId
                 ]
             )
@@ -1444,7 +2104,10 @@ final class ConductorHarnessViewModel: ObservableObject {
             interstitialMedia: interstitialMediaURL?.path,
             fixedLanes: showFixedLanes.map {
                 MediaManifest.FixedLaneEntry(id: $0.id, label: $0.label, path: $0.mediaURL.path)
-            }
+            },
+            synthPresetPack: synthPresetPackURL?.path,
+            samplePackManifest: samplePackManifestURL?.path,
+            choirProfile: choirProfileURL?.path
         )
 
         do {
@@ -1493,6 +2156,25 @@ final class ConductorHarnessViewModel: ObservableObject {
                 interstitialMediaURL = URL(fileURLWithPath: interPath)
             }
 
+            if let synthPath = manifest.synthPresetPack, fm.fileExists(atPath: synthPath) {
+                synthPresetPackURL = URL(fileURLWithPath: synthPath)
+            }
+
+            if let sampleManifestPath = manifest.samplePackManifest, fm.fileExists(atPath: sampleManifestPath) {
+                let manifestURL = URL(fileURLWithPath: sampleManifestPath)
+                samplePackManifestURL = manifestURL
+                if let entries = try? resolveSamplePackEntries(from: manifestURL) {
+                    samplePackEntries = entries
+                    if let firstID = entries.keys.sorted().first {
+                        selectedSampleID = firstID
+                    }
+                }
+            }
+
+            if let choirPath = manifest.choirProfile, fm.fileExists(atPath: choirPath) {
+                choirProfileURL = URL(fileURLWithPath: choirPath)
+            }
+
             var restoredLanes: [ShowFixedLane] = []
             for entry in manifest.fixedLanes {
                 guard fm.fileExists(atPath: entry.path) else { continue }
@@ -1505,7 +2187,12 @@ final class ConductorHarnessViewModel: ObservableObject {
             showFixedLanes = restoredLanes
             showFixedCounter = restoredLanes.count
 
-            let count = sceneMediaURLs.count + (interstitialMediaURL != nil ? 1 : 0) + showFixedLanes.count
+            let count = sceneMediaURLs.count
+                + (interstitialMediaURL != nil ? 1 : 0)
+                + showFixedLanes.count
+                + (synthPresetPackURL != nil ? 1 : 0)
+                + (samplePackManifestURL != nil ? 1 : 0)
+                + (choirProfileURL != nil ? 1 : 0)
             if count > 0 {
                 pushStatus(StatusLineEvent(
                     message: "Restored \(count) media entries from \(url.path)",
@@ -1539,6 +2226,65 @@ final class ConductorHarnessViewModel: ObservableObject {
                 severity: .error,
                 timestamp: Date()
             ))
+            return
+        }
+
+        if kind == "phone_audio_pool_state",
+           let payload = json["data"] as? [String: Any] {
+            if let gateArmed = payload["gateArmed"] as? Bool {
+                phoneAudioGateArmed = gateArmed
+            }
+            if let gateCommitted = payload["gateCommitted"] as? Bool {
+                phoneAudioGateCommitted = gateCommitted
+            }
+            if let quadReady = payload["quadRouteReady"] as? Bool {
+                quadRouteReady = quadReady
+            }
+            if let available = payload["availableDevices"] as? [String] {
+                phoneAudioAvailableDevices = available
+                if !available.contains(phoneAudioSingleTargetID) {
+                    phoneAudioSingleTargetID = available.first ?? ""
+                }
+                phoneAudioSubsetTargetIDs = phoneAudioSubsetTargetIDs.intersection(Set(available))
+            }
+            if let voices = payload["activeVoices"] as? [String: Any] {
+                var normalized: [String: Int] = [:]
+                for (key, value) in voices {
+                    if let intValue = value as? Int {
+                        normalized[key] = intValue
+                    } else if let doubleValue = value as? Double {
+                        normalized[key] = Int(doubleValue)
+                    }
+                }
+                phoneAudioActiveVoices = normalized
+            }
+            return
+        }
+
+        if kind == "phone_audio_ack",
+           let payload = json["data"] as? [String: Any] {
+            let commandId = payload["commandId"] as? String ?? "unknown"
+            let hashedId = payload["hashedId"] as? String ?? "device"
+            let ok = payload["ok"] as? Bool ?? false
+            let detail = payload["detail"] as? String
+            let suffix = detail.map { " (\($0))" } ?? ""
+            pushStatus(StatusLineEvent(
+                message: "PHONE ACK \(commandId) \(ok ? "OK" : "FAIL") @ \(hashedId)\(suffix)",
+                severity: ok ? .info : .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+
+        if kind == "audio_features",
+           let payload = json["data"] as? [String: Any] {
+            latestAudioFeatures = QuadAudioFeatures(
+                rms: payload["rms"] as? Double ?? latestAudioFeatures.rms,
+                spectralCentroid: payload["spectralCentroid"] as? Double ?? latestAudioFeatures.spectralCentroid,
+                flux: payload["flux"] as? Double ?? latestAudioFeatures.flux,
+                transientDensity: payload["transientDensity"] as? Double ?? latestAudioFeatures.transientDensity,
+                updatedAt: payload["updatedAt"] as? Double ?? latestAudioFeatures.updatedAt
+            )
             return
         }
 

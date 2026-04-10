@@ -30,4 +30,19 @@ describe("ShowOrchestrator", () => {
     expect(second.showState).toBe("preshow");
     expect(second.cueId).toBe("preshow:2000");
   });
+
+  it("includes always-on color interaction policy hooks in cue payload", () => {
+    const show = new ShowOrchestrator();
+    const cue = show.applyAction("start", 1000);
+    const colorPolicy = cue.payload.colorPolicy as {
+      enabled: boolean;
+      roles: string[];
+      showStates: string[];
+    };
+
+    expect(colorPolicy.enabled).toBe(true);
+    expect(colorPolicy.roles).toContain("audience");
+    expect(colorPolicy.roles).toContain("performer");
+    expect(colorPolicy.showStates).toContain("main");
+  });
 });

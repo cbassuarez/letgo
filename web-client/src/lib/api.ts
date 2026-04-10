@@ -1,4 +1,10 @@
-import type { LogbookEntry, LogbookFeedResponse, ParticipantIdentityResponse } from "../types/api";
+import type {
+  AudioOpsStateResponse,
+  LightingStateResponse,
+  LogbookEntry,
+  LogbookFeedResponse,
+  ParticipantIdentityResponse
+} from "../types/api";
 import { BACKEND_HOST } from "./wsClient";
 
 export const BACKEND_HTTP_ORIGIN = `https://${BACKEND_HOST}`;
@@ -63,4 +69,20 @@ export const fetchLogbookFeed = async (cursor?: string): Promise<LogbookFeedResp
     method: "GET"
   });
   return readJson<LogbookFeedResponse>(response);
+};
+
+export const fetchLightingState = async (): Promise<LightingStateResponse> => {
+  const response = await fetch(`${BACKEND_HTTP_ORIGIN}/lighting/state`, {
+    method: "GET",
+    cache: "no-store"
+  });
+  return readJson<LightingStateResponse>(response);
+};
+
+export const fetchAudioOpsState = async (): Promise<AudioOpsStateResponse> => {
+  const response = await fetch(`${BACKEND_HTTP_ORIGIN}/audio/state`, {
+    method: "GET",
+    cache: "no-store"
+  });
+  return readJson<AudioOpsStateResponse>(response);
 };

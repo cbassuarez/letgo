@@ -1,8 +1,10 @@
 import {
   PROTOCOL_VERSION,
+  type ColorInteractionPolicy,
   type CueAction,
   type CueCommand,
   type ParamVector,
+  type Role,
   type ShowState,
   normalizeVector
 } from "@conductor/protocol";
@@ -16,6 +18,25 @@ const transitions: Record<ShowState, ShowState[]> = {
   hold: ["idle", "preshow", "introduction", "main", "ending", "recovery", "aborted"],
   aborted: ["recovery", "idle"],
   recovery: ["idle", "preshow", "introduction", "main", "ending", "hold", "aborted"]
+};
+
+const allShowStates: ShowState[] = [
+  "idle",
+  "preshow",
+  "introduction",
+  "main",
+  "ending",
+  "hold",
+  "aborted",
+  "recovery"
+];
+
+const allInteractiveRoles: Role[] = ["audience", "performer", "observer"];
+
+const defaultColorPolicy: ColorInteractionPolicy = {
+  enabled: true,
+  roles: allInteractiveRoles,
+  showStates: allShowStates
 };
 
 export interface ShowSnapshot {
@@ -92,6 +113,8 @@ export class ShowOrchestrator {
       this.pausedAtMs = null;
     }
 
+    const colorPolicy = this.normalizeColorPolicy(payload.colorPolicy);
+
     this.state = nextState;
     const logicalTime = this.logicalTime(now);
 
@@ -101,6 +124,7 @@ export class ShowOrchestrator {
       logicalTime,
       payload: {
         ...payload,
+        colorPolicy,
         vector: this.vector,
         layers:
           nextState === "main"
@@ -112,6 +136,25 @@ export class ShowOrchestrator {
       },
       version: this.version,
       action
+    };
+  }
+
+  private normalizeColorPolicy(value: unknown): ColorInteractionPolicy {
+    const raw = (value && typeof value === "object" ? value : {}) as Partial<ColorInteractionPolicy>;
+    const roles = Array.isArray(raw.roles)
+      ? raw.roles.filter(
+          (role): role is Role =>
+            role === "audience" || role === "performer" || role === "observer" || role === "muted"
+        )
+      : undefined;
+    const showStates = Array.isArray(raw.showStates)
+      ? raw.showStates.filter((state): state is ShowState => allShowStates.includes(state))
+      : undefined;
+
+    return {
+      enabled: typeof raw.enabled === "boolean" ? raw.enabled : defaultColorPolicy.enabled,
+      roles: roles && roles.length > 0 ? roles : defaultColorPolicy.roles,
+      showStates: showStates && showStates.length > 0 ? showStates : defaultColorPolicy.showStates
     };
   }
 

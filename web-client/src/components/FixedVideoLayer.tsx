@@ -38,7 +38,11 @@ export const FixedVideoLayer = ({ cue, logicalNow, enabled }: FixedVideoLayerPro
 
   const ref = useRef<HTMLVideoElement | null>(null);
   const payload = (cue?.payload ?? {}) as Record<string, unknown>;
-  const interstitialActive = boolFromPayload(payload.interstitialActive, payload.outputMode === "interstitial");
+  const outputMode = typeof payload.outputMode === "string" ? payload.outputMode.toLowerCase() : "";
+  const interstitialActive = boolFromPayload(
+    payload.interstitialActive,
+    outputMode === "interstitial" || outputMode === "off"
+  );
   const showFixedLaneId = typeof payload.showFixedLaneId === "string" ? payload.showFixedLaneId : null;
   const source = interstitialActive
     ? mediaForState.interstitial
