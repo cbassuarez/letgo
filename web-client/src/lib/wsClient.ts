@@ -1,6 +1,6 @@
 import type { WireEnvelope } from "@conductor/protocol";
 
-const DEFAULT_BACKEND_HOST = "letgo-backend.onrender.com";
+const DEFAULT_BACKEND_HOST = "letgo-fe0a.onrender.com";
 
 const sanitizeHost = (value: string | undefined): string | null => {
   if (!value) {
