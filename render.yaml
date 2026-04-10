@@ -27,5 +27,5 @@ services:
     staticPublishPath: dist
     pullRequestPreviewsEnabled: true
     envVars:
-      - key: VITE_BACKEND_WS_URL
-        value: wss://conductor-backend.onrender.com
+      - key: VITE_BACKEND_HOST
+        value: letgo-fe0a.onrender.com

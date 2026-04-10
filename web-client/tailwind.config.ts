@@ -7,6 +7,7 @@ export default {
       colors: {
         cyanotype: {
           "0": "#e4f7ff",
+          "000": "#e4f7ff",
           50: "#c9ecff",
           100: "#96c6df",
           200: "#60a9cb",

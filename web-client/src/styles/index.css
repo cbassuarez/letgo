@@ -1,44 +1,68 @@
-@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..800&family=IBM+Plex+Mono:wght@400;500;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Public+Sans:opsz,wght@8..144,300..900&family=Source+Serif+4:ital,wght@1,400;1,600;1,700&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --cyanotype-000: #e4f7ff;
-  --cyanotype-050: #c9ecff;
-  --cyanotype-100: #96c6df;
-  --cyanotype-200: #60a9cb;
-  --cyanotype-300: #2b7ca7;
-  --cyanotype-500: #0c4a73;
-  --cyanotype-700: #0a2f4f;
-  --cyanotype-900: #061b30;
-  --cyanotype-950: #040e1c;
+  --cyanotype-000: #e8f6ff;
+  --cyanotype-050: #d8ecff;
+  --cyanotype-100: #9fc9e8;
+  --cyanotype-200: #6ca9d4;
+  --cyanotype-300: #3686b8;
+  --cyanotype-500: #0f4d79;
+  --cyanotype-700: #0b3353;
+  --cyanotype-900: #061e35;
+  --cyanotype-950: #03111f;
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
 body {
   margin: 0;
-  font-family: "IBM Plex Mono", monospace;
-  background: var(--cyanotype-950);
+  font-family: "Public Sans", system-ui, -apple-system, sans-serif;
+  background:
+    radial-gradient(circle at 15% 10%, rgba(72, 164, 214, 0.22) 0%, rgba(5, 18, 34, 0) 42%),
+    radial-gradient(circle at 78% 80%, rgba(152, 221, 255, 0.14) 0%, rgba(5, 18, 34, 0) 38%),
+    linear-gradient(162deg, #020b16, #07243d 44%, #03162a 100%);
   color: var(--cyanotype-050);
+  overflow-x: hidden;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.12;
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      rgba(236, 250, 255, 0.14) 0px,
+      rgba(236, 250, 255, 0.14) 1px,
+      rgba(0, 0, 0, 0) 1px,
+      rgba(0, 0, 0, 0) 3px
+    );
+  mix-blend-mode: soft-light;
 }
 
 .font-display {
-  font-family: "Fraunces", serif;
-  font-variation-settings: "SOFT" 40, "WONK" 0;
-  letter-spacing: 0.01em;
+  font-family: "Source Serif 4", serif;
+  font-style: italic;
+  letter-spacing: 0.005em;
 }
 
 .cyanotype-shell {
   position: relative;
-  background:
-    radial-gradient(circle at 12% 16%, rgba(51, 161, 201, 0.22) 0%, rgba(6, 27, 48, 0) 43%),
-    radial-gradient(circle at 82% 82%, rgba(181, 230, 255, 0.11) 0%, rgba(4, 14, 28, 0) 52%),
-    linear-gradient(160deg, rgba(3, 10, 22, 0.96), rgba(8, 32, 53, 0.96));
+  background: transparent;
 }
 
 .cyanotype-atmosphere {
@@ -46,93 +70,71 @@ body {
   background:
     linear-gradient(
       120deg,
-      rgba(219, 247, 255, 0.05) 0%,
-      rgba(82, 173, 211, 0.03) 35%,
+      rgba(213, 240, 255, 0.06) 0%,
+      rgba(108, 177, 213, 0.03) 35%,
       rgba(5, 17, 30, 0.32) 100%
     ),
-    radial-gradient(circle at 70% 15%, rgba(186, 236, 255, 0.08) 0%, transparent 50%);
+    radial-gradient(circle at 70% 15%, rgba(186, 236, 255, 0.09) 0%, transparent 50%);
   mix-blend-mode: screen;
 }
 
-.cyanotype-atmosphere::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image:
-    repeating-linear-gradient(
-      0deg,
-      rgba(238, 252, 255, 0.02) 0px,
-      rgba(238, 252, 255, 0.02) 1px,
-      transparent 1px,
-      transparent 3px
-    );
-  opacity: 0.5;
-}
-
 .cyanotype-panel {
-  border: 1px solid rgba(125, 196, 228, 0.27);
-  border-radius: 18px;
-  background: linear-gradient(
-    160deg,
-    rgba(10, 40, 67, 0.72),
-    rgba(4, 18, 34, 0.82)
-  );
-  box-shadow:
-    0 22px 60px rgba(0, 0, 0, 0.35),
-    inset 0 0 0 1px rgba(187, 235, 255, 0.05);
-  backdrop-filter: blur(10px);
+  border-top: 1px solid rgba(186, 228, 249, 0.36);
+  border-bottom: 1px solid rgba(186, 228, 249, 0.16);
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .cyanotype-standby {
-  border: 1px solid rgba(161, 219, 244, 0.35);
+  border-top: 1px solid rgba(196, 236, 255, 0.4);
+  border-bottom: 1px solid rgba(196, 236, 255, 0.22);
   background:
-    radial-gradient(circle at 14% 22%, rgba(184, 236, 255, 0.13), rgba(6, 24, 43, 0.15) 42%),
-    linear-gradient(145deg, rgba(10, 41, 68, 0.78), rgba(4, 14, 30, 0.86));
-  box-shadow:
-    0 30px 80px rgba(0, 0, 0, 0.45),
-    inset 0 0 0 1px rgba(204, 242, 255, 0.06);
-  backdrop-filter: blur(16px);
-  animation: cyanotype-breathe 5s ease-in-out infinite;
+    linear-gradient(180deg, rgba(15, 71, 111, 0.2), rgba(4, 16, 30, 0.06));
+  animation: cyanotype-breathe 5.5s ease-in-out infinite;
 }
 
 @keyframes cyanotype-breathe {
   0%,
   100% {
-    transform: translate(-50%, 0);
-    filter: saturate(1);
+    opacity: 0.82;
+    filter: saturate(0.98);
   }
   50% {
-    transform: translate(-50%, -4px);
-    filter: saturate(1.08);
+    opacity: 1;
+    filter: saturate(1.12);
   }
 }
 
 .cyanotype-kicker {
   font-size: 0.68rem;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.26em;
   text-transform: uppercase;
-  color: rgba(201, 236, 255, 0.62);
+  color: rgba(214, 238, 255, 0.66);
 }
 
 .cyanotype-cta {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  border-radius: 999px;
-  border: 1px solid rgba(124, 200, 233, 0.44);
-  background: linear-gradient(120deg, rgba(18, 98, 138, 0.8), rgba(11, 62, 95, 0.86));
+  gap: 0.5rem;
+  border: 0;
+  border-bottom: 1px solid rgba(189, 232, 255, 0.45);
+  border-radius: 0;
+  background: transparent;
   color: var(--cyanotype-000);
-  font-size: 0.72rem;
+  font-size: 0.76rem;
   font-weight: 700;
-  letter-spacing: 0.17em;
+  letter-spacing: 0.19em;
   text-transform: uppercase;
-  padding: 0.72rem 1.2rem;
-  transition: transform 180ms ease, filter 180ms ease;
+  padding: 0.2rem 0.05rem;
+  transition: letter-spacing 220ms ease, color 220ms ease, border-color 220ms ease;
 }
 
 .cyanotype-cta:hover:not(:disabled) {
-  transform: translateY(-1px);
-  filter: brightness(1.08);
+  color: #f6fcff;
+  letter-spacing: 0.24em;
+  border-color: rgba(219, 245, 255, 0.88);
 }
 
 .cyanotype-cta:disabled {
@@ -141,48 +143,81 @@ body {
 
 .cyanotype-input {
   width: 100%;
-  border-radius: 14px;
-  border: 1px solid rgba(137, 203, 233, 0.34);
-  background: rgba(3, 15, 28, 0.66);
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid rgba(160, 210, 235, 0.45);
+  background: rgba(0, 0, 0, 0);
   color: var(--cyanotype-000);
-  padding: 0.75rem 0.9rem;
-  font-size: 0.9rem;
+  padding: 0.78rem 0.1rem;
+  font-size: 1rem;
+  font-family: "Public Sans", system-ui, -apple-system, sans-serif;
+}
+
+.cyanotype-input::placeholder {
+  color: rgba(190, 223, 241, 0.46);
 }
 
 .cyanotype-input:focus {
-  outline: 1px solid rgba(173, 226, 250, 0.62);
+  outline: none;
+  border-color: rgba(220, 244, 255, 0.9);
 }
 
 .cyanotype-slider {
-  accent-color: #77c4e4;
+  accent-color: #8aceec;
+}
+
+.hud-strip {
+  border-left: 1px solid rgba(194, 231, 251, 0.34);
+  background:
+    linear-gradient(90deg, rgba(9, 36, 57, 0.44), rgba(9, 36, 57, 0));
+}
+
+.logbook-line {
+  border-top: 1px solid rgba(176, 223, 247, 0.24);
+}
+
+.kinetic-italic {
+  display: inline-block;
+  animation: italic-sway 7.5s ease-in-out infinite;
+}
+
+@keyframes italic-sway {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(10px, -2px, 0);
+  }
 }
 
 .hic-source {
   display: block;
   width: 100%;
   height: 100%;
-  padding: 22px;
+  padding: 24px;
 }
 
 .hic-source-frame {
-  border-radius: 18px;
-  border: 1px solid rgba(209, 241, 255, 0.38);
-  background: rgba(8, 35, 61, 0.65);
-  padding: 18px;
+  border-top: 1px solid rgba(209, 241, 255, 0.38);
+  border-bottom: 1px solid rgba(209, 241, 255, 0.2);
+  background: transparent;
+  padding: 18px 0;
 }
 
 .hic-source-kicker {
   margin: 0;
   font-size: 11px;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: rgba(214, 245, 255, 0.72);
+  color: rgba(214, 245, 255, 0.75);
 }
 
 .hic-source-line {
   margin: 12px 0 0;
-  font-family: "Fraunces", serif;
-  font-size: 30px;
-  line-height: 1.2;
-  color: rgba(234, 250, 255, 0.95);
+  font-family: "Source Serif 4", serif;
+  font-style: italic;
+  font-size: clamp(30px, 5vw, 56px);
+  line-height: 1.08;
+  color: rgba(238, 251, 255, 0.96);
 }

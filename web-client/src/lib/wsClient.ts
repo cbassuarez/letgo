@@ -1,6 +1,34 @@
 import type { WireEnvelope } from "@conductor/protocol";
 
-export const BACKEND_HOST = "letgo-backend.onrender.com";
+const DEFAULT_BACKEND_HOST = "letgo-backend.onrender.com";
+
+const sanitizeHost = (value: string | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("ws://") || trimmed.startsWith("wss://")) {
+    try {
+      const parsed = new URL(trimmed);
+      return parsed.host || null;
+    } catch {
+      return null;
+    }
+  }
+
+  return trimmed.replace(/\/+$/, "");
+};
+
+const envHost =
+  sanitizeHost(import.meta.env.VITE_BACKEND_HOST) ??
+  sanitizeHost(import.meta.env.VITE_BACKEND_HTTP_ORIGIN) ??
+  sanitizeHost(import.meta.env.VITE_BACKEND_WS_URL);
+
+export const BACKEND_HOST = envHost ?? DEFAULT_BACKEND_HOST;
 export const BACKEND_HEALTH_URL = `https://${BACKEND_HOST}/health`;
 export const HARNESS_WS_URL = `wss://${BACKEND_HOST}/ws/harness`;
 export const DEVICE_WS_BASE_URL = `wss://${BACKEND_HOST}/ws/device`;

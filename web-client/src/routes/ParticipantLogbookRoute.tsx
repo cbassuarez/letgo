@@ -85,7 +85,7 @@ export const ParticipantLogbookRoute = (): JSX.Element => {
   if (loading) {
     return (
       <main className="cyanotype-shell min-h-dvh px-6 py-16">
-        <section className="cyanotype-panel mx-auto max-w-2xl p-10">
+        <section className="mx-auto max-w-3xl border-t border-cyanotype-200/30 py-10">
           <p className="text-cyanotype-100/72">Checking participant key…</p>
         </section>
       </main>
@@ -105,11 +105,14 @@ export const ParticipantLogbookRoute = (): JSX.Element => {
     <main className="cyanotype-shell min-h-dvh px-5 py-10 text-cyanotype-050 sm:px-8">
       <div className="cyanotype-atmosphere absolute inset-0 -z-10" />
 
-      <section className="mx-auto max-w-3xl">
+      <section className="mx-auto max-w-5xl">
         <p className="cyanotype-kicker">PARTICIPANT ENTRY</p>
-        <h1 className="mt-3 font-display text-4xl">Sign The Digital Logbook</h1>
-        <p className="mt-4 text-cyanotype-100/80">
+        <h1 className="mt-4 text-5xl font-semibold leading-[0.95] sm:text-7xl">Sign The Digital Logbook</h1>
+        <p className="mt-4 max-w-3xl text-cyanotype-100/80">
           One entry per participant key. You can refine your words over time; each save updates the public wall.
+        </p>
+        <p className="font-display mt-8 text-2xl text-cyanotype-000/88 sm:text-4xl">
+          Write what shifted in you while the field moved.
         </p>
       </section>
 
@@ -118,31 +121,33 @@ export const ParticipantLogbookRoute = (): JSX.Element => {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
         onSubmit={(event) => void submitEntry(event)}
-        className="cyanotype-panel mx-auto mt-8 max-w-3xl p-6"
+        className="mx-auto mt-10 grid max-w-5xl gap-8 border-t border-cyanotype-200/30 pt-8"
       >
-        <label className="block text-xs uppercase tracking-[0.2em] text-cyanotype-100/65">Signer</label>
+        <label className="block text-xs uppercase tracking-[0.22em] text-cyanotype-100/65">Signer</label>
         <input
           className="cyanotype-input mt-2"
           value={signer}
           onChange={(event) => setSigner(event.target.value)}
           maxLength={60}
+          placeholder="Name or alias"
           required
         />
 
-        <label className="mt-5 block text-xs uppercase tracking-[0.2em] text-cyanotype-100/65">Message</label>
+        <label className="block text-xs uppercase tracking-[0.22em] text-cyanotype-100/65">Message</label>
         <textarea
           className="cyanotype-input mt-2 min-h-44"
           value={message}
           onChange={(event) => setMessage(event.target.value)}
           maxLength={900}
+          placeholder="A short trace of your experience..."
           required
         />
 
-        <div className="mt-5 flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-8 border-t border-cyanotype-200/25 pt-4">
           <button className="cyanotype-cta" type="submit" disabled={saving}>
             {saving ? "Saving…" : "Save Entry"}
           </button>
-          <Link to={`/${hashedId}`} className="text-sm uppercase tracking-[0.2em] text-cyanotype-100/70">
+          <Link to={`/${hashedId}`} className="cyanotype-cta">
             Back To Live Mode
           </Link>
         </div>
@@ -160,9 +165,9 @@ export const ParticipantLogbookRoute = (): JSX.Element => {
 
 const LockoutCard = ({ title, detail }: { title: string; detail: string }): JSX.Element => (
   <main className="cyanotype-shell min-h-dvh px-6 py-16">
-    <section className="cyanotype-panel mx-auto max-w-2xl p-10">
+    <section className="mx-auto max-w-3xl border-t border-cyanotype-200/30 py-10">
       <p className="cyanotype-kicker">LOCKOUT</p>
-      <h1 className="mt-3 font-display text-4xl">{title}</h1>
+      <h1 className="mt-3 text-5xl font-semibold leading-[0.95]">{title}</h1>
       <p className="mt-4 text-cyanotype-100/78">{detail}</p>
       <Link to="/logbook" className="cyanotype-cta mt-8 inline-flex">
         View Public Wall

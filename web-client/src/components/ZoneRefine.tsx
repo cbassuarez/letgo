@@ -11,9 +11,9 @@ export const ZoneRefine = ({ onSubmit }: ZoneRefineProps): JSX.Element => {
   const [z, setZ] = useState(0.5);
 
   return (
-    <section className="cyanotype-panel mx-auto mt-8 w-full max-w-xl p-6">
+    <section className="mx-auto mt-8 w-full max-w-3xl border-t border-cyanotype-200/30 py-6">
       <p className="cyanotype-kicker">SPATIAL CALIBRATION</p>
-      <h3 className="mt-2 font-display text-2xl">Refine Your Position</h3>
+      <h3 className="mt-3 text-4xl font-semibold leading-[0.95]">Refine Your Position</h3>
       <p className="mt-2 text-xs text-cyanotype-100/72">
         Indoor location drifts. Tune your zone manually for stable spatial choreography.
       </p>

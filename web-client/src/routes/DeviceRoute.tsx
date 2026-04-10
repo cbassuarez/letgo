@@ -161,10 +161,13 @@ export const DeviceRoute = (): JSX.Element => {
   if (!isValidHashedId(hashedId)) {
     return (
       <main className="cyanotype-shell min-h-dvh px-6 py-16">
-        <section className="cyanotype-panel mx-auto max-w-2xl p-10">
+        <section className="mx-auto max-w-4xl border-t border-cyanotype-200/30 py-10">
           <p className="cyanotype-kicker">LOCKOUT</p>
-          <h1 className="mt-4 font-display text-4xl">Participant Link Not Valid</h1>
-          <p className="mt-4 text-cyanotype-100/78">
+          <h1 className="mt-4 text-5xl font-semibold leading-[0.95] sm:text-7xl">Participant Link Not Valid</h1>
+          <p className="font-display mt-6 text-2xl text-cyanotype-000/86 sm:text-4xl">
+            This key is outside tonight’s active field.
+          </p>
+          <p className="mt-4 max-w-3xl text-cyanotype-100/78">
             This entrance key is not in the performance field. Scan your assigned NFC card to join.
           </p>
           <Link to="/" className="cyanotype-cta mt-8 inline-flex">
@@ -178,10 +181,13 @@ export const DeviceRoute = (): JSX.Element => {
   if (!capabilitiesSupported) {
     return (
       <main className="cyanotype-shell min-h-dvh px-6 py-16">
-        <section className="cyanotype-panel mx-auto max-w-2xl p-10">
+        <section className="mx-auto max-w-4xl border-t border-cyanotype-200/30 py-10">
           <p className="cyanotype-kicker">LOCKOUT</p>
-          <h1 className="mt-4 font-display text-4xl">Device Capabilities Not Supported</h1>
-          <p className="mt-4 text-cyanotype-100/78">
+          <h1 className="mt-4 text-5xl font-semibold leading-[0.95] sm:text-7xl">Device Capabilities Not Supported</h1>
+          <p className="font-display mt-6 text-2xl text-cyanotype-000/86 sm:text-4xl">
+            Motion APIs are required for this score.
+          </p>
+          <p className="mt-4 max-w-3xl text-cyanotype-100/78">
             This browser cannot provide the motion/real-time APIs required for live participation.
             Open the same participant link in a modern mobile Chromium browser.
           </p>
@@ -221,16 +227,22 @@ export const DeviceRoute = (): JSX.Element => {
           {!engineRunning || !session.connected ? (
             <motion.section
               initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="cyanotype-standby absolute bottom-8 left-1/2 w-[min(94vw,760px)] -translate-x-1/2 rounded-3xl p-6 sm:p-8"
+              animate={{ opacity: 1, y: [0, -3, 0] }}
+              transition={{ y: { duration: 6.5, repeat: Infinity, ease: "easeInOut" } }}
+              className="cyanotype-standby absolute bottom-8 left-1/2 w-[min(94vw,920px)] -translate-x-1/2 px-6 py-8 sm:px-8"
             >
               <p className="cyanotype-kicker">{session.connected ? "STANDBY" : "RECONNECTING"}</p>
-              <h2 className="mt-3 font-display text-3xl sm:text-4xl">
+              <h2 className="mt-3 text-4xl font-semibold leading-[0.95] sm:text-6xl">
                 {session.connected
                   ? "This phone is armed and ready."
                   : "The field link is recovering."}
               </h2>
-              <p className="mt-3 max-w-2xl text-sm leading-relaxed text-cyanotype-100/80 sm:text-base">
+              <p className="font-display mt-6 text-2xl text-cyanotype-000/88 sm:text-4xl">
+                {session.connected
+                  ? "Stay present. Your vector feed is primed."
+                  : "Hold. Reacquiring sync pulse and audience field."}
+              </p>
+              <p className="mt-4 max-w-3xl text-sm leading-relaxed text-cyanotype-100/80 sm:text-base">
                 {session.connected
                   ? "Hold your device naturally. Participation is now automatic; no manual position tuning is required."
                   : "Stay on this screen. Your participant key and logbook access remain active while the link retries."}
@@ -241,7 +253,7 @@ export const DeviceRoute = (): JSX.Element => {
           <motion.aside
             initial={{ opacity: 0, y: -12 }}
             animate={{ opacity: 1, y: 0 }}
-            className="cyanotype-panel absolute left-4 top-4 w-[min(90vw,340px)] px-4 py-3 text-[11px] uppercase tracking-[0.16em] text-cyanotype-100/82"
+            className="hud-strip absolute left-4 top-4 w-[min(92vw,420px)] px-4 py-3 text-[11px] uppercase tracking-[0.16em] text-cyanotype-100/84"
           >
             <p>{session.connected ? "Live Link" : "Field Reconnect"}</p>
             <p>Link {session.linkState}</p>

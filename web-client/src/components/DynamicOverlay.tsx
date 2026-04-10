@@ -57,12 +57,12 @@ export const DynamicOverlay = ({
 
       {compositorMode !== "html-in-canvas" ? (
         <motion.div
-          initial={{ opacity: 0, y: 24 }}
-          animate={{ opacity: 0.48 + intensity * 0.45, y: 0 }}
-          transition={{ duration: 0.8 }}
-          className="absolute bottom-8 left-0 right-0 mx-5 rounded-2xl border border-cyanotype-200/35 bg-cyanotype-950/65 p-4 text-sm leading-relaxed tracking-[0.02em] text-cyanotype-050 shadow-panel"
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 0.52 + intensity * 0.42, y: 0, x: [0, 8 * influence, 0] }}
+          transition={{ duration: 0.9, x: { duration: 6.5, repeat: Infinity, ease: "easeInOut" } }}
+          className="absolute bottom-10 left-6 right-6 border-t border-b border-cyanotype-200/35 py-4 text-base leading-relaxed tracking-[0.01em] text-cyanotype-000/92 sm:left-10 sm:right-10 sm:text-xl"
         >
-          {line}
+          <span className="font-display">{line}</span>
         </motion.div>
       ) : null}
     </div>
