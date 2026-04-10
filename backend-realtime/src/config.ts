@@ -8,7 +8,11 @@ const envSchema = z.object({
   POSTGRES_URL: z.string().optional(),
   SESSION_SALT: z.string().default("conductor-film-session-salt"),
   REPLAY_RETENTION_HOURS: z.coerce.number().default(24),
-  MAX_CLIENT_DRIFT_MS: z.coerce.number().default(100)
+  MAX_CLIENT_DRIFT_MS: z.coerce.number().default(100),
+  LOGBOOK_GOOGLE_SHEET_ID: z.string().optional(),
+  LOGBOOK_GOOGLE_SERVICE_ACCOUNT_EMAIL: z.string().optional(),
+  LOGBOOK_GOOGLE_PRIVATE_KEY: z.string().optional(),
+  LOGBOOK_GOOGLE_SHEET_TAB: z.string().default("logbook")
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

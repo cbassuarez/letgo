@@ -9,21 +9,23 @@ export const PermissionGate = ({ onDone }: PermissionGateProps): JSX.Element => 
   const { permissions, completed, enableAudio, enableGeo, enableMotion } = usePermissionFlow();
 
   return (
-    <section className="mx-auto w-full max-w-xl rounded-3xl border border-fog/20 bg-ink/70 p-6 shadow-panel backdrop-blur">
-      <h2 className="font-display text-2xl">Join The Conductor Field</h2>
-      <p className="mt-3 text-sm text-fog/80">
-        This phone becomes a unique participant. Enable audio, motion, and location so your device can carry a live branch of the film.
+    <section className="cyanotype-panel mx-auto mt-8 w-full max-w-xl p-6">
+      <p className="cyanotype-kicker">ACCESS PROTOCOL</p>
+      <h2 className="mt-3 font-display text-3xl">Join The Conductor Field</h2>
+      <p className="mt-3 text-sm text-cyanotype-100/80">
+        This phone becomes a unique participant. Enable audio and motion to join live control.
+        Location is optional and only improves spatial grouping.
       </p>
 
       <div className="mt-6 grid gap-3">
-        <button className="rounded-xl bg-ember px-4 py-3 text-left text-sm font-semibold text-fog" onClick={() => void enableAudio()}>
+        <button className="cyanotype-cta text-left" onClick={() => void enableAudio()}>
           {permissions.audio ? "Audio Ready" : "Enable Audio"}
         </button>
-        <button className="rounded-xl bg-leaf px-4 py-3 text-left text-sm font-semibold text-fog" onClick={() => void enableMotion()}>
+        <button className="cyanotype-cta text-left" onClick={() => void enableMotion()}>
           {permissions.motion ? "Motion Ready" : "Enable Motion"}
         </button>
-        <button className="rounded-xl bg-fog px-4 py-3 text-left text-sm font-semibold text-ink" onClick={() => void enableGeo()}>
-          {permissions.geolocation ? "Location Ready" : "Enable Location"}
+        <button className="cyanotype-cta text-left" onClick={() => void enableGeo()}>
+          {permissions.geolocation ? "Location Ready" : "Enable Location (Optional)"}
         </button>
       </div>
 
@@ -31,7 +33,7 @@ export const PermissionGate = ({ onDone }: PermissionGateProps): JSX.Element => 
         <motion.button
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mt-6 w-full rounded-xl border border-fog/40 bg-transparent px-4 py-3 font-semibold"
+          className="cyanotype-cta mt-6 w-full justify-center"
           onClick={() => onDone(permissions)}
         >
           Continue To Film

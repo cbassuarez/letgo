@@ -129,6 +129,12 @@ private struct OutputProfile {
     }
 }
 
+private struct TimelineStepPlan {
+    let laneId: String
+    let targetState: ShowState
+    let completionState: ShowState
+}
+
 @MainActor
 final class ConductorHarnessViewModel: ObservableObject {
     @Published var state: ShowState = .idle
@@ -174,6 +180,7 @@ final class ConductorHarnessViewModel: ObservableObject {
     @Published private(set) var statusLineHistory: [StatusLineEvent] = []
     @Published var masterArmKey: MasterArmKeyState = .safe
     @Published private(set) var abortCoverOpen: Bool = false
+    @Published private(set) var lockedTimelineLaneIDs: Set<String> = []
 
     private static let statusHistoryLimit = 200
     private var abortCoverTimer: Timer?
@@ -228,6 +235,23 @@ final class ConductorHarnessViewModel: ObservableObject {
         "preshow": .preshow,
         "introduction": .introduction,
         "ending": .ending
+    ]
+    private let timelineStepPlans: [String: TimelineStepPlan] = [
+        "preshow": TimelineStepPlan(
+            laneId: "preshow",
+            targetState: .preshow,
+            completionState: .preshow
+        ),
+        "introduction": TimelineStepPlan(
+            laneId: "introduction",
+            targetState: .introduction,
+            completionState: .main
+        ),
+        "ending": TimelineStepPlan(
+            laneId: "ending",
+            targetState: .ending,
+            completionState: .idle
+        )
     ]
 
     private static let statusTimeFormatter: DateFormatter = {
@@ -462,6 +486,14 @@ final class ConductorHarnessViewModel: ObservableObject {
 
     func canApply(action: CueAction, target: ShowState? = nil) -> Bool {
         machine.canApply(action: action, targetState: target)
+    }
+
+    func isTimelineStepLocked(_ laneId: String) -> Bool {
+        lockedTimelineLaneIDs.contains(laneId)
+    }
+
+    func isTimelineStepArmed(_ laneId: String) -> Bool {
+        pendingOutputMode == .static && pendingLaneId == laneId
     }
 
     private static func connectionStatusText(for state: WebSocketConductorClient.LinkState) -> String {
@@ -719,6 +751,39 @@ final class ConductorHarnessViewModel: ObservableObject {
         }
 
         if mode == .static, let laneId = fireDecision.laneId {
+            if let timelinePlan = timelineStepPlan(for: laneId) {
+                guard !lockedTimelineLaneIDs.contains(laneId) else {
+                    pushStatus(StatusLineEvent(
+                        message: "GO blocked: timeline \(laneId.uppercased()) is locked",
+                        severity: .warn,
+                        timestamp: Date()
+                    ))
+                    return
+                }
+
+                guard canApply(action: .jump, target: timelinePlan.targetState) else {
+                    pushStatus(StatusLineEvent(
+                        message: "GO blocked: timeline \(laneId.uppercased()) is NOGO from \(state.rawValue.uppercased())",
+                        severity: .warn,
+                        timestamp: Date()
+                    ))
+                    return
+                }
+
+                lockedTimelineLaneIDs.insert(laneId)
+                payload["sequence"] = "timeline"
+                payload["sequenceStep"] = laneId
+
+                apply(
+                    action: .jump,
+                    target: timelinePlan.targetState,
+                    extraPayload: payload,
+                    overrideStaticLaneId: laneId,
+                    staticAutoReturnTarget: timelinePlan.completionState
+                )
+                return
+            }
+
             guard let target = laneTargetState(for: laneId) else {
                 pushStatus(StatusLineEvent(
                     message: "GO failed: lane target missing",
@@ -758,7 +823,11 @@ final class ConductorHarnessViewModel: ObservableObject {
         cancelSequenceWork()
         engineRunning = true
         committedOutputMode = .off
+        effectiveOutputMode = .off
         activeStaticLaneId = nil
+        configurePreviewLoop(shouldLoop: false)
+        previewPlayer.pause()
+        previewStatus = "Output OFF"
         let now = Date()
         let snapshot = latchController.reset(now: now, message: "Engine started")
         syncLatchState(snapshot, now: now)
@@ -806,34 +875,18 @@ final class ConductorHarnessViewModel: ObservableObject {
     }
 
     func runPreshowTimelineStep() {
-        runTimelineStep(
-            laneId: "preshow",
-            targetState: .preshow,
-            completionState: .preshow
-        )
+        queueTimelineStep(laneId: "preshow")
     }
 
     func runIntroductionTimelineStep() {
-        runTimelineStep(
-            laneId: "introduction",
-            targetState: .introduction,
-            completionState: .main
-        )
+        queueTimelineStep(laneId: "introduction")
     }
 
     func runEndingTimelineStep() {
-        runTimelineStep(
-            laneId: "ending",
-            targetState: .ending,
-            completionState: .idle
-        )
+        queueTimelineStep(laneId: "ending")
     }
 
-    private func runTimelineStep(
-        laneId: String,
-        targetState: ShowState,
-        completionState: ShowState
-    ) {
+    private func queueTimelineStep(laneId: String) {
         guard guardLinkHealthy(for: "TIMELINE STEP") else {
             return
         }
@@ -847,24 +900,51 @@ final class ConductorHarnessViewModel: ObservableObject {
             return
         }
 
-        cancelSequenceWork()
-        committedOutputMode = .static
-        activeStaticLaneId = laneId
+        guard let plan = timelineStepPlan(for: laneId) else {
+            pushStatus(StatusLineEvent(
+                message: "Blocked: unknown timeline step \(laneId)",
+                severity: .error,
+                timestamp: Date()
+            ))
+            return
+        }
+
+        guard !lockedTimelineLaneIDs.contains(plan.laneId) else {
+            pushStatus(StatusLineEvent(
+                message: "Blocked: \(plan.laneId.uppercased()) already used and locked",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+
+        guard laneMediaURL(for: plan.laneId) != nil else {
+            pushStatus(StatusLineEvent(
+                message: "Blocked: load media for \(plan.laneId.uppercased()) first",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+
+        guard canApply(action: .jump, target: plan.targetState) else {
+            pushStatus(StatusLineEvent(
+                message: "Blocked: \(plan.laneId.uppercased()) is NOGO from \(state.rawValue.uppercased())",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
 
         let now = Date()
-        let snapshot = latchController.reset(now: now, message: "Timeline \(laneId) armed")
+        _ = latchController.armMode(FlightOutputMode.static.rawValue, now: now)
+        let snapshot = latchController.armLane(plan.laneId, now: now)
         syncLatchState(snapshot, now: now)
-
-        apply(
-            action: .jump,
-            target: targetState,
-            extraPayload: [
-                "sequence": "timeline",
-                "sequenceStep": laneId
-            ],
-            overrideStaticLaneId: laneId,
-            staticAutoReturnTarget: completionState
-        )
+        pushStatus(StatusLineEvent(
+            message: "\(plan.laneId.uppercased()) queued — TAKE/GO to commit",
+            severity: .info,
+            timestamp: now
+        ))
     }
 
     func resetShowRun() {
@@ -1189,6 +1269,10 @@ final class ConductorHarnessViewModel: ObservableObject {
             return .main
         }
         return nil
+    }
+
+    private func timelineStepPlan(for laneId: String) -> TimelineStepPlan? {
+        timelineStepPlans[laneId]
     }
 
     private func laneMediaURL(for laneId: String) -> URL? {

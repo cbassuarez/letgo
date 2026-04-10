@@ -11,13 +11,16 @@ export const ZoneRefine = ({ onSubmit }: ZoneRefineProps): JSX.Element => {
   const [z, setZ] = useState(0.5);
 
   return (
-    <section className="mx-auto mt-4 w-full max-w-xl rounded-3xl border border-fog/20 bg-ink/70 p-6 shadow-panel backdrop-blur">
-      <h3 className="font-display text-xl">Refine Your Position</h3>
-      <p className="mt-2 text-xs text-fog/75">Indoor location drifts. Tune your zone manually for stable spatial choreography.</p>
+    <section className="cyanotype-panel mx-auto mt-8 w-full max-w-xl p-6">
+      <p className="cyanotype-kicker">SPATIAL CALIBRATION</p>
+      <h3 className="mt-2 font-display text-2xl">Refine Your Position</h3>
+      <p className="mt-2 text-xs text-cyanotype-100/72">
+        Indoor location drifts. Tune your zone manually for stable spatial choreography.
+      </p>
 
-      <label className="mt-4 block text-xs uppercase tracking-[0.18em] text-fog/70">Zone Name</label>
+      <label className="mt-4 block text-xs uppercase tracking-[0.18em] text-cyanotype-100/62">Zone Name</label>
       <input
-        className="mt-1 w-full rounded-lg border border-fog/25 bg-transparent px-3 py-2 text-sm"
+        className="cyanotype-input mt-1"
         value={name}
         onChange={(event) => setName(event.target.value)}
       />
@@ -28,9 +31,9 @@ export const ZoneRefine = ({ onSubmit }: ZoneRefineProps): JSX.Element => {
         ["Z", z, setZ]
       ].map(([label, value, setter]) => (
         <label className="mt-4 block" key={label as string}>
-          <span className="text-xs uppercase tracking-[0.18em] text-fog/70">{label as string}</span>
+          <span className="text-xs uppercase tracking-[0.18em] text-cyanotype-100/62">{label as string}</span>
           <input
-            className="mt-2 w-full"
+            className="cyanotype-slider mt-2 w-full"
             type="range"
             min={0}
             max={1}
@@ -42,7 +45,7 @@ export const ZoneRefine = ({ onSubmit }: ZoneRefineProps): JSX.Element => {
       ))}
 
       <button
-        className="mt-6 w-full rounded-xl border border-fog/40 px-4 py-3 text-sm font-semibold"
+        className="cyanotype-cta mt-6 w-full justify-center"
         onClick={() => onSubmit({ name, x, y, z })}
       >
         Save Spatial Position

@@ -1,11 +1,15 @@
 import {
   normalizeVector,
+  type AudienceVectorPayload,
   type CueCommand,
+  type DevicePermissions,
+  type DeviceZone,
+  type ParticipantVectorPayload,
   type ParamVector,
   type SyncPacket,
   type WireEnvelope
 } from "@conductor/protocol";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { readFallbackSnapshot, saveFallbackSnapshot } from "../lib/fallbackStore";
 import { SyncClock } from "../lib/syncClock";
 import { createSessionSocket, sendEnvelope } from "../lib/wsClient";
@@ -22,9 +26,19 @@ interface SessionState {
   linkState: SessionLinkState;
   retryInMs: number | null;
   logicalNow: number;
+  audienceVector: AudienceVectorPayload;
+  sendPermissions: (permissions: DevicePermissions) => void;
+  sendZoneUpdate: (zone: DeviceZone) => void;
+  sendParticipantVector: (payload: ParticipantVectorPayload) => void;
 }
 
 const defaultVector = normalizeVector({});
+const defaultAudienceVector: AudienceVectorPayload = {
+  vector: defaultVector,
+  participantCount: 0,
+  updatedAt: 0,
+  compositorModes: {}
+};
 
 export const computeReconnectDelayMs = (attempt: number, jitterSeed: number = 0.5): number => {
   const normalizedAttempt = Math.max(1, attempt);
@@ -58,6 +72,7 @@ export const useConductorSession = (hashedId: string): SessionState => {
   const [logicalNow, setLogicalNow] = useState(cue?.logicalTime ?? 0);
   const [linkState, setLinkState] = useState<SessionLinkState>("connecting");
   const [retryInMs, setRetryInMs] = useState<number | null>(null);
+  const [audienceVector, setAudienceVector] = useState<AudienceVectorPayload>(defaultAudienceVector);
 
   const clockRef = useRef(new SyncClock());
   const cueRef = useRef<CueCommand | null>(fallback?.cue ?? null);
@@ -72,6 +87,35 @@ export const useConductorSession = (hashedId: string): SessionState => {
   const linkStateRef = useRef<SessionLinkState>("connecting");
   const fallbackActivatedAtRef = useRef<number | null>(fallback ? Date.now() : null);
   const fallbackActiveRef = useRef<boolean>(Boolean(fallback));
+
+  const sendWithSocket = useCallback(<T>(kind: WireEnvelope<T>["kind"], data: T): void => {
+    const socket = socketRef.current;
+    if (!socket) {
+      return;
+    }
+    sendEnvelope(socket, kind, data);
+  }, []);
+
+  const sendPermissions = useCallback(
+    (permissions: DevicePermissions): void => {
+      sendWithSocket("permissions", permissions);
+    },
+    [sendWithSocket]
+  );
+
+  const sendZoneUpdate = useCallback(
+    (zone: DeviceZone): void => {
+      sendWithSocket("zone_update", zone);
+    },
+    [sendWithSocket]
+  );
+
+  const sendParticipantVector = useCallback(
+    (payload: ParticipantVectorPayload): void => {
+      sendWithSocket("participant_vector", payload);
+    },
+    [sendWithSocket]
+  );
 
   useEffect(() => {
     stoppedRef.current = false;
@@ -196,6 +240,14 @@ export const useConductorSession = (hashedId: string): SessionState => {
           setVector(nextVector);
         }
 
+        if (envelope.kind === "audience_vector") {
+          const payload = envelope.data as AudienceVectorPayload;
+          setAudienceVector({
+            ...payload,
+            vector: normalizeVector(payload.vector)
+          });
+        }
+
         if (envelope.kind === "sync") {
           const packet = envelope.data as SyncPacket;
           if (packet.kind === "ping") {
@@ -280,6 +332,10 @@ export const useConductorSession = (hashedId: string): SessionState => {
     fallbackAgeMs,
     linkState,
     retryInMs,
-    logicalNow
+    logicalNow,
+    audienceVector,
+    sendPermissions,
+    sendZoneUpdate,
+    sendParticipantVector
   };
 };

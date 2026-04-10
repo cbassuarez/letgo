@@ -1,13 +1,18 @@
 import {
+  type AudienceVectorPayload,
+  type CompositorMode,
   type CueCommand,
   isCueCommand,
+  normalizeVector,
   type ParamVector,
+  type ParticipantVectorPayload,
   type SyncPacket,
   type WireEnvelope
 } from "@conductor/protocol";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import type { AppConfig } from "../config";
+import { AudienceVectorField } from "../services/audienceVectorField";
 import { IdentityService } from "../services/identityService";
 import { ReplayService } from "../services/replayService";
 import { ShowOrchestrator } from "../services/showOrchestrator";
@@ -40,6 +45,7 @@ type HarnessInbound =
 type DeviceInbound =
   | { kind: "sync"; data: SyncPacket }
   | { kind: "telemetry"; data: Record<string, unknown> }
+  | { kind: "participant_vector"; data: Partial<ParticipantVectorPayload> & { vector?: Partial<ParamVector> } }
   | { kind: "zone_update"; data: { name: string; x: number; y: number; z?: number } }
   | { kind: "permissions"; data: { audio?: boolean; geolocation?: boolean; motion?: boolean } }
   | { kind: "ack"; data: { cueId: string; seenAt: number } };
@@ -59,6 +65,7 @@ const send = (socket: WebSocket, payload: unknown): void => {
 export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencies): Promise<void> => {
   const harnessSockets = new Set<WebSocket>();
   const deviceSockets = new Map<string, WebSocket>();
+  const audienceField = new AudienceVectorField();
   const wsApp = app as unknown as {
     get: (
       path: string,
@@ -76,6 +83,11 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       data: deps.show.snapshot(),
       sentAt: Date.now()
     } satisfies WireEnvelope);
+    send(socket, {
+      kind: "audience_vector",
+      data: audienceField.snapshot(),
+      sentAt: Date.now()
+    } satisfies WireEnvelope<AudienceVectorPayload>);
 
     socket.on("close", (code, reason) => {
       logger.info("ws socket closed", {
@@ -174,112 +186,147 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   });
 
   wsApp.get("/ws/device/:hashedId", { websocket: true }, async (socket, req) => {
-      const hashedId = req.params.hashedId ?? "";
+    const hashedId = req.params.hashedId ?? "";
 
-      if (!deps.identityService.validateHashedId(hashedId)) {
-        socket.close(1008, "invalid hashed id");
+    if (!deps.identityService.validateHashedId(hashedId)) {
+      socket.close(1008, "invalid hashed id");
+      return;
+    }
+
+    deviceSockets.set(hashedId, socket);
+    logger.info("ws socket opened", { role: "device", hashedId });
+
+    const existing = await deps.sessions.get(hashedId);
+    if (!existing) {
+      await deps.sessions.upsert(deps.identityService.profileFromHashedId(hashedId));
+    }
+
+    send(socket, {
+      kind: "show_snapshot",
+      data: deps.show.snapshot(),
+      sentAt: Date.now()
+    } satisfies WireEnvelope);
+    send(socket, {
+      kind: "audience_vector",
+      data: audienceField.snapshot(),
+      sentAt: Date.now()
+    } satisfies WireEnvelope<AudienceVectorPayload>);
+
+    socket.on("close", (code, reason) => {
+      logger.info("ws socket closed", {
+        role: "device",
+        hashedId,
+        code,
+        reason: decodeCloseReason(reason)
+      });
+      deviceSockets.delete(hashedId);
+      const aggregate = audienceField.remove(hashedId);
+      broadcastAudienceVector(aggregate);
+    });
+    socket.on("error", (error) => {
+      logger.warn("ws socket error", {
+        role: "device",
+        hashedId,
+        message: String(error)
+      });
+    });
+
+    socket.on("message", async (raw: Buffer) => {
+      const inbound = parse<DeviceInbound>(raw.toString());
+      if (!inbound) {
         return;
       }
 
-      deviceSockets.set(hashedId, socket);
-      logger.info("ws socket opened", { role: "device", hashedId });
+      if (inbound.kind === "sync" && inbound.data.kind === "pong") {
+        const stats = deps.sync.evaluatePong(inbound.data, Date.now());
+        await deps.replayService.record({
+          type: "sync",
+          timestamp: Date.now(),
+          logicalTime: deps.show.snapshot().logicalTime,
+          source: "phone",
+          payload: {
+            hashedId,
+            ...stats
+          }
+        });
 
-      const existing = await deps.sessions.get(hashedId);
-      if (!existing) {
-        await deps.sessions.upsert(deps.identityService.profileFromHashedId(hashedId));
+        if (stats.shouldResync) {
+          send(socket, {
+            kind: "sync",
+            data: {
+              kind: "ping",
+              serverTime: Date.now(),
+              clientTime: inbound.data.clientTime,
+              rtt: stats.rtt,
+              driftEstimate: stats.driftEstimate
+            },
+            sentAt: Date.now()
+          } satisfies WireEnvelope<SyncPacket>);
+        }
+        return;
       }
 
-      send(socket, {
-        kind: "show_snapshot",
-        data: deps.show.snapshot(),
-        sentAt: Date.now()
-      } satisfies WireEnvelope);
-
-      socket.on("close", (code, reason) => {
-        logger.info("ws socket closed", {
-          role: "device",
-          hashedId,
-          code,
-          reason: decodeCloseReason(reason)
-        });
-        deviceSockets.delete(hashedId);
-      });
-      socket.on("error", (error) => {
-        logger.warn("ws socket error", {
-          role: "device",
-          hashedId,
-          message: String(error)
-        });
-      });
-
-      socket.on("message", async (raw: Buffer) => {
-        const inbound = parse<DeviceInbound>(raw.toString());
-        if (!inbound) {
-          return;
-        }
-
-        if (inbound.kind === "sync" && inbound.data.kind === "pong") {
-          const stats = deps.sync.evaluatePong(inbound.data, Date.now());
-          await deps.replayService.record({
-            type: "sync",
-            timestamp: Date.now(),
-            logicalTime: deps.show.snapshot().logicalTime,
-            source: "phone",
-            payload: {
-              hashedId,
-              ...stats
-            }
-          });
-
-          if (stats.shouldResync) {
-            send(socket, {
-              kind: "sync",
-              data: {
-                kind: "ping",
-                serverTime: Date.now(),
-                clientTime: inbound.data.clientTime,
-                rtt: stats.rtt,
-                driftEstimate: stats.driftEstimate
-              },
-              sentAt: Date.now()
-            } satisfies WireEnvelope<SyncPacket>);
-          }
-          return;
-        }
-
-        if (inbound.kind === "permissions") {
-          const profile = await deps.sessions.get(hashedId);
-          if (profile) {
-            await deps.sessions.upsert({
-              ...profile,
-              permissions: {
-                ...profile.permissions,
-                ...inbound.data
-              }
-            });
-          }
-          return;
-        }
-
-        if (inbound.kind === "zone_update") {
-          await deps.sessions.patchZone(hashedId, inbound.data);
-          return;
-        }
-
-        if (inbound.kind === "telemetry" || inbound.kind === "ack") {
-          await deps.replayService.record({
-            type: inbound.kind === "ack" ? "device_uplink" : "telemetry",
-            timestamp: Date.now(),
-            logicalTime: deps.show.snapshot().logicalTime,
-            source: "phone",
-            payload: {
-              hashedId,
+      if (inbound.kind === "permissions") {
+        const profile = await deps.sessions.get(hashedId);
+        if (profile) {
+          await deps.sessions.upsert({
+            ...profile,
+            permissions: {
+              ...profile.permissions,
               ...inbound.data
             }
           });
         }
-      });
+        return;
+      }
+
+      if (inbound.kind === "zone_update") {
+        await deps.sessions.patchZone(hashedId, inbound.data);
+        return;
+      }
+
+      if (inbound.kind === "participant_vector") {
+        const vector = normalizeVector(inbound.data.vector ?? {});
+        const influence = clamp01Number(inbound.data.influence);
+        const compositorMode = toCompositorMode(inbound.data.compositorMode);
+        const aggregate = audienceField.update(hashedId, {
+          vector,
+          influence,
+          compositorMode
+        });
+
+        await deps.replayService.record({
+          type: "telemetry",
+          timestamp: Date.now(),
+          logicalTime: deps.show.snapshot().logicalTime,
+          source: "phone",
+          payload: {
+            hashedId,
+            kind: "participant_vector",
+            influence,
+            compositorMode,
+            vector
+          }
+        });
+
+        broadcastAudienceVector(aggregate);
+        return;
+      }
+
+      if (inbound.kind === "telemetry" || inbound.kind === "ack") {
+        await deps.replayService.record({
+          type: inbound.kind === "ack" ? "device_uplink" : "telemetry",
+          timestamp: Date.now(),
+          logicalTime: deps.show.snapshot().logicalTime,
+          source: "phone",
+          payload: {
+            hashedId,
+            ...inbound.data
+          }
+        });
+      }
     });
+  });
 
   setInterval(() => {
     const ping = deps.sync.createPing(Date.now());
@@ -299,6 +346,25 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
 
     broadcastToDevices(envelope);
     for (const harnessSocket of harnessSockets) {
+      if (harnessSocket.readyState !== 1) {
+        continue;
+      }
+      send(harnessSocket, envelope);
+    }
+  }
+
+  function broadcastAudienceVector(vector: AudienceVectorPayload): void {
+    const envelope = {
+      kind: "audience_vector",
+      data: vector,
+      sentAt: Date.now()
+    } satisfies WireEnvelope<AudienceVectorPayload>;
+
+    broadcastToDevices(envelope);
+    for (const harnessSocket of harnessSockets) {
+      if (harnessSocket.readyState !== 1) {
+        continue;
+      }
       send(harnessSocket, envelope);
     }
   }
@@ -319,4 +385,18 @@ const decodeCloseReason = (reason: Buffer): string => {
     return "";
   }
   return reason.toString("utf8");
+};
+
+const toCompositorMode = (value: unknown): CompositorMode => {
+  if (value === "html-in-canvas" || value === "fallback" || value === "unsupported") {
+    return value;
+  }
+  return "unsupported";
+};
+
+const clamp01Number = (value: unknown): number => {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, value));
 };

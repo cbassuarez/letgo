@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@conductor/protocol": "file:../packages/protocol",
+    "@fastify/cors": "^10.0.2",
     "@fastify/websocket": "^10.0.1",
     "fastify": "^4.29.1",
+    "googleapis": "^148.0.0",
     "ioredis": "^5.4.1",
     "pg": "^8.13.1",
     "ulid": "^2.3.0",

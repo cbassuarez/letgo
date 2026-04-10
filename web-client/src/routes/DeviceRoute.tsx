@@ -1,20 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
-import { deterministicPick, stableHashToSeed, type ScriptCandidate } from "@conductor/protocol";
+import {
+  deterministicPick,
+  stableHashToSeed,
+  type CompositorMode,
+  type ScriptCandidate
+} from "@conductor/protocol";
+import { motion } from "framer-motion";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import { DynamicOverlay } from "../components/DynamicOverlay";
 import { FixedVideoLayer } from "../components/FixedVideoLayer";
 import { PermissionGate } from "../components/PermissionGate";
-import { ZoneRefine } from "../components/ZoneRefine";
 import { useConductorSession } from "../hooks/useConductorSession";
-import { createSessionSocket, sendEnvelope } from "../lib/wsClient";
+import { useParticipantVector } from "../hooks/useParticipantVector";
+import { isValidHashedId } from "../lib/identity";
 
 const scriptBank: ScriptCandidate[] = [
   {
     id: "line-1",
     arc: "arc1",
     tags: ["arrival", "fear"],
-    text: "I was sure letting go meant disappearing. It did not.",
-    weight: 0.8,
+    text: "The cyan night opened and each phone became a tuning fork.",
+    weight: 0.85,
     cooldownMs: 15000,
     tone: "confessional"
   },
@@ -22,23 +28,21 @@ const scriptBank: ScriptCandidate[] = [
     id: "line-2",
     arc: "arc2",
     tags: ["control", "breath"],
-    text: "Control was never silence. It was listening in public.",
-    weight: 0.6,
+    text: "Every tilt reshaped the choir of screens into one shared breath.",
+    weight: 0.72,
     cooldownMs: 12000,
     tone: "directive"
   },
   {
     id: "line-3",
     arc: "arc3",
-    tags: ["release", "choir"],
-    text: "When we released it together, the room learned our names.",
+    tags: ["release", "chorus"],
+    text: "You are not watching the piece. You are one of its vectors.",
     weight: 0.9,
     cooldownMs: 20000,
     tone: "lyrical"
   }
 ];
-
-const hashedPattern = /^[a-f0-9]{32}$/;
 
 const boolFromPayload = (value: unknown, fallback = false): boolean => {
   if (typeof value === "boolean") {
@@ -56,17 +60,43 @@ const boolFromPayload = (value: unknown, fallback = false): boolean => {
   return fallback;
 };
 
+const buildAutoZone = (hashedId: string): { name: string; x: number; y: number; z: number } => {
+  const seed = stableHashToSeed(hashedId);
+  const x = ((seed % 1000) + 1) / 1001;
+  const y = (((seed >>> 10) % 1000) + 1) / 1001;
+  return {
+    name: "auto-field",
+    x,
+    y,
+    z: 0.5
+  };
+};
+
 export const DeviceRoute = (): JSX.Element => {
   const { hashedId = "" } = useParams();
+  const capabilitiesSupported =
+    typeof window !== "undefined" &&
+    "WebSocket" in window &&
+    "DeviceMotionEvent" in window &&
+    "DeviceOrientationEvent" in window;
   const [permissionsDone, setPermissionsDone] = useState(false);
   const [permissions, setPermissions] = useState({
     audio: false,
     geolocation: false,
     motion: false
   });
-  const [zoneDone, setZoneDone] = useState(false);
+  const [compositorMode, setCompositorMode] = useState<CompositorMode>("unsupported");
+  const permissionsSentRef = useRef(false);
+  const zoneSentRef = useRef(false);
 
   const session = useConductorSession(hashedId);
+  const {
+    sendPermissions,
+    sendZoneUpdate,
+    sendParticipantVector
+  } = session;
+  const participantVector = useParticipantVector(permissionsDone);
+  const autoZone = useMemo(() => buildAutoZone(hashedId), [hashedId]);
 
   const seededLine = useMemo(() => {
     const seed = stableHashToSeed(hashedId);
@@ -81,78 +111,153 @@ export const DeviceRoute = (): JSX.Element => {
   const outputMode = typeof cuePayload.outputMode === "string" ? cuePayload.outputMode : "legacy";
 
   useEffect(() => {
-    if (!permissionsDone || !hashedPattern.test(hashedId)) {
+    if (!permissionsDone || !session.connected || permissionsSentRef.current) {
+      return;
+    }
+    sendPermissions(permissions);
+    permissionsSentRef.current = true;
+  }, [permissions, permissionsDone, sendPermissions, session.connected]);
+
+  useEffect(() => {
+    if (!permissionsDone || !session.connected || zoneSentRef.current) {
+      return;
+    }
+    sendZoneUpdate(autoZone);
+    zoneSentRef.current = true;
+  }, [autoZone, permissionsDone, sendZoneUpdate, session.connected]);
+
+  useEffect(() => {
+    if (!permissionsDone || !engineRunning) {
       return;
     }
 
-    const socket = createSessionSocket(hashedId);
-    const onOpen = () => {
-      sendEnvelope(socket, "permissions", {
-        audio: permissions.audio,
-        geolocation: permissions.geolocation,
-        motion: permissions.motion
+    let timer: number | null = null;
+    const pushVector = (): void => {
+      sendParticipantVector({
+        vector: participantVector.vector,
+        influence: participantVector.influence,
+        compositorMode,
+        updatedAt: Date.now()
       });
+      timer = window.setTimeout(pushVector, participantVector.recommendedIntervalMs);
     };
+    pushVector();
 
-    socket.addEventListener("open", onOpen);
     return () => {
-      socket.removeEventListener("open", onOpen);
-      socket.close();
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
     };
-  }, [hashedId, permissions, permissionsDone]);
+  }, [
+    compositorMode,
+    engineRunning,
+    participantVector.influence,
+    participantVector.recommendedIntervalMs,
+    participantVector.vector,
+    permissionsDone,
+    sendParticipantVector
+  ]);
 
-  if (!hashedPattern.test(hashedId)) {
+  if (!isValidHashedId(hashedId)) {
     return (
-      <main className="min-h-dvh px-6 py-12">
-        <h1 className="font-display text-3xl">Invalid Participant Link</h1>
-        <p className="mt-3 max-w-lg text-sm text-fog/80">
-          This URL is not a valid production identity. Please scan your assigned NFC tag.
-        </p>
+      <main className="cyanotype-shell min-h-dvh px-6 py-16">
+        <section className="cyanotype-panel mx-auto max-w-2xl p-10">
+          <p className="cyanotype-kicker">LOCKOUT</p>
+          <h1 className="mt-4 font-display text-4xl">Participant Link Not Valid</h1>
+          <p className="mt-4 text-cyanotype-100/78">
+            This entrance key is not in the performance field. Scan your assigned NFC card to join.
+          </p>
+          <Link to="/" className="cyanotype-cta mt-8 inline-flex">
+            Return To Briefing
+          </Link>
+        </section>
+      </main>
+    );
+  }
+
+  if (!capabilitiesSupported) {
+    return (
+      <main className="cyanotype-shell min-h-dvh px-6 py-16">
+        <section className="cyanotype-panel mx-auto max-w-2xl p-10">
+          <p className="cyanotype-kicker">LOCKOUT</p>
+          <h1 className="mt-4 font-display text-4xl">Device Capabilities Not Supported</h1>
+          <p className="mt-4 text-cyanotype-100/78">
+            This browser cannot provide the motion/real-time APIs required for live participation.
+            Open the same participant link in a modern mobile Chromium browser.
+          </p>
+          <Link to="/" className="cyanotype-cta mt-8 inline-flex">
+            Return To Briefing
+          </Link>
+        </section>
       </main>
     );
   }
 
   return (
-    <main className="relative min-h-dvh overflow-hidden bg-ink text-fog">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(217,95,53,0.22),transparent_45%),radial-gradient(circle_at_80%_80%,rgba(46,143,88,0.25),transparent_40%)]" />
+    <main className="cyanotype-shell relative min-h-dvh overflow-hidden text-cyanotype-050">
+      <div className="cyanotype-atmosphere absolute inset-0" />
 
       {!permissionsDone ? (
         <PermissionGate
           onDone={(granted) => {
+            permissionsSentRef.current = false;
+            zoneSentRef.current = false;
             setPermissions(granted);
             setPermissionsDone(true);
           }}
         />
       ) : null}
 
-      {permissionsDone && !zoneDone ? (
-        <ZoneRefine
-          onSubmit={(zone) => {
-            const socket = createSessionSocket(hashedId);
-            socket.addEventListener("open", () => {
-              sendEnvelope(socket, "zone_update", zone);
-              setZoneDone(true);
-              socket.close();
-            });
-          }}
-        />
-      ) : null}
-
-      {permissionsDone && zoneDone ? (
+      {permissionsDone ? (
         <>
           <FixedVideoLayer cue={session.cue} logicalNow={session.logicalNow} enabled={showFixed} />
-          <DynamicOverlay vector={session.vector} line={seededLine} enabled={showDynamic} />
+          <DynamicOverlay
+            vector={session.vector}
+            line={seededLine}
+            enabled={showDynamic}
+            influence={participantVector.influence}
+            onCompositorModeChange={setCompositorMode}
+          />
+          {!engineRunning || !session.connected ? (
+            <motion.section
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="cyanotype-standby absolute bottom-8 left-1/2 w-[min(94vw,760px)] -translate-x-1/2 rounded-3xl p-6 sm:p-8"
+            >
+              <p className="cyanotype-kicker">{session.connected ? "STANDBY" : "RECONNECTING"}</p>
+              <h2 className="mt-3 font-display text-3xl sm:text-4xl">
+                {session.connected
+                  ? "This phone is armed and ready."
+                  : "The field link is recovering."}
+              </h2>
+              <p className="mt-3 max-w-2xl text-sm leading-relaxed text-cyanotype-100/80 sm:text-base">
+                {session.connected
+                  ? "Hold your device naturally. Participation is now automatic; no manual position tuning is required."
+                  : "Stay on this screen. Your participant key and logbook access remain active while the link retries."}
+              </p>
+            </motion.section>
+          ) : null}
 
-          <aside className="absolute left-4 top-4 rounded-xl border border-fog/20 bg-ink/65 px-3 py-2 text-[11px] uppercase tracking-[0.16em] text-fog/80 backdrop-blur">
-            <p>{session.connected ? "Live" : "Offline"}</p>
+          <motion.aside
+            initial={{ opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="cyanotype-panel absolute left-4 top-4 w-[min(90vw,340px)] px-4 py-3 text-[11px] uppercase tracking-[0.16em] text-cyanotype-100/82"
+          >
+            <p>{session.connected ? "Live Link" : "Field Reconnect"}</p>
             <p>Link {session.linkState}</p>
             {session.retryInMs !== null ? <p>Retry {(session.retryInMs / 1000).toFixed(1)}s</p> : null}
+            <p>Compositor {compositorMode}</p>
+            <p>Influence {(participantVector.influence * 100).toFixed(0)}%</p>
+            <p>Audience {session.audienceVector.participantCount}</p>
             <p>Drift {session.driftMs.toFixed(1)}ms</p>
             <p>{session.fallbackActive ? "Fallback" : "Synced"}</p>
             {session.fallbackActive ? <p>FallbackAge {(session.fallbackAgeMs / 1000).toFixed(1)}s</p> : null}
             <p>Engine {engineRunning ? "ON" : "OFF"}</p>
             <p>Mode {outputMode}</p>
-          </aside>
+            <Link to={`/${hashedId}/logbook`} className="mt-3 inline-flex text-cyanotype-000 underline">
+              Sign Digital Logbook
+            </Link>
+          </motion.aside>
         </>
       ) : null}
     </main>

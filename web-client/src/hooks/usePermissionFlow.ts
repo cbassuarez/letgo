@@ -51,7 +51,7 @@ export const usePermissionFlow = () => {
 
   return {
     permissions: state,
-    completed: state.audio && state.motion && state.geolocation,
+    completed: state.audio && state.motion,
     enableAudio,
     enableMotion,
     enableGeo

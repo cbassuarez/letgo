@@ -61,6 +61,22 @@ export interface ParamVector {
   spatialZ: number;
 }
 
+export type CompositorMode = "html-in-canvas" | "fallback" | "unsupported";
+
+export interface ParticipantVectorPayload {
+  vector: ParamVector;
+  influence: number;
+  compositorMode: CompositorMode;
+  updatedAt: number;
+}
+
+export interface AudienceVectorPayload {
+  vector: ParamVector;
+  participantCount: number;
+  updatedAt: number;
+  compositorModes: Record<string, number>;
+}
+
 export interface ScriptCandidate {
   id: string;
   arc: "arc1" | "arc2" | "arc3";
@@ -111,7 +127,9 @@ export interface WireEnvelope<T = unknown> {
     | "error"
     | "permissions"
     | "zone_update"
-    | "ack";
+    | "ack"
+    | "participant_vector"
+    | "audience_vector";
   data: T;
   sentAt: number;
 }

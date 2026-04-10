@@ -382,9 +382,24 @@ struct ConductorSurfaceView: View {
                         .foregroundStyle(Color.white.opacity(0.45))
 
                     HStack(spacing: 10) {
-                        timelineButton("PRESHOW", isActive: model.state == .preshow, action: model.runPreshowTimelineStep)
-                        timelineButton("INTRO", isActive: model.state == .introduction, action: model.runIntroductionTimelineStep)
-                        timelineButton("ENDING", isActive: model.state == .ending, action: model.runEndingTimelineStep)
+                        timelineButton(
+                            "PRESHOW",
+                            laneId: "preshow",
+                            isActive: model.state == .preshow,
+                            action: model.runPreshowTimelineStep
+                        )
+                        timelineButton(
+                            "INTRO",
+                            laneId: "introduction",
+                            isActive: model.state == .introduction,
+                            action: model.runIntroductionTimelineStep
+                        )
+                        timelineButton(
+                            "ENDING",
+                            laneId: "ending",
+                            isActive: model.state == .ending,
+                            action: model.runEndingTimelineStep
+                        )
                         Spacer()
                         if let cue = model.latestCue {
                             Text("LAST CUE  \(cue.cueId)")
@@ -392,18 +407,47 @@ struct ConductorSurfaceView: View {
                                 .foregroundStyle(Color.white.opacity(0.4))
                         }
                     }
-                    .disabled(!model.engineRunning)
                 }
             }
         }
     }
 
-    private func timelineButton(_ label: String, isActive: Bool, action: @escaping () -> Void) -> some View {
-        IlluminatedButton(
+    private func timelineButton(
+        _ label: String,
+        laneId: String,
+        isActive: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        let isLocked = model.isTimelineStepLocked(laneId)
+        let isArmed = model.isTimelineStepArmed(laneId)
+        let buttonColor: Color
+        if isLocked {
+            buttonColor = ConsoleTheme.lampRed
+        } else if isArmed {
+            buttonColor = ConsoleTheme.lampAmber
+        } else if isActive {
+            buttonColor = ConsoleTheme.lampBlue
+        } else {
+            buttonColor = ConsoleTheme.lampStandby
+        }
+
+        let subtitle: String?
+        if isLocked {
+            subtitle = "locked"
+        } else if isArmed {
+            subtitle = "armed"
+        } else {
+            subtitle = "queue"
+        }
+
+        return IlluminatedButton(
             label: label,
-            color: isActive ? ConsoleTheme.lampBlue : ConsoleTheme.lampStandby,
-            isLit: isActive,
-            isEnabled: model.engineRunning,
+            subtitle: subtitle,
+            color: buttonColor,
+            isLit: isActive || isArmed || isLocked,
+            isEnabled: model.engineRunning && !isLocked,
+            blinkOn: blinkOn,
+            pulseWhenLit: isArmed,
             minWidth: 90,
             minHeight: 36,
             action: action
