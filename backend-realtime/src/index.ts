@@ -9,6 +9,7 @@ import { registerHealthRoute } from "./routes/health";
 import { registerIdentityRoutes } from "./routes/identity";
 import { registerLightingRoutes } from "./routes/lighting";
 import { registerLogbookRoutes } from "./routes/logbook";
+import { registerRootRoute } from "./routes/root";
 import { registerWsRoutes } from "./routes/ws";
 import { AudioOpsStateHub } from "./services/audioOpsStateHub";
 import { CrowdPickPulseService } from "./services/crowdPickPulse";
@@ -68,6 +69,7 @@ const bootstrap = async (): Promise<void> => {
         })
       : new MemoryLogbookStore();
 
+  await registerRootRoute(app);
   await registerHealthRoute(app, config);
   await registerIdentityRoutes(app, {
     identityService,

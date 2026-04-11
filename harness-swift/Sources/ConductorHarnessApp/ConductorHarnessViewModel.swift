@@ -133,7 +133,14 @@ private struct MediaManifest: Codable {
 }
 
 private enum BackendEndpoints {
-    static let host = "letgo-backend.onrender.com"
+    static let host: String = {
+        if let envHost = ProcessInfo.processInfo.environment["CONDUCTOR_BACKEND_HOST"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !envHost.isEmpty {
+            return envHost
+        }
+        return "letgo-fe0a.onrender.com"
+    }()
     static let healthURL = URL(string: "https://\(host)/health")!
     static let harnessWebSocketURL = URL(string: "wss://\(host)/ws/harness")!
     static let deviceWebSocketBase = "wss://\(host)/ws/device"
