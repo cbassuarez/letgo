@@ -38,6 +38,14 @@ public final class WebSocketConductorClient: NSObject {
 
     public private(set) var state: LinkState = .idle
 
+    private static let forwardedMessageKinds: [String] = [
+        "\"kind\":\"error\"",
+        "\"kind\":\"phone_audio_pool_state\"",
+        "\"kind\":\"phone_audio_ack\"",
+        "\"kind\":\"audio_features\"",
+        "\"kind\":\"show_snapshot\""
+    ]
+
     private var session: URLSession!
     private var task: URLSessionWebSocketTask?
     private var managedURL: URL?
@@ -50,6 +58,7 @@ public final class WebSocketConductorClient: NSObject {
     private var lastActivityAt: Date?
     private var lastHandshakeAt: Date?
     private var lastErrorMessage: String?
+    private var lastEmittedDiagnostics: LinkDiagnostics?
 
     public override init() {
         super.init()
@@ -89,6 +98,7 @@ public final class WebSocketConductorClient: NSObject {
         lastErrorMessage = nil
         lastHandshakeAt = nil
         lastActivityAt = nil
+        lastEmittedDiagnostics = nil
         startSupervisionTimer()
         connectNow()
     }
@@ -98,6 +108,7 @@ public final class WebSocketConductorClient: NSObject {
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         backoffUntil = nil
+        lastEmittedDiagnostics = nil
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
         supervisionTimer?.invalidate()
@@ -191,9 +202,14 @@ public final class WebSocketConductorClient: NSObject {
                 self.noteActivity()
                 switch message {
                 case .string(let text):
-                    self.onMessage?(text)
+                    if Self.shouldForwardMessage(text) {
+                        self.onMessage?(text)
+                    }
                 case .data(let data):
-                    self.onMessage?(String(decoding: data, as: UTF8.self))
+                    let text = String(decoding: data, as: UTF8.self)
+                    if Self.shouldForwardMessage(text) {
+                        self.onMessage?(text)
+                    }
                 @unknown default:
                     break
                 }
@@ -315,15 +331,22 @@ public final class WebSocketConductorClient: NSObject {
             retryIn = nil
         }
 
-        onDiagnostics?(
-            LinkDiagnostics(
-                endpointURL: managedURL,
-                state: state,
-                retryInSeconds: retryIn,
-                lastError: lastErrorMessage,
-                lastHandshakeAt: lastHandshakeAt
-            )
+        let diagnostics = LinkDiagnostics(
+            endpointURL: managedURL,
+            state: state,
+            retryInSeconds: retryIn,
+            lastError: lastErrorMessage,
+            lastHandshakeAt: lastHandshakeAt
         )
+        guard diagnostics != lastEmittedDiagnostics else {
+            return
+        }
+        lastEmittedDiagnostics = diagnostics
+        onDiagnostics?(diagnostics)
+    }
+
+    private static func shouldForwardMessage(_ message: String) -> Bool {
+        forwardedMessageKinds.contains(where: { message.contains($0) })
     }
 }
 

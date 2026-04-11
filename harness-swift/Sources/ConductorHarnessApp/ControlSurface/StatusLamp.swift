@@ -82,17 +82,14 @@ struct StatusLamp: View {
             // Glow halo
             if isLit {
                 Circle()
-                    .fill(color)
+                    .fill(color.opacity(0.30 * litOpacity))
                     .frame(width: diameter + 6, height: diameter + 6)
-                    .blur(radius: 4)
-                    .opacity(0.45 * litOpacity)
             }
             // Specular highlight
             Circle()
                 .fill(Color.white.opacity(0.35))
                 .frame(width: diameter * 0.35, height: diameter * 0.18)
                 .offset(y: -diameter * 0.22)
-                .blur(radius: 0.6)
         }
     }
 }

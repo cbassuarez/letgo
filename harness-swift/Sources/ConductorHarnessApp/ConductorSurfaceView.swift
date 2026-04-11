@@ -86,12 +86,27 @@ struct ConductorSurfaceView: View {
         .background(ConsoleTheme.consoleBackground)
         .preferredColorScheme(.dark)
         .onReceive(blinkTimer) { _ in
+            guard shouldAnimateBlink else {
+                if blinkOn {
+                    blinkOn = false
+                }
+                return
+            }
             blinkOn.toggle()
         }
         .sheet(item: $activeImportModal) { module in
             ImportModuleSheet(module: module, model: model)
                 .preferredColorScheme(.dark)
         }
+    }
+
+    private var shouldAnimateBlink: Bool {
+        model.linkState == .connecting
+            || model.linkState == .backoff
+            || model.isLatchArmed
+            || model.masterArmKey == .armed
+            || model.state == .hold
+            || model.state == .aborted
     }
 
     // MARK: - Top status bar
@@ -284,8 +299,8 @@ struct ConductorSurfaceView: View {
                 VStack(spacing: 14) {
                     SegmentedCountdown(
                         seconds: model.latchCountdownSeconds,
+                        expiresAt: model.latchExpiresAt,
                         isArmed: model.isLatchArmed,
-                        blinkOn: blinkOn,
                         summary: model.latchSummary
                     )
 

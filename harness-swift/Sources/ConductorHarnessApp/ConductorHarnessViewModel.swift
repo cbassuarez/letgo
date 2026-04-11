@@ -186,6 +186,14 @@ private struct TimelineStepPlan {
 
 @MainActor
 final class ConductorHarnessViewModel: ObservableObject {
+    private static let inboundKindsHandledOnMain: [String] = [
+        "\"kind\":\"error\"",
+        "\"kind\":\"phone_audio_pool_state\"",
+        "\"kind\":\"phone_audio_ack\"",
+        "\"kind\":\"audio_features\"",
+        "\"kind\":\"show_snapshot\""
+    ]
+
     @Published var state: ShowState = .idle
     @Published var vector: ParamVector = .neutral
     @Published var latestCue: CueCommand?
@@ -239,6 +247,7 @@ final class ConductorHarnessViewModel: ObservableObject {
     @Published var canFireGO = false
     @Published var latchSummary: String = "DISARMED"
     @Published var latchCountdownSeconds: Double?
+    @Published var latchExpiresAt: Date?
     @Published var statusLineEvent = StatusLineEvent(
         message: "Latch disarmed",
         severity: .info,
@@ -297,9 +306,16 @@ final class ConductorHarnessViewModel: ObservableObject {
     private var latchController = OutputLatchController(timeoutSeconds: 8)
     private var latchTimer: Timer?
     private var audioFeaturePumpTimer: Timer?
+    private var latestAudioFeaturesRaw: QuadAudioFeatures = .zero
+    private var lastAudioFeaturesUIPublishAt: CFAbsoluteTime = 0
+    private var lastAudioFeaturesSent: QuadAudioFeatures = .zero
+    private var lastAudioFeaturesSentAt: CFAbsoluteTime = 0
+    private var mediaDurationCache: [String: TimeInterval] = [:]
+    private var mediaDurationTaskCache: [String: Task<TimeInterval?, Never>] = [:]
     private var showFixedCounter = 0
     private var sequenceWorkItems: [DispatchWorkItem] = []
     private var phoneCommandSequence = 0
+    private var lastLatchStatus: StatusLineEvent?
 
     private let privilegedLaneStateMap: [String: ShowState] = [
         "preshow": .preshow,
@@ -349,18 +365,19 @@ final class ConductorHarnessViewModel: ObservableObject {
         self.textEngine = TextSelectionEngine(model: scoringModel)
 
         websocket.onMessage = { [weak self] text in
-            Task { @MainActor in
+            guard Self.shouldHandleBackendMessage(text) else { return }
+            MainActor.assumeIsolated {
                 self?.handleBackendMessage(text)
             }
         }
         websocket.onStateChange = { [weak self] nextState in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self?.linkState = nextState
                 self?.connectionStatus = Self.connectionStatusText(for: nextState)
             }
         }
         websocket.onOpen = { [weak self] in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self?.publishPhoneAudioPoolState()
                 self?.publishLatestAudioFeatures()
                 self?.pushStatus(StatusLineEvent(
@@ -371,7 +388,7 @@ final class ConductorHarnessViewModel: ObservableObject {
             }
         }
         websocket.onClose = { [weak self] code, reason in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 let suffix = reason.map { ": \($0)" } ?? ""
                 self?.pushStatus(StatusLineEvent(
                     message: "WS link closed (\(code))\(suffix)",
@@ -381,7 +398,7 @@ final class ConductorHarnessViewModel: ObservableObject {
             }
         }
         websocket.onRetryScheduled = { [weak self] delay in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self?.pushStatus(StatusLineEvent(
                     message: "WS retry scheduled in \(Int(ceil(delay)))s",
                     severity: .info,
@@ -390,7 +407,7 @@ final class ConductorHarnessViewModel: ObservableObject {
             }
         }
         websocket.onError = { [weak self] message in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 guard let self else { return }
                 self.lastLinkError = message
                 self.pushStatus(StatusLineEvent(
@@ -401,17 +418,23 @@ final class ConductorHarnessViewModel: ObservableObject {
             }
         }
         websocket.onDiagnostics = { [weak self] diagnostics in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 guard let self else { return }
-                self.retryInSeconds = diagnostics.retryInSeconds
-                self.lastHandshakeAt = diagnostics.lastHandshakeAt
-                self.lastLinkError = diagnostics.lastError
+                if self.retryInSeconds != diagnostics.retryInSeconds {
+                    self.retryInSeconds = diagnostics.retryInSeconds
+                }
+                if self.lastHandshakeAt != diagnostics.lastHandshakeAt {
+                    self.lastHandshakeAt = diagnostics.lastHandshakeAt
+                }
+                if self.lastLinkError != diagnostics.lastError {
+                    self.lastLinkError = diagnostics.lastError
+                }
             }
         }
 
         quadAudioEngine.onFeatures = { [weak self] features in
-            Task { @MainActor in
-                self?.latestAudioFeatures = features
+            DispatchQueue.main.async {
+                self?.ingestAudioFeatures(features)
             }
         }
 
@@ -443,6 +466,10 @@ final class ConductorHarnessViewModel: ObservableObject {
     /// log. Consecutive identical messages are deduped so the latch tick
     /// (which fires every 0.2s) doesn't flood the tape.
     private func pushStatus(_ event: StatusLineEvent) {
+        if statusLineEvent.message == event.message,
+           statusLineEvent.severity == event.severity {
+            return
+        }
         statusLineEvent = event
         if let last = statusLineHistory.last,
            last.message == event.message,
@@ -453,6 +480,10 @@ final class ConductorHarnessViewModel: ObservableObject {
         if statusLineHistory.count > Self.statusHistoryLimit {
             statusLineHistory.removeFirst(statusLineHistory.count - Self.statusHistoryLimit)
         }
+    }
+
+    private static func shouldHandleBackendMessage(_ text: String) -> Bool {
+        inboundKindsHandledOnMain.contains(where: { text.contains($0) })
     }
 
     // MARK: - Master arm key
@@ -495,7 +526,7 @@ final class ConductorHarnessViewModel: ObservableObject {
 
         abortCoverTimer?.invalidate()
         let timer = Timer(timeInterval: 3.0, repeats: false) { [weak self] _ in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self?.expireAbortCover()
             }
         }
@@ -642,10 +673,18 @@ final class ConductorHarnessViewModel: ObservableObject {
 
             latestCue = cue
             state = cue.showState
-            updatePreview(for: cue, outputProfile: outputProfile)
-            if outputProfile.mode == .static, outputProfile.showFixed, !outputProfile.loopsIndefinitely {
-                let fallbackState = staticAutoReturnTarget ?? cue.showState
-                scheduleStaticAutoReturn(for: cue, targetState: fallbackState, outputProfile: outputProfile)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard self.latestCue?.cueId == cue.cueId else { return }
+                self.updatePreview(for: cue, outputProfile: outputProfile)
+                if outputProfile.mode == .static, outputProfile.showFixed, !outputProfile.loopsIndefinitely {
+                    let fallbackState = staticAutoReturnTarget ?? cue.showState
+                    self.scheduleStaticAutoReturn(
+                        for: cue,
+                        targetState: fallbackState,
+                        outputProfile: outputProfile
+                    )
+                }
             }
 
             Task {
@@ -985,6 +1024,7 @@ final class ConductorHarnessViewModel: ObservableObject {
         phoneAudioGateArmed = false
         phoneAudioGateCommitted = false
         publishPhoneAudioPoolState()
+        ingestAudioFeatures(.zero, forceUI: true)
         publishLatestAudioFeatures(forceZero: true)
         committedOutputMode = .off
         activeStaticLaneId = nil
@@ -1085,6 +1125,7 @@ final class ConductorHarnessViewModel: ObservableObject {
         phoneAudioGateArmed = false
         phoneAudioGateCommitted = false
         publishPhoneAudioPoolState()
+        ingestAudioFeatures(.zero, forceUI: true)
         publishLatestAudioFeatures(forceZero: true)
         committedOutputMode = .off
         activeStaticLaneId = nil
@@ -1368,10 +1409,29 @@ final class ConductorHarnessViewModel: ObservableObject {
         }
     }
 
+    private func ingestAudioFeatures(_ features: QuadAudioFeatures, forceUI: Bool = false) {
+        latestAudioFeaturesRaw = features
+        let now = CFAbsoluteTimeGetCurrent()
+        let minPublishInterval: CFAbsoluteTime = 0.12
+        let previous = latestAudioFeatures
+        let changedEnough =
+            abs(previous.rms - features.rms) > 0.02 ||
+            abs(previous.spectralCentroid - features.spectralCentroid) > 0.03 ||
+            abs(previous.flux - features.flux) > 0.03 ||
+            abs(previous.transientDensity - features.transientDensity) > 0.03
+
+        guard forceUI || (changedEnough && now - lastAudioFeaturesUIPublishAt >= minPublishInterval) else {
+            return
+        }
+
+        lastAudioFeaturesUIPublishAt = now
+        latestAudioFeatures = features
+    }
+
     private func startAudioFeaturePump() {
         audioFeaturePumpTimer?.invalidate()
-        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
                 self?.publishLatestAudioFeatures()
             }
         }
@@ -1386,7 +1446,23 @@ final class ConductorHarnessViewModel: ObservableObject {
 
     private func publishLatestAudioFeatures(forceZero: Bool = false) {
         guard linkState == .online || linkState == .degraded else { return }
-        let source = forceZero ? QuadAudioFeatures.zero : latestAudioFeatures
+        let source = forceZero ? QuadAudioFeatures.zero : latestAudioFeaturesRaw
+        let now = CFAbsoluteTimeGetCurrent()
+
+        if !forceZero {
+            let changedEnough =
+                abs(lastAudioFeaturesSent.rms - source.rms) > 0.02 ||
+                abs(lastAudioFeaturesSent.spectralCentroid - source.spectralCentroid) > 0.03 ||
+                abs(lastAudioFeaturesSent.flux - source.flux) > 0.03 ||
+                abs(lastAudioFeaturesSent.transientDensity - source.transientDensity) > 0.03
+            let keepAliveWindow: CFAbsoluteTime = 1.0
+            guard changedEnough || (now - lastAudioFeaturesSentAt >= keepAliveWindow) else {
+                return
+            }
+        }
+
+        lastAudioFeaturesSent = source
+        lastAudioFeaturesSentAt = now
         let payload = HarnessAudioFeaturePayload(
             rms: source.rms,
             spectralCentroid: source.spectralCentroid,
@@ -1723,6 +1799,7 @@ final class ConductorHarnessViewModel: ObservableObject {
         }
 
         sceneMediaURLs[scene] = selectedURL
+        prewarmMediaDuration(for: selectedURL)
         saveMediaManifest()
         let previewCue = latestCue ?? CueCommand(cueId: "\(scene.rawValue):0", showState: scene, logicalTime: 0, action: .jump)
         if state == scene || latestCue == nil {
@@ -1750,6 +1827,7 @@ final class ConductorHarnessViewModel: ObservableObject {
             mediaURL: selectedURL
         )
         showFixedLanes.append(lane)
+        prewarmMediaDuration(for: selectedURL)
 
         pushStatus(StatusLineEvent(
             message: "Added showFixed lane \(lane.id)",
@@ -1773,6 +1851,7 @@ final class ConductorHarnessViewModel: ObservableObject {
         }
 
         interstitialMediaURL = selectedURL
+        prewarmMediaDuration(for: selectedURL)
         saveMediaManifest()
         updatePreviewForCurrentMode()
     }
@@ -1843,21 +1922,45 @@ final class ConductorHarnessViewModel: ObservableObject {
             return
         }
 
-        if currentPreviewURL != mediaURL {
+        let replacingPreviewItem = currentPreviewURL != mediaURL
+        if replacingPreviewItem {
             previewPlayer.replaceCurrentItem(with: AVPlayerItem(url: mediaURL))
         }
 
         let seekSeconds = profile.usesInterstitialMedia ? 0 : max(0, cue.logicalTime)
-        let seekTime = CMTime(seconds: seekSeconds, preferredTimescale: 600)
-        previewPlayer.seek(to: seekTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        if shouldSeekPreview(
+            replacingItem: replacingPreviewItem,
+            targetSeconds: seekSeconds
+        ) {
+            let seekTime = CMTime(seconds: seekSeconds, preferredTimescale: 600)
+            let seekTolerance = CMTime(seconds: 0.08, preferredTimescale: 600)
+            previewPlayer.seek(to: seekTime, toleranceBefore: seekTolerance, toleranceAfter: seekTolerance)
+        }
         configurePreviewLoop(shouldLoop: profile.loopsIndefinitely)
-        previewPlayer.play()
+        if previewPlayer.timeControlStatus != .playing {
+            previewPlayer.play()
+        }
 
         previewStatus = "Previewing \(profile.mode.rawValue): \(mediaURL.lastPathComponent)"
     }
 
     private var currentPreviewURL: URL? {
         (previewPlayer.currentItem?.asset as? AVURLAsset)?.url
+    }
+
+    private func shouldSeekPreview(replacingItem: Bool, targetSeconds: TimeInterval) -> Bool {
+        guard !replacingItem else {
+            // Fresh items start at zero naturally; only seek if we need a non-zero jump.
+            return targetSeconds > 0.08
+        }
+
+        let currentSeconds = CMTimeGetSeconds(previewPlayer.currentTime())
+        guard currentSeconds.isFinite else {
+            return true
+        }
+
+        // Skip near-identical seeks to keep TAKE/GO and timeline commits responsive.
+        return abs(currentSeconds - targetSeconds) > 0.20
     }
 
     private func resolveOutputProfile(
@@ -1982,7 +2085,8 @@ final class ConductorHarnessViewModel: ObservableObject {
                 else {
                     return
                 }
-                self.previewPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                let loopTolerance = CMTime(seconds: 0.03, preferredTimescale: 600)
+                self.previewPlayer.seek(to: .zero, toleranceBefore: loopTolerance, toleranceAfter: loopTolerance)
                 self.previewPlayer.play()
             }
             return
@@ -2004,34 +2108,40 @@ final class ConductorHarnessViewModel: ObservableObject {
             return
         }
 
-        guard let duration = staticMediaDuration(for: mediaURL) else {
-            pushStatus(StatusLineEvent(
-                message: "Static clip duration unavailable; output stays \(committedOutputMode.uiLabel.uppercased())",
-                severity: .warn,
-                timestamp: Date()
-            ))
-            return
-        }
-
-        cancelSequenceWork()
         let sourceCueId = cue.cueId
-        scheduleSequenceStep(after: duration) { [weak self] in
+        Task { [weak self] in
             guard let self else { return }
             guard self.latestCue?.cueId == sourceCueId else { return }
             guard self.committedOutputMode == .static else { return }
 
-            self.committedOutputMode = .off
-            self.activeStaticLaneId = nil
+            guard let duration = await self.cachedMediaDuration(for: mediaURL) else {
+                self.pushStatus(StatusLineEvent(
+                    message: "Static clip duration unavailable; output stays \(self.committedOutputMode.uiLabel.uppercased())",
+                    severity: .warn,
+                    timestamp: Date()
+                ))
+                return
+            }
 
-            self.apply(
-                action: .jump,
-                target: targetState,
-                extraPayload: [
-                    "sequence": "static_complete",
-                    "sequenceStep": "inter",
-                    "sourceCueId": sourceCueId
-                ]
-            )
+            self.cancelSequenceWork()
+            self.scheduleSequenceStep(after: duration) { [weak self] in
+                guard let self else { return }
+                guard self.latestCue?.cueId == sourceCueId else { return }
+                guard self.committedOutputMode == .static else { return }
+
+                self.committedOutputMode = .off
+                self.activeStaticLaneId = nil
+
+                self.apply(
+                    action: .jump,
+                    target: targetState,
+                    extraPayload: [
+                        "sequence": "static_complete",
+                        "sequenceStep": "inter",
+                        "sourceCueId": sourceCueId
+                    ]
+                )
+            }
         }
     }
 
@@ -2042,13 +2152,67 @@ final class ConductorHarnessViewModel: ObservableObject {
         return sceneMediaURLs[cue.showState]
     }
 
-    private func staticMediaDuration(for mediaURL: URL) -> TimeInterval? {
-        let asset = AVURLAsset(url: mediaURL)
-        let seconds = CMTimeGetSeconds(asset.duration)
-        guard seconds.isFinite, seconds > 0 else {
-            return nil
+    private func cachedMediaDuration(for mediaURL: URL) async -> TimeInterval? {
+        let key = mediaURL.standardizedFileURL.path
+        if let cached = mediaDurationCache[key] {
+            return cached
         }
-        return seconds
+
+        let task = mediaDurationTask(for: mediaURL)
+        let duration = await task.value
+        mediaDurationTaskCache[key] = nil
+        if let duration {
+            mediaDurationCache[key] = duration
+        }
+        return duration
+    }
+
+    private func prewarmMediaDuration(for mediaURL: URL) {
+        _ = mediaDurationTask(for: mediaURL)
+    }
+
+    private func prewarmMediaDurations(_ mediaURLs: [URL]) {
+        for mediaURL in mediaURLs {
+            prewarmMediaDuration(for: mediaURL)
+        }
+    }
+
+    private func mediaDurationTask(for mediaURL: URL) -> Task<TimeInterval?, Never> {
+        let key = mediaURL.standardizedFileURL.path
+        if let cached = mediaDurationCache[key] {
+            return Task { cached }
+        }
+        if let existing = mediaDurationTaskCache[key] {
+            return existing
+        }
+
+        let task = Task.detached(priority: .utility) { [mediaURL] () -> TimeInterval? in
+            let asset = AVURLAsset(url: mediaURL)
+            do {
+                let duration = try await asset.load(.duration)
+                let seconds = CMTimeGetSeconds(duration)
+                guard seconds.isFinite, seconds > 0 else {
+                    return nil
+                }
+                return seconds
+            } catch {
+                return nil
+            }
+        }
+        mediaDurationTaskCache[key] = task
+
+        Task { [weak self] in
+            let value = await task.value
+            await MainActor.run {
+                guard let self else { return }
+                self.mediaDurationTaskCache[key] = nil
+                if let value {
+                    self.mediaDurationCache[key] = value
+                }
+            }
+        }
+
+        return task
     }
 
     private func scheduleSequenceStep(after delay: TimeInterval, block: @escaping () -> Void) {
@@ -2067,7 +2231,7 @@ final class ConductorHarnessViewModel: ObservableObject {
     private func startLatchTimer() {
         latchTimer?.invalidate()
         let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self?.tickLatch()
             }
         }
@@ -2076,19 +2240,57 @@ final class ConductorHarnessViewModel: ObservableObject {
     }
 
     private func tickLatch() {
+        guard isLatchArmed else { return }
         let now = Date()
         let snapshot = latchController.tick(now: now)
         syncLatchState(snapshot, now: now)
     }
 
     private func syncLatchState(_ snapshot: OutputLatchSnapshot, now: Date) {
-        pendingOutputMode = snapshot.pendingMode.flatMap { FlightOutputMode(rawValue: $0) }
-        pendingLaneId = snapshot.pendingLaneId
-        isLatchArmed = snapshot.isArmed
-        canFireGO = snapshot.canFire
-        latchSummary = snapshot.summary
-        latchCountdownSeconds = snapshot.countdownSeconds(at: now)
-        pushStatus(snapshot.status)
+        let nextPendingOutputMode = snapshot.pendingMode.flatMap { FlightOutputMode(rawValue: $0) }
+        if pendingOutputMode != nextPendingOutputMode {
+            pendingOutputMode = nextPendingOutputMode
+        }
+
+        if pendingLaneId != snapshot.pendingLaneId {
+            pendingLaneId = snapshot.pendingLaneId
+        }
+
+        if isLatchArmed != snapshot.isArmed {
+            isLatchArmed = snapshot.isArmed
+        }
+
+        if latchExpiresAt != snapshot.expiresAt {
+            latchExpiresAt = snapshot.expiresAt
+        }
+
+        if canFireGO != snapshot.canFire {
+            canFireGO = snapshot.canFire
+        }
+
+        let nextSummary = snapshot.summary
+        if latchSummary != nextSummary {
+            latchSummary = nextSummary
+        }
+
+        let nextCountdown = snapshot.countdownSeconds(at: now)
+        let countdownChanged: Bool = {
+            switch (latchCountdownSeconds, nextCountdown) {
+            case (nil, nil):
+                return false
+            case (.some(let lhs), .some(let rhs)):
+                return abs(lhs - rhs) > 0.049
+            default:
+                return true
+            }
+        }()
+        if countdownChanged {
+            latchCountdownSeconds = nextCountdown
+        }
+        if lastLatchStatus != snapshot.status {
+            lastLatchStatus = snapshot.status
+            pushStatus(snapshot.status)
+        }
     }
 
     private func applyModelHealth(_ report: ModelHealthReport) {
@@ -2194,6 +2396,13 @@ final class ConductorHarnessViewModel: ObservableObject {
             showFixedLanes = restoredLanes
             showFixedCounter = restoredLanes.count
 
+            var warmupURLs = Array(sceneMediaURLs.values)
+            if let interstitialMediaURL {
+                warmupURLs.append(interstitialMediaURL)
+            }
+            warmupURLs.append(contentsOf: restoredLanes.map(\.mediaURL))
+            prewarmMediaDurations(warmupURLs)
+
             let count = sceneMediaURLs.count
                 + (interstitialMediaURL != nil ? 1 : 0)
                 + showFixedLanes.count
@@ -2239,20 +2448,39 @@ final class ConductorHarnessViewModel: ObservableObject {
         if kind == "phone_audio_pool_state",
            let payload = json["data"] as? [String: Any] {
             if let gateArmed = payload["gateArmed"] as? Bool {
-                phoneAudioGateArmed = gateArmed
+                if phoneAudioGateArmed != gateArmed {
+                    phoneAudioGateArmed = gateArmed
+                }
             }
             if let gateCommitted = payload["gateCommitted"] as? Bool {
-                phoneAudioGateCommitted = gateCommitted
+                if phoneAudioGateCommitted != gateCommitted {
+                    phoneAudioGateCommitted = gateCommitted
+                }
             }
             if let quadReady = payload["quadRouteReady"] as? Bool {
-                quadRouteReady = quadReady
+                if quadRouteReady != quadReady {
+                    quadRouteReady = quadReady
+                }
             }
             if let available = payload["availableDevices"] as? [String] {
-                phoneAudioAvailableDevices = available
-                if !available.contains(phoneAudioSingleTargetID) {
-                    phoneAudioSingleTargetID = available.first ?? ""
+                if phoneAudioAvailableDevices != available {
+                    phoneAudioAvailableDevices = available
                 }
-                phoneAudioSubsetTargetIDs = phoneAudioSubsetTargetIDs.intersection(Set(available))
+
+                let nextSingleTarget: String
+                if available.contains(phoneAudioSingleTargetID) {
+                    nextSingleTarget = phoneAudioSingleTargetID
+                } else {
+                    nextSingleTarget = available.first ?? ""
+                }
+                if phoneAudioSingleTargetID != nextSingleTarget {
+                    phoneAudioSingleTargetID = nextSingleTarget
+                }
+
+                let nextSubset = phoneAudioSubsetTargetIDs.intersection(Set(available))
+                if phoneAudioSubsetTargetIDs != nextSubset {
+                    phoneAudioSubsetTargetIDs = nextSubset
+                }
             }
             if let voices = payload["activeVoices"] as? [String: Any] {
                 var normalized: [String: Int] = [:]
@@ -2263,7 +2491,9 @@ final class ConductorHarnessViewModel: ObservableObject {
                         normalized[key] = Int(doubleValue)
                     }
                 }
-                phoneAudioActiveVoices = normalized
+                if phoneAudioActiveVoices != normalized {
+                    phoneAudioActiveVoices = normalized
+                }
             }
             return
         }
@@ -2275,23 +2505,26 @@ final class ConductorHarnessViewModel: ObservableObject {
             let ok = payload["ok"] as? Bool ?? false
             let detail = payload["detail"] as? String
             let suffix = detail.map { " (\($0))" } ?? ""
-            pushStatus(StatusLineEvent(
-                message: "PHONE ACK \(commandId) \(ok ? "OK" : "FAIL") @ \(hashedId)\(suffix)",
-                severity: ok ? .info : .warn,
-                timestamp: Date()
-            ))
+            if !ok {
+                pushStatus(StatusLineEvent(
+                    message: "PHONE ACK \(commandId) FAIL @ \(hashedId)\(suffix)",
+                    severity: .warn,
+                    timestamp: Date()
+                ))
+            }
             return
         }
 
         if kind == "audio_features",
            let payload = json["data"] as? [String: Any] {
-            latestAudioFeatures = QuadAudioFeatures(
-                rms: payload["rms"] as? Double ?? latestAudioFeatures.rms,
-                spectralCentroid: payload["spectralCentroid"] as? Double ?? latestAudioFeatures.spectralCentroid,
-                flux: payload["flux"] as? Double ?? latestAudioFeatures.flux,
-                transientDensity: payload["transientDensity"] as? Double ?? latestAudioFeatures.transientDensity,
-                updatedAt: payload["updatedAt"] as? Double ?? latestAudioFeatures.updatedAt
-            )
+            let current = latestAudioFeaturesRaw
+            ingestAudioFeatures(QuadAudioFeatures(
+                rms: payload["rms"] as? Double ?? current.rms,
+                spectralCentroid: payload["spectralCentroid"] as? Double ?? current.spectralCentroid,
+                flux: payload["flux"] as? Double ?? current.flux,
+                transientDensity: payload["transientDensity"] as? Double ?? current.transientDensity,
+                updatedAt: payload["updatedAt"] as? Double ?? current.updatedAt
+            ))
             return
         }
 
@@ -2299,7 +2532,9 @@ final class ConductorHarnessViewModel: ObservableObject {
            let payload = json["data"] as? [String: Any],
            let rawState = payload["state"] as? String,
            let snapshotState = ShowState(rawValue: rawState) {
-            state = snapshotState
+            if state != snapshotState {
+                state = snapshotState
+            }
         }
     }
 }

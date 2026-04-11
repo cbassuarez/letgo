@@ -20,8 +20,6 @@ struct IlluminatedButton: View {
     var minHeight: CGFloat = 56
     let action: () -> Void
 
-    @State private var isPressed = false
-
     var body: some View {
         Button(action: triggerIfEnabled) {
             ZStack {
@@ -43,7 +41,7 @@ struct IlluminatedButton: View {
                     .padding(4)
                     .shadow(
                         color: isLit ? color.opacity(0.6) : .clear,
-                        radius: isLit ? 6 : 0
+                        radius: isLit ? 2 : 0
                     )
 
                 // Engraved label
@@ -62,18 +60,11 @@ struct IlluminatedButton: View {
                 .padding(6)
             }
             .frame(minWidth: minWidth, minHeight: minHeight)
-            .scaleEffect(isPressed && isEnabled ? 0.97 : 1.0)
-            .animation(.easeOut(duration: 0.08), value: isPressed)
             .opacity(litOpacity)
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .accessibilityLabel(label)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
     }
 
     private func triggerIfEnabled() {

@@ -22,24 +22,22 @@ struct FlightLogTape: View {
                             .foregroundStyle(Color.white.opacity(0.3))
                             .padding(.vertical, 4)
                     } else {
-                        ForEach(Array(entries.enumerated()), id: \.offset) { pair in
-                            row(index: pair.offset, event: pair.element)
-                                .id(pair.offset)
+                        ForEach(Array(entries.enumerated()), id: \.element.timestamp) { pair in
+                            row(event: pair.element)
+                                .id(entryID(pair.element))
                         }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .onChange(of: entries.count) { _, _ in
-                guard !entries.isEmpty else { return }
-                withAnimation(.easeOut(duration: 0.15)) {
-                    proxy.scrollTo(entries.count - 1, anchor: .bottom)
-                }
+                guard let last = entries.last else { return }
+                proxy.scrollTo(entryID(last), anchor: .bottom)
             }
         }
     }
 
-    private func row(index: Int, event: StatusLineEvent) -> some View {
+    private func row(event: StatusLineEvent) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(Self.timeFormatter.string(from: event.timestamp))
                 .font(ConsoleTheme.telemetryFont(size: 10))
@@ -62,6 +60,10 @@ struct FlightLogTape: View {
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 1)
+    }
+
+    private func entryID(_ event: StatusLineEvent) -> String {
+        "\(event.timestamp.timeIntervalSince1970)-\(event.severity.rawValue)-\(event.message)"
     }
 
     private func severityTag(_ severity: StatusLineSeverity) -> String {
