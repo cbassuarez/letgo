@@ -71,7 +71,13 @@ export type CompositorPreset =
   | "stutter";
 export type SplitLayout = "none" | "split-2" | "split-3" | "split-4" | "pip";
 
-export type PushDeckControlKind = "pad_down" | "pad_up" | "macro" | "bank_select" | "ml_param";
+export type PushDeckControlKind =
+  | "pad_down"
+  | "pad_up"
+  | "macro"
+  | "long_strip"
+  | "bank_select"
+  | "ml_param";
 export type PushDeckModeContext = "auto" | "dynamic" | "static" | "choir";
 export type PushDeckTimingMode = "immediate" | "quantized";
 export type PushDeckBankDomain = "main" | "choir";
@@ -90,6 +96,10 @@ export interface PushDeckMacroControl {
   value: number;
 }
 
+export interface PushDeckLongStripControl {
+  value: number;
+}
+
 export interface PushDeckBankControl {
   domain: PushDeckBankDomain;
   bank: number;
@@ -98,6 +108,12 @@ export interface PushDeckBankControl {
 export interface PushDeckMLParamControl {
   key: PushDeckMLParamKey;
   value: number;
+}
+
+export interface PushPadLabelsPayload {
+  padLabels: string[];
+  bank?: number;
+  updatedAt?: number;
 }
 
 export interface PushDeckEventPayload {
@@ -109,6 +125,7 @@ export interface PushDeckEventPayload {
   quantIntervalMs?: number;
   pad?: PushDeckPadControl;
   macro?: PushDeckMacroControl;
+  longStrip?: PushDeckLongStripControl;
   bank?: PushDeckBankControl;
   mlParam?: PushDeckMLParamControl;
   issuedAt: number;
@@ -512,6 +529,7 @@ export interface WireEnvelope<T = unknown> {
     | "text_scene"
     | "phone_audio_pool_state"
     | "push_deck_event"
+    | "push_pad_labels"
     | "procedural_state";
   data: T;
   sentAt: number;

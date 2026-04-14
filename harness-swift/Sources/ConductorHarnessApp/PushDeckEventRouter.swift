@@ -56,6 +56,15 @@ struct PushDeckEventRouter {
             }
             return PushDeckRouteResult(intents: [.controlAction(action)], ignoredReason: nil)
 
+        case .longStrip:
+            guard let longStrip = event.longStrip else {
+                return .ignored("long_strip payload missing")
+            }
+            return PushDeckRouteResult(
+                intents: [.controlAction(.setStaticTextureSend(longStrip.value))],
+                ignoredReason: nil
+            )
+
         case .bankSelect:
             guard let bank = event.bank else {
                 return .ignored("bank payload missing")

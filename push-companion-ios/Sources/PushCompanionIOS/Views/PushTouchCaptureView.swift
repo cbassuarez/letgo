@@ -35,6 +35,7 @@ final class PushTouchCaptureUIView: UIView {
         backgroundColor = .clear
         isOpaque = false
         isMultipleTouchEnabled = true
+        isExclusiveTouch = false
         clipsToBounds = true
     }
 

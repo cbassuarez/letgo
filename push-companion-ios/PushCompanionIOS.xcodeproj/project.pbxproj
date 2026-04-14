@@ -16,6 +16,7 @@
 		7A3EA8A2642478C424446206 /* PushDeckViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A64990624ECD39734F97524 /* PushDeckViewModel.swift */; };
 		7C00A227A42885CD305C7741 /* PushQuantizeModal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B229DD3BA3E6AB8F268D538 /* PushQuantizeModal.swift */; };
 		84849CA8AD6C50C34A7AD747 /* PushSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97F2ED327190E01A1DBE6EE0 /* PushSessionStore.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* PushPadAuditionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5061728394A5B6C /* PushPadAuditionEngine.swift */; };
 		93D07DC978EE44E9894FF2F6 /* PushTouchCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C5838D4D1E20B4E581E6445 /* PushTouchCaptureView.swift */; };
 		CB774AB8DBD8ABDE5FA3A9D2 /* IBMPlexMono-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 36D547E4E1C8D98AC4E9C382 /* IBMPlexMono-SemiBold.ttf */; };
 		D3C8F6329FD40889C907D3CA /* PushDeckWireModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 258278F067F323BBF3E314A0 /* PushDeckWireModels.swift */; };
@@ -37,6 +38,7 @@
 		74CED272E5346F6A531684BE /* DeckSceneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeckSceneView.swift; sourceTree = "<group>"; };
 		8B580B8E93CD2E74AB1197CA /* PushNotesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotesView.swift; sourceTree = "<group>"; };
 		97F2ED327190E01A1DBE6EE0 /* PushSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSessionStore.swift; sourceTree = "<group>"; };
+		B1C2D3E4F5061728394A5B6C /* PushPadAuditionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushPadAuditionEngine.swift; sourceTree = "<group>"; };
 		9DD873C853EF9709281AD063 /* IBMPlexMono-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "IBMPlexMono-Bold.ttf"; sourceTree = "<group>"; };
 		AB852D236E3A9773AA2D8136 /* DeckPresentationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeckPresentationModels.swift; sourceTree = "<group>"; };
 		ACA225BE60698AF879D9EB44 /* IBMPlexMono-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "IBMPlexMono-Medium.ttf"; sourceTree = "<group>"; };
@@ -64,6 +66,7 @@
 			isa = PBXGroup;
 			children = (
 				AD6E22AAF38C7B81E977CF18 /* PushDeckWebSocketClient.swift */,
+				B1C2D3E4F5061728394A5B6C /* PushPadAuditionEngine.swift */,
 				97F2ED327190E01A1DBE6EE0 /* PushSessionStore.swift */,
 			);
 			path = Core;
@@ -143,6 +146,7 @@
 			buildPhases = (
 				A8AA019A9075AFE98C366ED1 /* Sources */,
 				340F30E4808D9BE1A6F1E7DE /* Resources */,
+				E1A2B3C4D5E6F708192A3B4C /* Copy Sample Banks */,
 			);
 			buildRules = (
 			);
@@ -202,6 +206,26 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		E1A2B3C4D5E6F708192A3B4C /* Copy Sample Banks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Sources/PushCompanionIOS/Resources/Samples",
+			);
+			name = "Copy Sample Banks";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Samples",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nSAMPLES_SRC=\"${SRCROOT}/Sources/PushCompanionIOS/Resources/Samples\"\nSAMPLES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Samples\"\nrm -rf \"$SAMPLES_DST\"\nmkdir -p \"$SAMPLES_DST\"\ncp -R \"$SAMPLES_SRC\"/* \"$SAMPLES_DST\"/\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		A8AA019A9075AFE98C366ED1 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -217,6 +241,7 @@
 				24606D1D58DC9CF403F4C2BB /* PushNotesView.swift in Sources */,
 				7C00A227A42885CD305C7741 /* PushQuantizeModal.swift in Sources */,
 				84849CA8AD6C50C34A7AD747 /* PushSessionStore.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* PushPadAuditionEngine.swift in Sources */,
 				F0BD385F11E556F3264D2D3E /* PushSettingsSheetView.swift in Sources */,
 				93D07DC978EE44E9894FF2F6 /* PushTouchCaptureView.swift in Sources */,
 			);

@@ -132,4 +132,19 @@ final class PushDeckEventRouterTests: XCTestCase {
             [.mlParam(PushDeckMLParamControl(key: .phonePadEchoProbability, value: 0.18))]
         )
     }
+
+    func testLongStripRoutesToDedicatedTextureSendAction() {
+        let event = PushDeckEventPayload(
+            eventId: "evt-long-strip",
+            sourceId: "controller",
+            controlKind: .longStrip,
+            modeContext: .auto,
+            timingMode: .immediate,
+            longStrip: PushDeckLongStripControl(value: 0.61),
+            issuedAt: 1
+        )
+
+        let result = router.resolve(event: event, fallbackMode: .dynamic)
+        XCTAssertEqual(result.intents, [.controlAction(.setStaticTextureSend(0.61))])
+    }
 }

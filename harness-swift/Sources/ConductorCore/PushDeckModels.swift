@@ -4,6 +4,7 @@ public enum PushDeckControlKind: String, Codable, CaseIterable, Sendable {
     case padDown = "pad_down"
     case padUp = "pad_up"
     case macro
+    case longStrip = "long_strip"
     case bankSelect = "bank_select"
     case mlParam = "ml_param"
 }
@@ -55,6 +56,14 @@ public struct PushDeckMacroControl: Codable, Equatable, Sendable {
     }
 }
 
+public struct PushDeckLongStripControl: Codable, Equatable, Sendable {
+    public var value: Double
+
+    public init(value: Double) {
+        self.value = min(1, max(0, value))
+    }
+}
+
 public struct PushDeckBankControl: Codable, Equatable, Sendable {
     public var domain: PushDeckBankDomain
     public var bank: Int
@@ -87,6 +96,7 @@ public struct PushDeckEventPayload: Codable, Equatable, Sendable {
     public var quantIntervalMs: Int?
     public var pad: PushDeckPadControl?
     public var macro: PushDeckMacroControl?
+    public var longStrip: PushDeckLongStripControl?
     public var bank: PushDeckBankControl?
     public var mlParam: PushDeckMLParamControl?
     public var issuedAt: TimeInterval
@@ -100,6 +110,7 @@ public struct PushDeckEventPayload: Codable, Equatable, Sendable {
         quantIntervalMs: Int? = nil,
         pad: PushDeckPadControl? = nil,
         macro: PushDeckMacroControl? = nil,
+        longStrip: PushDeckLongStripControl? = nil,
         bank: PushDeckBankControl? = nil,
         mlParam: PushDeckMLParamControl? = nil,
         issuedAt: TimeInterval
@@ -116,6 +127,7 @@ public struct PushDeckEventPayload: Codable, Equatable, Sendable {
         }
         self.pad = pad
         self.macro = macro
+        self.longStrip = longStrip
         self.bank = bank
         self.mlParam = mlParam
         self.issuedAt = issuedAt

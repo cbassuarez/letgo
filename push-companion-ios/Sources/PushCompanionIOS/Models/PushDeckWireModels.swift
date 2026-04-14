@@ -4,6 +4,7 @@ enum PushDeckControlKind: String, Codable, CaseIterable {
     case padDown = "pad_down"
     case padUp = "pad_up"
     case macro
+    case longStrip = "long_strip"
     case bankSelect = "bank_select"
     case mlParam = "ml_param"
 }
@@ -46,6 +47,10 @@ struct PushDeckMacroControl: Codable, Equatable {
     var value: Double
 }
 
+struct PushDeckLongStripControl: Codable, Equatable {
+    var value: Double
+}
+
 struct PushDeckBankControl: Codable, Equatable {
     var domain: PushDeckBankDomain
     var bank: Int
@@ -65,6 +70,7 @@ struct PushDeckEventPayload: Codable, Equatable {
     var quantIntervalMs: Int?
     var pad: PushDeckPadControl?
     var macro: PushDeckMacroControl?
+    var longStrip: PushDeckLongStripControl?
     var bank: PushDeckBankControl?
     var mlParam: PushDeckMLParamControl?
     var issuedAt: TimeInterval

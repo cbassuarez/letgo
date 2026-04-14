@@ -1,4 +1,89 @@
 import SwiftUI
+import UIKit
+
+private enum TwoFingerVerticalSlidePhase {
+    case began
+    case changed
+    case ended
+    case cancelled
+}
+
+private struct TwoFingerVerticalSlideEvent {
+    let phase: TwoFingerVerticalSlidePhase
+    let normalizedDelta: CGFloat
+}
+
+private struct TwoFingerVerticalSlideCaptureView: UIViewRepresentable {
+    let onEvent: (TwoFingerVerticalSlideEvent) -> Void
+
+    func makeUIView(context: Context) -> TwoFingerVerticalSlideUIView {
+        let view = TwoFingerVerticalSlideUIView()
+        view.onEvent = onEvent
+        return view
+    }
+
+    func updateUIView(_ uiView: TwoFingerVerticalSlideUIView, context: Context) {
+        uiView.onEvent = onEvent
+    }
+}
+
+private final class TwoFingerVerticalSlideUIView: UIView, UIGestureRecognizerDelegate {
+    var onEvent: ((TwoFingerVerticalSlideEvent) -> Void)?
+
+    private var anchorY: CGFloat = 0
+    private lazy var twoFingerPan: UIPanGestureRecognizer = {
+        let recognizer = UIPanGestureRecognizer(target: self, action: #selector(handleTwoFingerPan(_:)))
+        recognizer.minimumNumberOfTouches = 2
+        recognizer.maximumNumberOfTouches = 2
+        recognizer.cancelsTouchesInView = true
+        recognizer.delaysTouchesBegan = false
+        recognizer.delaysTouchesEnded = false
+        recognizer.delegate = self
+        return recognizer
+    }()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        isUserInteractionEnabled = true
+        isMultipleTouchEnabled = true
+        addGestureRecognizer(twoFingerPan)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc
+    private func handleTwoFingerPan(_ recognizer: UIPanGestureRecognizer) {
+        let y = recognizer.location(in: self).y
+        let height = max(bounds.height, 1)
+        switch recognizer.state {
+        case .began:
+            anchorY = y
+            onEvent?(TwoFingerVerticalSlideEvent(phase: .began, normalizedDelta: 0))
+        case .changed:
+            let delta = (anchorY - y) / height
+            onEvent?(TwoFingerVerticalSlideEvent(phase: .changed, normalizedDelta: delta))
+        case .ended:
+            let delta = (anchorY - y) / height
+            onEvent?(TwoFingerVerticalSlideEvent(phase: .ended, normalizedDelta: delta))
+            anchorY = y
+        case .cancelled, .failed:
+            onEvent?(TwoFingerVerticalSlideEvent(phase: .cancelled, normalizedDelta: 0))
+        default:
+            break
+        }
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        true
+    }
+}
 
 private enum DeckSheet: String, Identifiable {
     case settings
@@ -16,6 +101,10 @@ struct PushDeckView: View {
     @State private var settingsSheetDetent: PresentationDetent = .large
     @State private var notesSheetDetent: PresentationDetent = .large
     @State private var quantSheetDetent: PresentationDetent = .large
+    @State private var railGestureStartProbability: Double = 0
+    @State private var railGestureFeedbackVisible = false
+    @State private var railGestureFeedbackTask: Task<Void, Never>?
+    @State private var longStripDragging = false
 
     private let padColumns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 8)
 
@@ -359,10 +448,16 @@ struct PushDeckView: View {
 
     private func padStage(profile: DeckLayoutProfile) -> some View {
         GeometryReader { proxy in
-            let padSide = max(360, min(proxy.size.width - 8, proxy.size.height - 8))
+            let stripHeight = longSoundsSurfaceHeight(for: profile)
+            let availableWidth = max(120, proxy.size.width - 8)
+            let availableHeight = max(120, proxy.size.height - stripHeight - 18)
+            let padSide = min(availableWidth, availableHeight)
 
-            padGrid(side: padSide)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            VStack(spacing: 10) {
+                padGrid(side: padSide)
+                longSoundsControlSurface(profile: profile, width: padSide)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(minHeight: profile == .expanded ? 560 : (profile == .standard ? 500 : 400))
         .padding(10)
@@ -567,6 +662,18 @@ struct PushDeckView: View {
         .overlay(
             Rectangle().stroke(DeckThemeTokens.panelStroke, lineWidth: 1)
         )
+        .overlay(
+            TwoFingerVerticalSlideCaptureView { event in
+                handleTwoFingerRailSlide(event)
+            }
+        )
+        .overlay(alignment: .topTrailing) {
+            if railGestureFeedbackVisible {
+                railGestureBadge
+                    .padding(8)
+                    .transition(.opacity)
+            }
+        }
     }
 
     private func actionFlash(_ flash: DeckActionFlashEvent) -> some View {
@@ -662,6 +769,17 @@ struct PushDeckView: View {
         }
     }
 
+    private func longSoundsSurfaceHeight(for profile: DeckLayoutProfile) -> CGFloat {
+        switch profile {
+        case .expanded:
+            return 164
+        case .standard:
+            return 148
+        case .compact:
+            return 130
+        }
+    }
+
     private func actionRailHeight(for profile: DeckLayoutProfile) -> CGFloat {
         switch profile {
         case .expanded:
@@ -678,4 +796,159 @@ struct PushDeckView: View {
         formatter.dateFormat = "HH:mm:ss"
         return formatter
     }()
+
+    private func longSoundsControlSurface(profile: DeckLayoutProfile, width: CGFloat) -> some View {
+        let valueX = model.longSoundsStripValue
+        let valueY = model.longSoundsStripY
+        let height = longSoundsSurfaceHeight(for: profile)
+        let fieldHeight = max(88, height - 34)
+        let knobX = max(0, min(1, valueX)) * width
+        let knobY = (1 - max(0, min(1, valueY))) * fieldHeight
+        let latchOn = model.longSoundsLatched
+
+        return VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("LONG SOUNDS 2D")
+                    .font(DeckThemeTokens.monoFont(size: 10, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .blendMode(.overlay)
+                Spacer()
+                Text("VAR \(model.longSoundsVariantIndex + 1)/\(model.longSoundsVariantCount) \(model.longSoundsVariantLabel)")
+                    .font(DeckThemeTokens.monoFont(size: 9, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.84))
+                    .blendMode(.overlay)
+                Button {
+                    model.toggleLongSoundsLatch()
+                } label: {
+                    Text(latchOn ? "LATCH ON" : "LATCH")
+                        .font(DeckThemeTokens.monoFont(size: 9, weight: .bold))
+                        .foregroundStyle(latchOn ? Color.black : Color.white.opacity(0.88))
+                        .frame(minWidth: 62, minHeight: 24)
+                        .background(latchOn ? DeckThemeTokens.accentApply : Color.white.opacity(0.14))
+                        .overlay(Rectangle().stroke(latchOn ? DeckThemeTokens.accentApply.opacity(0.95) : DeckThemeTokens.panelStroke.opacity(0.9), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+
+            ZStack(alignment: .topLeading) {
+                LinearGradient(
+                    colors: [
+                        DeckThemeTokens.accentMain.opacity(0.65),
+                        DeckThemeTokens.accentApply.opacity(0.58),
+                        DeckThemeTokens.accentWarn.opacity(0.55)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .overlay(Color.black.opacity(0.35))
+
+                RadialGradient(
+                    colors: [Color.white.opacity(0.16), .clear],
+                    center: .center,
+                    startRadius: 0,
+                    endRadius: width * 0.65
+                )
+                .blendMode(.screen)
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.86))
+                    .frame(width: 2, height: fieldHeight)
+                    .offset(x: knobX)
+                Rectangle()
+                    .fill(Color.white.opacity(0.86))
+                    .frame(width: width, height: 2)
+                    .offset(y: knobY)
+
+                Circle()
+                    .fill(DeckThemeTokens.accentApply.opacity(0.95))
+                    .frame(width: 12, height: 12)
+                    .offset(x: max(0, knobX - 6), y: max(0, knobY - 6))
+                    .shadow(color: DeckThemeTokens.accentApply.opacity(0.9), radius: 10)
+
+                VStack {
+                    Spacer()
+                    HStack {
+                        Text("X \(Int(valueX * 100))%")
+                        Spacer()
+                        Text("Y \(Int(valueY * 100))%")
+                    }
+                    .font(DeckThemeTokens.monoFont(size: 9, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.84))
+                    .blendMode(.overlay)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 8)
+                }
+            }
+            .frame(width: width, height: fieldHeight)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        let normalizedX = min(1, max(0, gesture.location.x / max(width, 1)))
+                        let normalizedY = 1 - min(1, max(0, gesture.location.y / max(fieldHeight, 1)))
+                        if !longStripDragging {
+                            longStripDragging = true
+                            model.beginLongSoundsStripGesture(atX: normalizedX, y: normalizedY)
+                        } else {
+                            model.updateLongSoundsStripGesture(x: normalizedX, y: normalizedY)
+                        }
+                    }
+                    .onEnded { _ in
+                        if longStripDragging {
+                            longStripDragging = false
+                            model.endLongSoundsStripGesture()
+                        }
+                    }
+            )
+        }
+        .frame(width: width, height: height)
+        .clipShape(Rectangle())
+        .overlay(Rectangle().stroke(DeckThemeTokens.panelStroke.opacity(0.9), lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private var railGestureBadge: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "hand.draw.fill")
+                .font(.system(size: 10, weight: .semibold))
+            Text("PHONE \(Int((model.phonePadEchoProbability / 0.2) * 20))%")
+                .font(DeckThemeTokens.monoFont(size: 9, weight: .bold))
+        }
+        .foregroundStyle(DeckThemeTokens.accentApply)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(Color.black.opacity(0.72))
+        .overlay(Rectangle().stroke(DeckThemeTokens.accentApply.opacity(0.62), lineWidth: 1))
+    }
+
+    private func handleTwoFingerRailSlide(_ event: TwoFingerVerticalSlideEvent) {
+        switch event.phase {
+        case .began:
+            railGestureFeedbackTask?.cancel()
+            railGestureStartProbability = model.phonePadEchoProbability
+            withAnimation(.easeOut(duration: 0.12)) {
+                railGestureFeedbackVisible = true
+            }
+        case .changed:
+            let candidate = railGestureStartProbability + (Double(event.normalizedDelta) * 0.2)
+            model.setPhonePadEchoProbability(candidate)
+            if !railGestureFeedbackVisible {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    railGestureFeedbackVisible = true
+                }
+            }
+        case .ended, .cancelled:
+            railGestureFeedbackTask?.cancel()
+            railGestureFeedbackTask = Task {
+                try? await Task.sleep(nanoseconds: 650_000_000)
+                await MainActor.run {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        railGestureFeedbackVisible = false
+                    }
+                }
+            }
+        }
+    }
 }

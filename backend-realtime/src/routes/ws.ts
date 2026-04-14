@@ -17,6 +17,7 @@ import {
   type PhoneAudioCommandPayload,
   type PhoneAudioPoolStatePayload,
   type PushDeckEventPayload,
+  type PushPadLabelsPayload,
   type PushDeckBankDomain,
   type ProgramProceduralState,
   stableHashToSeed,
@@ -74,6 +75,7 @@ type HarnessInbound =
   | { kind: "audio_features"; data: Partial<AudioFeaturePayload> }
   | { kind: "phone_audio_pool_state"; data: Partial<PhoneAudioPoolStatePayload> }
   | { kind: "phone_audio_command"; data: Partial<PhoneAudioCommandPayload> }
+  | { kind: "push_pad_labels"; data: Partial<PushPadLabelsPayload> }
   | { kind: "text_scene"; data: Partial<TextScenePayload> & { cueId?: string } }
   | { kind: "procedural_state"; data: Partial<ProgramProceduralState> };
 
@@ -140,6 +142,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     transientDensity: 0,
     updatedAt: 0
   };
+  let lastPushPadLabels: PushPadLabelsPayload | null = null;
   let baseProceduralState = createDefaultProceduralState(deps.show.snapshot().vector);
   let effectiveProceduralState = baseProceduralState;
 
@@ -341,6 +344,20 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         return;
       }
 
+      if (inbound.kind === "push_pad_labels") {
+        const labels = normalizePushPadLabelsPayload(inbound.data);
+        if (!labels) {
+          return;
+        }
+        lastPushPadLabels = labels;
+        broadcastToDevices({
+          kind: "push_pad_labels",
+          data: labels,
+          sentAt: Date.now()
+        } satisfies WireEnvelope<PushPadLabelsPayload>);
+        return;
+      }
+
       if (inbound.kind === "text_scene") {
         const current = deps.audioOpsStateHub.snapshot().textScene;
         const merged: TextScenePayload = {
@@ -523,7 +540,11 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
           return;
         }
 
-        if (normalized.controlKind === "macro" || normalized.controlKind === "ml_param") {
+        if (
+          normalized.controlKind === "macro" ||
+          normalized.controlKind === "long_strip" ||
+          normalized.controlKind === "ml_param"
+        ) {
           forwardPushDeckEventWithCoalescing(normalized);
         } else {
           forwardPushDeckEvent(normalized);
@@ -541,6 +562,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
             controlKind: normalized.controlKind,
             modeContext: normalized.modeContext,
             timingMode: normalized.timingMode,
+            longStripValue: normalized.longStrip?.value,
             mlParamKey: normalized.mlParam?.key,
             mlParamValue: normalized.mlParam?.value
           }
@@ -756,6 +778,14 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     } satisfies WireEnvelope<ProgramProceduralState>);
 
     if (role === "device") {
+      if (lastPushPadLabels) {
+        send(socket, {
+          kind: "push_pad_labels",
+          data: lastPushPadLabels,
+          sentAt: Date.now()
+        } satisfies WireEnvelope<PushPadLabelsPayload>);
+      }
+
       send(socket, {
         kind: "audience_vector",
         data: audienceField.snapshot(),
@@ -979,10 +1009,14 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   }
 
   function forwardPushDeckEventWithCoalescing(payload: PushDeckEventPayload): void {
-    const key =
-      payload.controlKind === "macro"
-        ? `${payload.sourceId}:macro:${payload.macro?.lane ?? 0}`
-        : `${payload.sourceId}:ml:${payload.mlParam?.key ?? "unknown"}`;
+    let key: string;
+    if (payload.controlKind === "macro") {
+      key = `${payload.sourceId}:macro:${payload.macro?.lane ?? 0}`;
+    } else if (payload.controlKind === "long_strip") {
+      key = `${payload.sourceId}:long_strip`;
+    } else {
+      key = `${payload.sourceId}:ml:${payload.mlParam?.key ?? "unknown"}`;
+    }
     const now = Date.now();
     const last = pushLastForwardAt.get(key) ?? 0;
     const elapsed = now - last;
@@ -1205,6 +1239,7 @@ const normalizePushDeckEvent = (
       : undefined;
   const pad = normalizePushDeckPadControl(value.pad);
   const macro = normalizePushDeckMacroControl(value.macro);
+  const longStrip = normalizePushDeckLongStripControl(value.longStrip);
   const bank = normalizePushDeckBankControl(value.bank);
   const mlParam = normalizePushDeckMLParamControl(value.mlParam);
 
@@ -1212,6 +1247,9 @@ const normalizePushDeckEvent = (
     return null;
   }
   if (controlKind === "macro" && !macro) {
+    return null;
+  }
+  if (controlKind === "long_strip" && !longStrip) {
     return null;
   }
   if (controlKind === "bank_select" && !bank) {
@@ -1233,6 +1271,7 @@ const normalizePushDeckEvent = (
     quantIntervalMs,
     pad,
     macro,
+    longStrip,
     bank,
     mlParam,
     issuedAt: typeof value.issuedAt === "number" ? value.issuedAt : Date.now()
@@ -1272,6 +1311,20 @@ const normalizePushDeckMacroControl = (value: unknown): PushDeckEventPayload["ma
   };
 };
 
+const normalizePushDeckLongStripControl = (value: unknown): PushDeckEventPayload["longStrip"] => {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const payload = value as Record<string, unknown>;
+  const raw = typeof payload.value === "number" ? payload.value : undefined;
+  if (raw === undefined || Number.isNaN(raw)) {
+    return undefined;
+  }
+  return {
+    value: clamp01(raw)
+  };
+};
+
 const normalizePushDeckBankControl = (value: unknown): PushDeckEventPayload["bank"] => {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -1302,11 +1355,49 @@ const normalizePushDeckMLParamControl = (value: unknown): PushDeckEventPayload["
   };
 };
 
+const normalizePushPadLabelsPayload = (value: unknown): PushPadLabelsPayload | null => {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const payload = value as Record<string, unknown>;
+  const labelsRaw = Array.isArray(payload.padLabels)
+    ? payload.padLabels
+    : Array.isArray(payload.pad_labels)
+      ? payload.pad_labels
+      : null;
+  if (!labelsRaw) {
+    return null;
+  }
+  const labels = labelsRaw
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .slice(0, 64);
+  if (labels.length === 0) {
+    return null;
+  }
+  while (labels.length < 64) {
+    labels.push("");
+  }
+  const bank =
+    typeof payload.bank === "number" && Number.isFinite(payload.bank)
+      ? Math.max(1, Math.min(3, Math.round(payload.bank)))
+      : undefined;
+  const updatedAt =
+    typeof payload.updatedAt === "number" && Number.isFinite(payload.updatedAt)
+      ? payload.updatedAt
+      : Date.now();
+  return {
+    padLabels: labels,
+    bank,
+    updatedAt
+  };
+};
+
 const toPushDeckControlKind = (value: unknown): PushDeckEventPayload["controlKind"] => {
   if (
     value === "pad_down" ||
     value === "pad_up" ||
     value === "macro" ||
+    value === "long_strip" ||
     value === "bank_select" ||
     value === "ml_param"
   ) {

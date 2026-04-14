@@ -11,6 +11,12 @@ final class PushDeckViewModel: ObservableObject {
     @Published var choirBank: Int = 1
     @Published private(set) var highlightSelectionEnabled = false
     @Published var macroValues: [Double] = Array(repeating: 0.5, count: 8)
+    @Published private(set) var longSoundsStripValue: Double = 0.5
+    @Published private(set) var longSoundsStripY: Double = 0.5
+    @Published private(set) var longSoundsVariantLabel: String = "BASE"
+    @Published private(set) var longSoundsVariantIndex: Int = 0
+    @Published private(set) var longSoundsVariantCount: Int = 1
+    @Published private(set) var longSoundsLatched: Bool = false
     @Published private(set) var actionRail: [DeckActionRailEntry] = []
     @Published private(set) var activePadSlots: Set<Int> = []
     @Published private(set) var padFileNameOverrides: [Int: String] = [:]
@@ -43,8 +49,13 @@ final class PushDeckViewModel: ObservableObject {
     private let railLimit = 180
     private var activeTouchToPad: [Int: Int] = [:]
     private var throttledMacroAtByLane: [Int: TimeInterval] = [:]
+    private var throttledLongStripAt: TimeInterval = 0
     private var flashClearTask: Task<Void, Never>?
     private var proposalExpiryTask: Task<Void, Never>?
+    private let padAuditionEngine = PushPadAuditionEngine()
+    private let longStripAuditionEngine = PushLongStripAuditionEngine()
+    private var longStripGestureActive = false
+    private let bundledMainPadLabelsByBank: [Int: [Int: String]]
     private let ignoredInboundKinds: Set<String> = [
         "sync",
         "show_snapshot",
@@ -52,7 +63,8 @@ final class PushDeckViewModel: ObservableObject {
         "audio_features",
         "audience_vector",
         "lighting_state",
-        "param_vector"
+        "param_vector",
+        "push_pad_labels"
     ]
 
     init(
@@ -64,6 +76,7 @@ final class PushDeckViewModel: ObservableObject {
         self.sessionStore = sessionStore ?? PushSessionStore(defaults: defaults)
         self.socketClient = socketClient ?? PushDeckWebSocketClient()
         self.notesText = defaults.string(forKey: notesKey) ?? ""
+        self.bundledMainPadLabelsByBank = PushDeckViewModel.loadBundledMainPadLabels()
         self.phonePadEchoProbability = Self.clampPhonePadEchoProbability(
             defaults.object(forKey: phonePadEchoProbabilityKey) as? Double ?? 0
         )
@@ -179,6 +192,15 @@ final class PushDeckViewModel: ObservableObject {
         let clamped = min(3, max(1, bank))
         guard mainBank != clamped else { return }
         mainBank = clamped
+        if longStripGestureActive {
+            if let snapshot = longStripAuditionEngine.scrub(
+                bank: clamped,
+                x: longSoundsStripValue,
+                y: longSoundsStripY
+            ) {
+                applyLongStripSnapshot(snapshot)
+            }
+        }
         sendBankSelect(domain: .main, bank: clamped)
         emitFlash("MAIN B\(clamped)", severity: .apply)
     }
@@ -211,6 +233,75 @@ final class PushDeckViewModel: ObservableObject {
             coalescingKey: "macro.\(lane)"
         )
         emitFlash("M\(lane) \(String(format: "%.2f", clamped))", severity: .act)
+    }
+
+    func setLongSoundsStripValue(_ value: Double) {
+        let clamped = min(1, max(0, value))
+        guard abs(longSoundsStripValue - clamped) > 0.000_5 else { return }
+        longSoundsStripValue = clamped
+
+        let now = Date().timeIntervalSince1970
+        let throttleWindow: TimeInterval = 1.0 / 35.0
+        if now - throttledLongStripAt < throttleWindow {
+            return
+        }
+        throttledLongStripAt = now
+
+        sendEvent(
+            controlKind: .longStrip,
+            longStrip: PushDeckLongStripControl(value: clamped),
+            detail: "LONG STRIP \(String(format: "%.2f", clamped))",
+            severity: .act,
+            coalescingKey: "long_strip"
+        )
+    }
+
+    func beginLongSoundsStripGesture(atX valueX: Double, y valueY: Double) {
+        let clampedX = min(1, max(0, valueX))
+        let clampedY = min(1, max(0, valueY))
+        longStripGestureActive = true
+        if let snapshot = longStripAuditionEngine.begin(bank: mainBank, x: clampedX, y: clampedY) {
+            applyLongStripSnapshot(snapshot)
+        } else {
+            longSoundsStripValue = clampedX
+            longSoundsStripY = clampedY
+        }
+        setLongSoundsStripValue(clampedX)
+    }
+
+    func updateLongSoundsStripGesture(x valueX: Double, y valueY: Double) {
+        let clampedX = min(1, max(0, valueX))
+        let clampedY = min(1, max(0, valueY))
+        if !longStripGestureActive {
+            beginLongSoundsStripGesture(atX: clampedX, y: clampedY)
+            return
+        }
+        if let snapshot = longStripAuditionEngine.scrub(bank: mainBank, x: clampedX, y: clampedY) {
+            applyLongStripSnapshot(snapshot)
+        } else {
+            longSoundsStripValue = clampedX
+            longSoundsStripY = clampedY
+        }
+        setLongSoundsStripValue(clampedX)
+    }
+
+    func endLongSoundsStripGesture() {
+        guard longStripGestureActive else { return }
+        longStripGestureActive = false
+        if let snapshot = longStripAuditionEngine.end() {
+            applyLongStripSnapshot(snapshot)
+        }
+    }
+
+    func toggleLongSoundsLatch() {
+        let next = !longSoundsLatched
+        if let snapshot = longStripAuditionEngine.setLatched(next) {
+            applyLongStripSnapshot(snapshot)
+        } else {
+            longSoundsLatched = next
+        }
+        appendRail("LONG LATCH \(longSoundsLatched ? "ON" : "OFF")", severity: .act, coalescingKey: "long_latch")
+        emitFlash(longSoundsLatched ? "LONG LATCH ON" : "LONG LATCH OFF", severity: .act)
     }
 
     func setPhonePadEchoProbability(_ value: Double) {
@@ -375,6 +466,14 @@ final class PushDeckViewModel: ObservableObject {
     }
 
     private func sendPadEvent(slot: Int, phase: PushDeckControlKind, pressure: Double, velocity: Double) {
+        let mode = macroModeContext
+        let bank = mode == .choir ? choirBank : mainBank
+        if phase == .padDown {
+            padAuditionEngine.padDown(slot: slot, bank: bank, mode: mode, velocity: velocity)
+        } else if phase == .padUp {
+            padAuditionEngine.padUp(slot: slot)
+        }
+
         let row = slot / 8
         let column = slot % 8
         let pad = PushDeckPadControl(
@@ -426,6 +525,7 @@ final class PushDeckViewModel: ObservableObject {
         controlKind: PushDeckControlKind,
         pad: PushDeckPadControl? = nil,
         macro: PushDeckMacroControl? = nil,
+        longStrip: PushDeckLongStripControl? = nil,
         bank: PushDeckBankControl? = nil,
         mlParam: PushDeckMLParamControl? = nil,
         detail: String,
@@ -442,6 +542,7 @@ final class PushDeckViewModel: ObservableObject {
             quantIntervalMs: timingMode == .quantized ? quantIntervalMs : nil,
             pad: pad,
             macro: macro,
+            longStrip: longStrip,
             bank: bank,
             mlParam: mlParam,
             issuedAt: Date().timeIntervalSince1970 * 1000
@@ -725,23 +826,36 @@ final class PushDeckViewModel: ObservableObject {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "sample.wav" }
 
+        if let curated = curatedMainBankLabel(from: trimmed) {
+            return curated
+        }
+
         if let url = URL(string: trimmed), let host = url.host, !host.isEmpty {
             let component = url.lastPathComponent
             if !component.isEmpty {
-                return component
+                return curatedMainBankLabel(from: component) ?? component
             }
         }
 
         let pathComponent = (trimmed as NSString).lastPathComponent
         if !pathComponent.isEmpty {
-            return pathComponent
+            return curatedMainBankLabel(from: pathComponent) ?? pathComponent
         }
         return trimmed
     }
 
     private func fallbackMainPadFileName(slot: Int, bank: Int) -> String {
+        if let bundled = bundledMainPadLabelsByBank[bank]?[slot] {
+            return bundled
+        }
         let index = slot + 1
-        return String(format: "main_b%d_%02d.wav", bank, index)
+        if bank == 1 {
+            return String(format: "666 ʇ · %02d", index)
+        }
+        if bank == 2 {
+            return String(format: "29 #Strafford APTS · %02d", index)
+        }
+        return String(format: "main b%d · %02d", bank, index)
     }
 
     private func fallbackChoirPadFileName(slot: Int, bank: Int) -> String {
@@ -750,6 +864,47 @@ final class PushDeckViewModel: ObservableObject {
         let note = noteNames[midi % 12]
         let octave = (midi / 12) - 1
         return "choir_b\(bank)_\(note)\(octave).wav"
+    }
+
+    private static func loadBundledMainPadLabels() -> [Int: [Int: String]] {
+        struct BundledPadMap: Decodable {
+            struct Slice: Decodable {
+                let slot: Int
+                let label: String?
+                let fileName: String?
+            }
+            let slices: [Slice]
+        }
+
+        var bankLabels: [Int: [Int: String]] = [:]
+        let decoder = JSONDecoder()
+
+        for bank in 1...2 {
+            guard let bundleRoot = Bundle.main.resourceURL else { continue }
+            let mapURL = bundleRoot
+                .appendingPathComponent("Samples/main_b\(bank)")
+                .appendingPathComponent("pad_map.json")
+            guard let data = try? Data(contentsOf: mapURL),
+                  let map = try? decoder.decode(BundledPadMap.self, from: data) else {
+                continue
+            }
+
+            var labels: [Int: String] = [:]
+            for slice in map.slices where (0..<64).contains(slice.slot) {
+                if let label = slice.label?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !label.isEmpty {
+                    labels[slice.slot] = label
+                } else if let fileName = slice.fileName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          !fileName.isEmpty {
+                    labels[slice.slot] = fileName
+                }
+            }
+            if !labels.isEmpty {
+                bankLabels[bank] = labels
+            }
+        }
+
+        return bankLabels
     }
 
     private func stageProposal(from proposalData: [String: Any]) {
@@ -859,6 +1014,35 @@ final class PushDeckViewModel: ObservableObject {
 
     private static func clampPhonePadEchoProbability(_ value: Double) -> Double {
         min(0.2, max(0, value))
+    }
+
+    private func applyLongStripSnapshot(_ snapshot: PushLongStripSnapshot) {
+        longSoundsStripValue = min(1, max(0, snapshot.valueX))
+        longSoundsStripY = min(1, max(0, snapshot.valueY))
+        longSoundsVariantIndex = snapshot.variantIndex
+        longSoundsVariantCount = max(1, snapshot.variantCount)
+        longSoundsVariantLabel = snapshot.variantLabel
+        longSoundsLatched = snapshot.isLatched
+    }
+
+    private func curatedMainBankLabel(from candidate: String) -> String? {
+        let pattern = #"^main_b([12])_(\d{1,2})(?:\.wav)?$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        let range = NSRange(candidate.startIndex..<candidate.endIndex, in: candidate)
+        guard let match = regex.firstMatch(in: candidate, options: [], range: range),
+              match.numberOfRanges == 3,
+              let bankRange = Range(match.range(at: 1), in: candidate),
+              let indexRange = Range(match.range(at: 2), in: candidate),
+              let bank = Int(candidate[bankRange]),
+              let index = Int(candidate[indexRange]) else {
+            return nil
+        }
+        if bank == 1 {
+            return String(format: "666 ʇ · %02d", index)
+        }
+        return String(format: "29 #Strafford APTS · %02d", index)
     }
 
     private static let highlightPalette: [Color] = [

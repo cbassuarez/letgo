@@ -174,6 +174,9 @@ private struct SamplePackManifest: Codable {
     struct SampleEntry: Codable {
         let id: String
         let path: String
+        let label: String?
+        let name: String?
+        let displayName: String?
         let sampleClass: String?
         let key: String?
         let bpm: Double?
@@ -184,6 +187,9 @@ private struct SamplePackManifest: Codable {
         private enum CodingKeys: String, CodingKey {
             case id
             case path
+            case label
+            case name
+            case displayName
             case sampleClass = "class"
             case key
             case bpm
@@ -194,6 +200,12 @@ private struct SamplePackManifest: Codable {
     }
 
     let samples: [SampleEntry]
+}
+
+private struct PushPadLabelsPayload: Codable {
+    var padLabels: [String]
+    var bank: Int
+    var updatedAt: TimeInterval
 }
 
 private struct ControlProfileDocument: Codable {
@@ -218,7 +230,7 @@ private struct ControlProfileDocument: Codable {
         activeProfile: ControlProfile,
         lastKnownGoodProfile: ControlProfile?,
         hotasStaticVideoOverrideEnabled: Bool = true,
-        pushControlEnabled: Bool = false,
+        pushControlEnabled: Bool = true,
         trustedPushControllerIDs: [String] = []
     ) {
         self.version = version
@@ -235,7 +247,7 @@ private struct ControlProfileDocument: Codable {
         activeProfile = try container.decode(ControlProfile.self, forKey: .activeProfile)
         lastKnownGoodProfile = try container.decodeIfPresent(ControlProfile.self, forKey: .lastKnownGoodProfile)
         hotasStaticVideoOverrideEnabled = try container.decodeIfPresent(Bool.self, forKey: .hotasStaticVideoOverrideEnabled) ?? true
-        pushControlEnabled = try container.decodeIfPresent(Bool.self, forKey: .pushControlEnabled) ?? false
+        pushControlEnabled = try container.decodeIfPresent(Bool.self, forKey: .pushControlEnabled) ?? true
         trustedPushControllerIDs = try container.decodeIfPresent([String].self, forKey: .trustedPushControllerIDs) ?? []
     }
 
@@ -334,7 +346,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     @Published private(set) var activeSampleBank = 1
     @Published private(set) var activeChoirSampleBank = 1
     @Published var hotasStaticVideoOverrideEnabled = true
-    @Published var pushControlEnabled = false
+    @Published var pushControlEnabled = true
     @Published private(set) var pushRecentControllerIDs: [String] = []
     @Published private(set) var pushTrustedControllerIDs: [String] = []
     @Published private(set) var pushLastSignalSummary = "Push OFF"
@@ -462,6 +474,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private var hotasTrainingBackupProfile: ControlProfile?
     private var activeChoirMIDINotes: [Int: Int] = [:]
     private var sampleMetadataByID: [String: SampleMetadata] = [:]
+    private var sampleLabelByID: [String: String] = [:]
     private var performerProceduralState: ProgramProceduralState = .default()
     private var lastSentProceduralState: ProgramProceduralState?
     private lazy var controlActionRouter = ControlActionRouter(delegate: self)
@@ -474,6 +487,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private var trustedPushControllerIDSet: Set<String> = []
     private var pushLastUntrustedStatusAtByController: [String: TimeInterval] = [:]
     private var pushLastPadEchoStatusAt: TimeInterval = 0
+    private var pushLastPadLabelsSignature: String = ""
     private var pushActiveChoirPadNotes: [Int: Int] = [:]
     private var pushQuantizedPadWorkItems: [String: DispatchWorkItem] = [:]
 
@@ -587,6 +601,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 self?.publishPhoneAudioPoolState()
                 self?.publishLatestAudioFeatures()
                 self?.publishProceduralState(force: true)
+                self?.publishPushPadLabelsForActiveMainBank(force: true)
                 self?.pushStatus(StatusLineEvent(
                     message: "WS link online",
                     severity: .success,
@@ -2378,11 +2393,13 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             samplePackManifestURL = selectedURL
             samplePackEntries = resolved.entries
             sampleMetadataByID = resolved.metadata
+            sampleLabelByID = resolved.labels
             if let firstID = resolved.entries.keys.sorted().first {
                 selectedSampleID = firstID
             }
             updateEffectsPresetForActiveBank()
             applyStaticSampleMorphSelection()
+            publishPushPadLabelsForActiveMainBank(force: true)
             saveMediaManifest()
             pushStatus(StatusLineEvent(
                 message: "Loaded sample pack (\(resolved.entries.count) entries)",
@@ -2454,11 +2471,71 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         return samplePackEntries.values.first
     }
 
-    private func resolveSamplePackEntries(from selectedURL: URL) throws -> (entries: [String: URL], metadata: [String: SampleMetadata]) {
+    private func mainBankSampleIDs(for bank: Int) -> [String] {
+        let configured = hotasProfile.sampleBanks
+            .sampleIDs(for: bank, domain: .main)
+            .filter { samplePackEntries[$0] != nil }
+        if !configured.isEmpty {
+            return configured
+        }
+
+        let prefix = "main_b\(min(3, max(1, bank)))_"
+        let inferred = samplePackEntries.keys
+            .filter { $0.lowercased().hasPrefix(prefix.lowercased()) }
+            .sorted()
+        if !inferred.isEmpty {
+            return inferred
+        }
+
+        return samplePackEntries.keys.sorted()
+    }
+
+    private func pushPadLabelsForMainBank(_ bank: Int) -> [String] {
+        let candidateIDs = mainBankSampleIDs(for: bank)
+        var labels: [String] = []
+
+        if !candidateIDs.isEmpty {
+            labels = candidateIDs.prefix(64).map { id in
+                if let curated = sampleLabelByID[id]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !curated.isEmpty {
+                    return curated
+                }
+                if let url = samplePackEntries[id] {
+                    return url.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "_", with: " ")
+                }
+                return id
+            }
+        }
+
+        while labels.count < 64 {
+            labels.append(String(format: "main b%d %02d", min(3, max(1, bank)), labels.count + 1))
+        }
+        return labels
+    }
+
+    private func publishPushPadLabelsForActiveMainBank(force: Bool = false) {
+        let labels = pushPadLabelsForMainBank(activeSampleBank)
+        let signature = "\(activeSampleBank)|" + labels.joined(separator: "|")
+        if !force, signature == pushLastPadLabelsSignature {
+            return
+        }
+        pushLastPadLabelsSignature = signature
+        let payload = PushPadLabelsPayload(
+            padLabels: labels,
+            bank: activeSampleBank,
+            updatedAt: Date().timeIntervalSince1970 * 1000
+        )
+        Task {
+            try? await websocket.sendEnvelope(kind: "push_pad_labels", data: payload)
+        }
+    }
+
+    private func resolveSamplePackEntries(from selectedURL: URL) throws -> (entries: [String: URL], metadata: [String: SampleMetadata], labels: [String: String]) {
         if selectedURL.pathExtension.lowercased() != "json" {
             return (
                 entries: ["default": selectedURL],
-                metadata: ["default": SampleMetadata(id: "default", renderClass: .misc)]
+                metadata: ["default": SampleMetadata(id: "default", renderClass: .misc)],
+                labels: ["default": "default"]
             )
         }
 
@@ -2480,12 +2557,13 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                     let metadata = resolved.keys.reduce(into: [String: SampleMetadata]()) { result, id in
                         result[id] = SampleMetadata(id: id, renderClass: .misc)
                     }
-                    return (entries: resolved, metadata: metadata)
+                    return (entries: resolved, metadata: metadata, labels: [:])
                 }
             }
             if let samples = root["samples"] as? [[String: Any]] {
                 var resolved: [String: URL] = [:]
                 var metadata: [String: SampleMetadata] = [:]
+                var labels: [String: String] = [:]
                 for sample in samples {
                     guard let id = sample["id"] as? String,
                           let path = sample["path"] as? String else { continue }
@@ -2493,13 +2571,17 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                     if FileManager.default.fileExists(atPath: url.path) {
                         resolved[id] = url
                         metadata[id] = sampleMetadata(from: sample, id: id)
+                        if let label = (sample["label"] as? String) ?? (sample["name"] as? String) ?? (sample["displayName"] as? String),
+                           !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            labels[id] = label
+                        }
                     }
                 }
                 if !resolved.isEmpty {
                     for id in resolved.keys where metadata[id] == nil {
                         metadata[id] = SampleMetadata(id: id, renderClass: .misc)
                     }
-                    return (entries: resolved, metadata: metadata)
+                    return (entries: resolved, metadata: metadata, labels: labels)
                 }
             }
         }
@@ -2514,17 +2596,22 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private func resolveSampleEntries(
         _ entries: [SamplePackManifest.SampleEntry],
         baseURL: URL
-    ) -> (entries: [String: URL], metadata: [String: SampleMetadata]) {
+    ) -> (entries: [String: URL], metadata: [String: SampleMetadata], labels: [String: String]) {
         var resolved: [String: URL] = [:]
         var metadata: [String: SampleMetadata] = [:]
+        var labels: [String: String] = [:]
         for entry in entries {
             let url = resolveMediaURL(path: entry.path, baseURL: baseURL)
             if FileManager.default.fileExists(atPath: url.path) {
                 resolved[entry.id] = url
                 metadata[entry.id] = sampleMetadata(from: entry)
+                let label = entry.label ?? entry.name ?? entry.displayName
+                if let curated = label?.trimmingCharacters(in: .whitespacesAndNewlines), !curated.isEmpty {
+                    labels[entry.id] = curated
+                }
             }
         }
-        return (entries: resolved, metadata: metadata)
+        return (entries: resolved, metadata: metadata, labels: labels)
     }
 
     private func sampleMetadata(from entry: SamplePackManifest.SampleEntry) -> SampleMetadata {
@@ -2981,9 +3068,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         guard currentHOTASOutputModeID() == .static else { return }
         guard !hotasStaticVisualOverrideHeld else { return }
 
-        let candidateIDs = hotasProfile.sampleBanks
-            .sampleIDs(for: activeSampleBank, domain: .main)
-            .filter { samplePackEntries[$0] != nil }
+        let candidateIDs = mainBankSampleIDs(for: activeSampleBank)
         guard let resolved = sampleMorphEngine.resolveSampleID(
             morph: staticAudioMacroState.sampleMorph,
             candidateIDs: candidateIDs,
@@ -3180,13 +3265,20 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         let changed = previousBank != clampedBank
         guard changed || forceSelectionRefresh else { return }
 
-        let preferredIDs = hotasProfile.sampleBanks.sampleIDs(for: clampedBank, domain: domain)
+        let preferredIDs: [String]
+        switch domain {
+        case .main:
+            preferredIDs = mainBankSampleIDs(for: clampedBank)
+        case .choir:
+            preferredIDs = hotasProfile.sampleBanks.sampleIDs(for: clampedBank, domain: domain)
+        }
         if let firstExisting = preferredIDs.first(where: { samplePackEntries[$0] != nil }) {
             selectedSampleID = firstExisting
         }
         if domain == .main {
             applyStaticSampleMorphSelection()
             updateEffectsPresetForActiveBank()
+            publishPushPadLabelsForActiveMainBank()
         }
 
         refreshProgramAudioState(nowMs: ConductorHarnessViewModel.nowMilliseconds())
@@ -3200,7 +3292,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     }
 
     private func updateEffectsPresetForActiveBank() {
-        let candidateIDs = hotasProfile.sampleBanks.sampleIDs(for: activeSampleBank, domain: .main)
+        let candidateIDs = mainBankSampleIDs(for: activeSampleBank)
         let renderClass = candidateIDs
             .compactMap { sampleMetadataByID[$0]?.renderClass }
             .first ?? .misc
@@ -4226,6 +4318,16 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             )
         }
 
+        if !pushControlEnabled, trustedPushControllerIDSet.isEmpty {
+            pushControlEnabled = true
+            persistControlProfileDocument()
+            pushStatus(StatusLineEvent(
+                message: "Push lane auto-enabled for first controller",
+                severity: .success,
+                timestamp: Date()
+            ))
+        }
+
         guard pushControlEnabled else {
             Task { [hudTelemetryStore] in
                 await hudTelemetryStore.ingestSystem(
@@ -4240,27 +4342,15 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return
         }
 
-        guard trustedPushControllerIDSet.contains(sourceID) else {
-            let now = Date().timeIntervalSince1970
-            if now - (pushLastUntrustedStatusAtByController[sourceID] ?? 0) > 2.5 {
-                pushLastUntrustedStatusAtByController[sourceID] = now
-                pushStatus(StatusLineEvent(
-                    message: "Push blocked (untrusted): \(sourceID.prefix(8))…",
-                    severity: .warn,
-                    timestamp: Date()
-                ))
-            }
-            Task { [hudTelemetryStore] in
-                await hudTelemetryStore.ingestSystem(
-                    stage: .applied,
-                    severity: .block,
-                    controlID: "push:\(sourceID)",
-                    semanticAction: event.controlKind.rawValue,
-                    outcome: "BLOCKED",
-                    detail: "Controller untrusted"
-                )
-            }
-            return
+        if !trustedPushControllerIDSet.contains(sourceID) {
+            trustedPushControllerIDSet.insert(sourceID)
+            pushTrustedControllerIDs = trustedPushControllerIDSet.sorted()
+            persistControlProfileDocument()
+            pushStatus(StatusLineEvent(
+                message: "Push auto-trusted controller: \(sourceID.prefix(8))…",
+                severity: .success,
+                timestamp: Date()
+            ))
         }
 
         let route = pushDeckEventRouter.resolve(
@@ -4482,10 +4572,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return
         }
 
-        let bankCandidates = hotasProfile.sampleBanks
-            .sampleIDs(for: activeSampleBank, domain: .main)
-            .filter { samplePackEntries[$0] != nil }
-        let candidateIDs = bankCandidates.isEmpty ? samplePackEntries.keys.sorted() : bankCandidates
+        let candidateIDs = mainBankSampleIDs(for: activeSampleBank)
 
         guard !candidateIDs.isEmpty else {
             pushStatus(StatusLineEvent(
@@ -4573,6 +4660,9 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             let lane = event.macro?.lane ?? 0
             let value = event.macro?.value ?? 0
             return "PUSH \(event.sourceId) M\(lane) \(String(format: "%.2f", value))"
+        case .longStrip:
+            let value = event.longStrip?.value ?? 0
+            return "PUSH \(event.sourceId) LONG \(String(format: "%.2f", value))"
         case .bankSelect:
             let domain = event.bank?.domain.rawValue ?? "main"
             let bank = event.bank?.bank ?? 1
@@ -4689,10 +4779,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return
         }
 
-        let bankCandidates = hotasProfile.sampleBanks
-            .sampleIDs(for: activeSampleBank, domain: .main)
-            .filter { samplePackEntries[$0] != nil }
-        let candidateIDs = bankCandidates.isEmpty ? samplePackEntries.keys.sorted() : bankCandidates
+        let candidateIDs = mainBankSampleIDs(for: activeSampleBank)
 
         guard !candidateIDs.isEmpty else {
             pushStatus(StatusLineEvent(
@@ -4932,11 +5019,13 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 if let resolved = try? resolveSamplePackEntries(from: manifestURL) {
                     samplePackEntries = resolved.entries
                     sampleMetadataByID = resolved.metadata
+                    sampleLabelByID = resolved.labels
                     if let firstID = resolved.entries.keys.sorted().first {
                         selectedSampleID = firstID
                     }
                     updateEffectsPresetForActiveBank()
                     applyStaticSampleMorphSelection()
+                    publishPushPadLabelsForActiveMainBank(force: true)
                 }
             }
 

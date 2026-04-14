@@ -1,0 +1,456 @@
+{
+  "bank": 1,
+  "title": "666 \u0287",
+  "sourceFile": "main_b1_source.wav",
+  "durationSec": 252.053333,
+  "slices": [
+    {
+      "slot": 0,
+      "fileName": "main_b1_01.wav",
+      "label": "666 \u0287 \u00b7 01",
+      "startSec": 0.441179,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 1,
+      "fileName": "main_b1_02.wav",
+      "label": "666 \u0287 \u00b7 02",
+      "startSec": 6.176508,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 2,
+      "fileName": "main_b1_03.wav",
+      "label": "666 \u0287 \u00b7 03",
+      "startSec": 10.843719,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 3,
+      "fileName": "main_b1_04.wav",
+      "label": "666 \u0287 \u00b7 04",
+      "startSec": 14.117732,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 4,
+      "fileName": "main_b1_05.wav",
+      "label": "666 \u0287 \u00b7 05",
+      "startSec": 19.040363,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 5,
+      "fileName": "main_b1_06.wav",
+      "label": "666 \u0287 \u00b7 06",
+      "startSec": 22.848435,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 6,
+      "fileName": "main_b1_07.wav",
+      "label": "666 \u0287 \u00b7 07",
+      "startSec": 27.190567,
+      "oneShotSec": 0.992653
+    },
+    {
+      "slot": 7,
+      "fileName": "main_b1_08.wav",
+      "label": "666 \u0287 \u00b7 08",
+      "startSec": 28.293515,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 8,
+      "fileName": "main_b1_09.wav",
+      "label": "666 \u0287 \u00b7 09",
+      "startSec": 32.136417,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 9,
+      "fileName": "main_b1_10.wav",
+      "label": "666 \u0287 \u00b7 10",
+      "startSec": 36.420499,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 10,
+      "fileName": "main_b1_11.wav",
+      "label": "666 \u0287 \u00b7 11",
+      "startSec": 43.247166,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 11,
+      "fileName": "main_b1_12.wav",
+      "label": "666 \u0287 \u00b7 12",
+      "startSec": 46.521179,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 12,
+      "fileName": "main_b1_13.wav",
+      "label": "666 \u0287 \u00b7 13",
+      "startSec": 49.574603,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 13,
+      "fileName": "main_b1_14.wav",
+      "label": "666 \u0287 \u00b7 14",
+      "startSec": 54.497234,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 14,
+      "fileName": "main_b1_15.wav",
+      "label": "666 \u0287 \u00b7 15",
+      "startSec": 58.850975,
+      "oneShotSec": 0.700082
+    },
+    {
+      "slot": 15,
+      "fileName": "main_b1_16.wav",
+      "label": "666 \u0287 \u00b7 16",
+      "startSec": 59.628844,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 16,
+      "fileName": "main_b1_17.wav",
+      "label": "666 \u0287 \u00b7 17",
+      "startSec": 63.820045,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 17,
+      "fileName": "main_b1_18.wav",
+      "label": "666 \u0287 \u00b7 18",
+      "startSec": 67.268209,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 18,
+      "fileName": "main_b1_19.wav",
+      "label": "666 \u0287 \u00b7 19",
+      "startSec": 74.385125,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 19,
+      "fileName": "main_b1_20.wav",
+      "label": "666 \u0287 \u00b7 20",
+      "startSec": 76.55619,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 20,
+      "fileName": "main_b1_21.wav",
+      "label": "666 \u0287 \u00b7 21",
+      "startSec": 80.921542,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 21,
+      "fileName": "main_b1_22.wav",
+      "label": "666 \u0287 \u00b7 22",
+      "startSec": 86.471111,
+      "oneShotSec": 0.626939
+    },
+    {
+      "slot": 22,
+      "fileName": "main_b1_23.wav",
+      "label": "666 \u0287 \u00b7 23",
+      "startSec": 87.16771,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 23,
+      "fileName": "main_b1_24.wav",
+      "label": "666 \u0287 \u00b7 24",
+      "startSec": 92.879819,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 24,
+      "fileName": "main_b1_25.wav",
+      "label": "666 \u0287 \u00b7 25",
+      "startSec": 96.989751,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 25,
+      "fileName": "main_b1_26.wav",
+      "label": "666 \u0287 \u00b7 26",
+      "startSec": 102.20263,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 26,
+      "fileName": "main_b1_27.wav",
+      "label": "666 \u0287 \u00b7 27",
+      "startSec": 105.987483,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 27,
+      "fileName": "main_b1_28.wav",
+      "label": "666 \u0287 \u00b7 28",
+      "startSec": 108.994467,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 28,
+      "fileName": "main_b1_29.wav",
+      "label": "666 \u0287 \u00b7 29",
+      "startSec": 111.722812,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 29,
+      "fileName": "main_b1_30.wav",
+      "label": "666 \u0287 \u00b7 30",
+      "startSec": 117.96898,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 30,
+      "fileName": "main_b1_31.wav",
+      "label": "666 \u0287 \u00b7 31",
+      "startSec": 121.219773,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 31,
+      "fileName": "main_b1_32.wav",
+      "label": "666 \u0287 \u00b7 32",
+      "startSec": 125.619955,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 32,
+      "fileName": "main_b1_33.wav",
+      "label": "666 \u0287 \u00b7 33",
+      "startSec": 128.626939,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 33,
+      "fileName": "main_b1_34.wav",
+      "label": "666 \u0287 \u00b7 34",
+      "startSec": 132.469841,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 34,
+      "fileName": "main_b1_35.wav",
+      "label": "666 \u0287 \u00b7 35",
+      "startSec": 136.823583,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 35,
+      "fileName": "main_b1_36.wav",
+      "label": "666 \u0287 \u00b7 36",
+      "startSec": 139.110748,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 36,
+      "fileName": "main_b1_37.wav",
+      "label": "666 \u0287 \u00b7 37",
+      "startSec": 143.36,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 37,
+      "fileName": "main_b1_38.wav",
+      "label": "666 \u0287 \u00b7 38",
+      "startSec": 147.330612,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 38,
+      "fileName": "main_b1_39.wav",
+      "label": "666 \u0287 \u00b7 39",
+      "startSec": 152.380952,
+      "oneShotSec": 1.347918
+    },
+    {
+      "slot": 39,
+      "fileName": "main_b1_40.wav",
+      "label": "666 \u0287 \u00b7 40",
+      "startSec": 153.878639,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 40,
+      "fileName": "main_b1_41.wav",
+      "label": "666 \u0287 \u00b7 41",
+      "startSec": 160.287347,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 41,
+      "fileName": "main_b1_42.wav",
+      "label": "666 \u0287 \u00b7 42",
+      "startSec": 164.199909,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 42,
+      "fileName": "main_b1_43.wav",
+      "label": "666 \u0287 \u00b7 43",
+      "startSec": 167.926712,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 43,
+      "fileName": "main_b1_44.wav",
+      "label": "666 \u0287 \u00b7 44",
+      "startSec": 171.990204,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 44,
+      "fileName": "main_b1_45.wav",
+      "label": "666 \u0287 \u00b7 45",
+      "startSec": 174.439909,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 45,
+      "fileName": "main_b1_46.wav",
+      "label": "666 \u0287 \u00b7 46",
+      "startSec": 180.976327,
+      "oneShotSec": 0.741878
+    },
+    {
+      "slot": 46,
+      "fileName": "main_b1_47.wav",
+      "label": "666 \u0287 \u00b7 47",
+      "startSec": 181.800635,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 47,
+      "fileName": "main_b1_48.wav",
+      "label": "666 \u0287 \u00b7 48",
+      "startSec": 185.144308,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 48,
+      "fileName": "main_b1_49.wav",
+      "label": "666 \u0287 \u00b7 49",
+      "startSec": 189.776689,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 49,
+      "fileName": "main_b1_50.wav",
+      "label": "666 \u0287 \u00b7 50",
+      "startSec": 194.69932,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 50,
+      "fileName": "main_b1_51.wav",
+      "label": "666 \u0287 \u00b7 51",
+      "startSec": 198.437732,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 51,
+      "fileName": "main_b1_52.wav",
+      "label": "666 \u0287 \u00b7 52",
+      "startSec": 203.952472,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 52,
+      "fileName": "main_b1_53.wav",
+      "label": "666 \u0287 \u00b7 53",
+      "startSec": 207.447075,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 53,
+      "fileName": "main_b1_54.wav",
+      "label": "666 \u0287 \u00b7 54",
+      "startSec": 212.462585,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 54,
+      "fileName": "main_b1_55.wav",
+      "label": "666 \u0287 \u00b7 55",
+      "startSec": 215.933968,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 55,
+      "fileName": "main_b1_56.wav",
+      "label": "666 \u0287 \u00b7 56",
+      "startSec": 218.906122,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 56,
+      "fileName": "main_b1_57.wav",
+      "label": "666 \u0287 \u00b7 57",
+      "startSec": 221.390658,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 57,
+      "fileName": "main_b1_58.wav",
+      "label": "666 \u0287 \u00b7 58",
+      "startSec": 225.721179,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 58,
+      "fileName": "main_b1_59.wav",
+      "label": "666 \u0287 \u00b7 59",
+      "startSec": 230.33034,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 59,
+      "fileName": "main_b1_60.wav",
+      "label": "666 \u0287 \u00b7 60",
+      "startSec": 235.020771,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 60,
+      "fileName": "main_b1_61.wav",
+      "label": "666 \u0287 \u00b7 61",
+      "startSec": 237.737506,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 61,
+      "fileName": "main_b1_62.wav",
+      "label": "666 \u0287 \u00b7 62",
+      "startSec": 241.580408,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 62,
+      "fileName": "main_b1_63.wav",
+      "label": "666 \u0287 \u00b7 63",
+      "startSec": 246.050249,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 63,
+      "fileName": "main_b1_64.wav",
+      "label": "666 \u0287 \u00b7 64",
+      "startSec": 249.719002,
+      "oneShotSec": 1.35
+    }
+  ]
+}

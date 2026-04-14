@@ -1,0 +1,456 @@
+{
+  "bank": 2,
+  "title": "29 #Strafford APTS",
+  "sourceFile": "main_b2_source.wav",
+  "durationSec": 245.144694,
+  "slices": [
+    {
+      "slot": 0,
+      "fileName": "main_b2_01.wav",
+      "label": "29 #Strafford APTS \u00b7 01",
+      "startSec": 0.10449,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 1,
+      "fileName": "main_b2_02.wav",
+      "label": "29 #Strafford APTS \u00b7 02",
+      "startSec": 5.688889,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 2,
+      "fileName": "main_b2_03.wav",
+      "label": "29 #Strafford APTS \u00b7 03",
+      "startSec": 9.137052,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 3,
+      "fileName": "main_b2_04.wav",
+      "label": "29 #Strafford APTS \u00b7 04",
+      "startSec": 12.979955,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 4,
+      "fileName": "main_b2_05.wav",
+      "label": "29 #Strafford APTS \u00b7 05",
+      "startSec": 16.462948,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 5,
+      "fileName": "main_b2_06.wav",
+      "label": "29 #Strafford APTS \u00b7 06",
+      "startSec": 19.899501,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 6,
+      "fileName": "main_b2_07.wav",
+      "label": "29 #Strafford APTS \u00b7 07",
+      "startSec": 23.138685,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 7,
+      "fileName": "main_b2_08.wav",
+      "label": "29 #Strafford APTS \u00b7 08",
+      "startSec": 28.351565,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 8,
+      "fileName": "main_b2_09.wav",
+      "label": "29 #Strafford APTS \u00b7 09",
+      "startSec": 31.219229,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 9,
+      "fileName": "main_b2_10.wav",
+      "label": "29 #Strafford APTS \u00b7 10",
+      "startSec": 37.523447,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 10,
+      "fileName": "main_b2_11.wav",
+      "label": "29 #Strafford APTS \u00b7 11",
+      "startSec": 41.13415,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 11,
+      "fileName": "main_b2_12.wav",
+      "label": "29 #Strafford APTS \u00b7 12",
+      "startSec": 43.641905,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 12,
+      "fileName": "main_b2_13.wav",
+      "label": "29 #Strafford APTS \u00b7 13",
+      "startSec": 46.660499,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 13,
+      "fileName": "main_b2_14.wav",
+      "label": "29 #Strafford APTS \u00b7 14",
+      "startSec": 51.29288,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 14,
+      "fileName": "main_b2_15.wav",
+      "label": "29 #Strafford APTS \u00b7 15",
+      "startSec": 56.4361,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 15,
+      "fileName": "main_b2_16.wav",
+      "label": "29 #Strafford APTS \u00b7 16",
+      "startSec": 60.789841,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 16,
+      "fileName": "main_b2_17.wav",
+      "label": "29 #Strafford APTS \u00b7 17",
+      "startSec": 64.446984,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 17,
+      "fileName": "main_b2_18.wav",
+      "label": "29 #Strafford APTS \u00b7 18",
+      "startSec": 66.246531,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 18,
+      "fileName": "main_b2_19.wav",
+      "label": "29 #Strafford APTS \u00b7 19",
+      "startSec": 72.608798,
+      "oneShotSec": 1.170286
+    },
+    {
+      "slot": 19,
+      "fileName": "main_b2_20.wav",
+      "label": "29 #Strafford APTS \u00b7 20",
+      "startSec": 73.909116,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 20,
+      "fileName": "main_b2_21.wav",
+      "label": "29 #Strafford APTS \u00b7 21",
+      "startSec": 76.96254,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 21,
+      "fileName": "main_b2_22.wav",
+      "label": "29 #Strafford APTS \u00b7 22",
+      "startSec": 82.326349,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 22,
+      "fileName": "main_b2_23.wav",
+      "label": "29 #Strafford APTS \u00b7 23",
+      "startSec": 85.611973,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 23,
+      "fileName": "main_b2_24.wav",
+      "label": "29 #Strafford APTS \u00b7 24",
+      "startSec": 89.164626,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 24,
+      "fileName": "main_b2_25.wav",
+      "label": "29 #Strafford APTS \u00b7 25",
+      "startSec": 95.248254,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 25,
+      "fileName": "main_b2_26.wav",
+      "label": "29 #Strafford APTS \u00b7 26",
+      "startSec": 98.870567,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 26,
+      "fileName": "main_b2_27.wav",
+      "label": "29 #Strafford APTS \u00b7 27",
+      "startSec": 100.484354,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 27,
+      "fileName": "main_b2_28.wav",
+      "label": "29 #Strafford APTS \u00b7 28",
+      "startSec": 104.443356,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 28,
+      "fileName": "main_b2_29.wav",
+      "label": "29 #Strafford APTS \u00b7 29",
+      "startSec": 110.596644,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 29,
+      "fileName": "main_b2_30.wav",
+      "label": "29 #Strafford APTS \u00b7 30",
+      "startSec": 114.880726,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 30,
+      "fileName": "main_b2_31.wav",
+      "label": "29 #Strafford APTS \u00b7 31",
+      "startSec": 117.66712,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 31,
+      "fileName": "main_b2_32.wav",
+      "label": "29 #Strafford APTS \u00b7 32",
+      "startSec": 120.407075,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 32,
+      "fileName": "main_b2_33.wav",
+      "label": "29 #Strafford APTS \u00b7 33",
+      "startSec": 125.805714,
+      "oneShotSec": 0.689633
+    },
+    {
+      "slot": 33,
+      "fileName": "main_b2_34.wav",
+      "label": "29 #Strafford APTS \u00b7 34",
+      "startSec": 126.571973,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 34,
+      "fileName": "main_b2_35.wav",
+      "label": "29 #Strafford APTS \u00b7 35",
+      "startSec": 133.37542,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 35,
+      "fileName": "main_b2_36.wav",
+      "label": "29 #Strafford APTS \u00b7 36",
+      "startSec": 137.671111,
+      "oneShotSec": 0.386612
+    },
+    {
+      "slot": 36,
+      "fileName": "main_b2_37.wav",
+      "label": "29 #Strafford APTS \u00b7 37",
+      "startSec": 138.10068,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 37,
+      "fileName": "main_b2_38.wav",
+      "label": "29 #Strafford APTS \u00b7 38",
+      "startSec": 142.953651,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 38,
+      "fileName": "main_b2_39.wav",
+      "label": "29 #Strafford APTS \u00b7 39",
+      "startSec": 148.48,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 39,
+      "fileName": "main_b2_40.wav",
+      "label": "29 #Strafford APTS \u00b7 40",
+      "startSec": 153.158821,
+      "oneShotSec": 0.16
+    },
+    {
+      "slot": 40,
+      "fileName": "main_b2_41.wav",
+      "label": "29 #Strafford APTS \u00b7 41",
+      "startSec": 153.216871,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 41,
+      "fileName": "main_b2_42.wav",
+      "label": "29 #Strafford APTS \u00b7 42",
+      "startSec": 158.55746,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 42,
+      "fileName": "main_b2_43.wav",
+      "label": "29 #Strafford APTS \u00b7 43",
+      "startSec": 161.204535,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 43,
+      "fileName": "main_b2_44.wav",
+      "label": "29 #Strafford APTS \u00b7 44",
+      "startSec": 168.170522,
+      "oneShotSec": 0.794122
+    },
+    {
+      "slot": 44,
+      "fileName": "main_b2_45.wav",
+      "label": "29 #Strafford APTS \u00b7 45",
+      "startSec": 169.05288,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 45,
+      "fileName": "main_b2_46.wav",
+      "label": "29 #Strafford APTS \u00b7 46",
+      "startSec": 175.090068,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 46,
+      "fileName": "main_b2_47.wav",
+      "label": "29 #Strafford APTS \u00b7 47",
+      "startSec": 180.008135,
+      "oneShotSec": 0.16
+    },
+    {
+      "slot": 47,
+      "fileName": "main_b2_48.wav",
+      "label": "29 #Strafford APTS \u00b7 48",
+      "startSec": 180.048135,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 48,
+      "fileName": "main_b2_49.wav",
+      "label": "29 #Strafford APTS \u00b7 49",
+      "startSec": 184.22712,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 49,
+      "fileName": "main_b2_50.wav",
+      "label": "29 #Strafford APTS \u00b7 50",
+      "startSec": 189.42839,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 50,
+      "fileName": "main_b2_51.wav",
+      "label": "29 #Strafford APTS \u00b7 51",
+      "startSec": 191.889705,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 51,
+      "fileName": "main_b2_52.wav",
+      "label": "29 #Strafford APTS \u00b7 52",
+      "startSec": 196.510476,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 52,
+      "fileName": "main_b2_53.wav",
+      "label": "29 #Strafford APTS \u00b7 53",
+      "startSec": 199.55229,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 53,
+      "fileName": "main_b2_54.wav",
+      "label": "29 #Strafford APTS \u00b7 54",
+      "startSec": 206.773696,
+      "oneShotSec": 1.32702
+    },
+    {
+      "slot": 54,
+      "fileName": "main_b2_55.wav",
+      "label": "29 #Strafford APTS \u00b7 55",
+      "startSec": 208.248163,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 55,
+      "fileName": "main_b2_56.wav",
+      "label": "29 #Strafford APTS \u00b7 56",
+      "startSec": 211.591837,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 56,
+      "fileName": "main_b2_57.wav",
+      "label": "29 #Strafford APTS \u00b7 57",
+      "startSec": 215.527619,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 57,
+      "fileName": "main_b2_58.wav",
+      "label": "29 #Strafford APTS \u00b7 58",
+      "startSec": 219.207982,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 58,
+      "fileName": "main_b2_59.wav",
+      "label": "29 #Strafford APTS \u00b7 59",
+      "startSec": 222.365896,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 59,
+      "fileName": "main_b2_60.wav",
+      "label": "29 #Strafford APTS \u00b7 60",
+      "startSec": 227.416236,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 60,
+      "fileName": "main_b2_61.wav",
+      "label": "29 #Strafford APTS \u00b7 61",
+      "startSec": 231.804807,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 61,
+      "fileName": "main_b2_62.wav",
+      "label": "29 #Strafford APTS \u00b7 62",
+      "startSec": 234.010703,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 62,
+      "fileName": "main_b2_63.wav",
+      "label": "29 #Strafford APTS \u00b7 63",
+      "startSec": 237.598186,
+      "oneShotSec": 1.35
+    },
+    {
+      "slot": 63,
+      "fileName": "main_b2_64.wav",
+      "label": "29 #Strafford APTS \u00b7 64",
+      "startSec": 241.371429,
+      "oneShotSec": 1.35
+    }
+  ]
+}
