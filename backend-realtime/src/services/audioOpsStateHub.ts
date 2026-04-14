@@ -3,6 +3,7 @@ import type {
   AudioOpsStatePayload,
   CrowdPickResultPayload,
   CrowdPickWindowPayload,
+  ProgramProceduralState,
   PhoneAudioPoolStatePayload,
   TextScenePayload
 } from "@conductor/protocol";
@@ -31,6 +32,7 @@ export class AudioOpsStateHub {
 
   private pickWindow: CrowdPickWindowPayload | null = null;
   private pickResult: CrowdPickResultPayload | null = null;
+  private proceduralState: ProgramProceduralState | undefined;
   private textScene: TextScenePayload = {
     sceneVersion: 0,
     pickEpoch: 0,
@@ -62,6 +64,7 @@ export class AudioOpsStateHub {
       phoneAudioPool: this.phoneAudioPool,
       pickWindow: this.pickWindow,
       pickResult: this.pickResult,
+      proceduralState: this.proceduralState,
       textScene: this.textScene,
       updatedAt: Date.now()
     };
@@ -84,6 +87,11 @@ export class AudioOpsStateHub {
 
   setPickResult(result: CrowdPickResultPayload | null): AudioOpsStatePayload {
     this.pickResult = result;
+    return this.emit();
+  }
+
+  setProceduralState(state: ProgramProceduralState): AudioOpsStatePayload {
+    this.proceduralState = state;
     return this.emit();
   }
 

@@ -14,6 +14,7 @@ import {
   type PhoneAudioAckPayload,
   type PhoneAudioCommandPayload,
   type PhoneAudioPoolStatePayload,
+  type ProgramProceduralState,
   type SyncPacket,
   type TextScenePayload,
   type WireEnvelope
@@ -41,6 +42,7 @@ interface SessionState {
   phoneAudioPoolState: PhoneAudioPoolStatePayload;
   crowdPickWindow: CrowdPickWindowPayload | null;
   crowdPickResult: CrowdPickResultPayload | null;
+  proceduralState: ProgramProceduralState;
   textScene: TextScenePayload;
   phoneAudioCommand: PhoneAudioCommandPayload | null;
   sendPermissions: (permissions: DevicePermissions) => void;
@@ -109,6 +111,33 @@ const defaultTextScene: TextScenePayload = {
   }
 };
 
+const defaultProceduralState: ProgramProceduralState = {
+  epoch: 0,
+  seed: 0,
+  updatedAt: 0,
+  dynamicBinSelection: 0.5,
+  dynamicBinIndex: 0,
+  dynamicBinClipId: null,
+  dynamicBinManifest: [],
+  cutCadence: 0.5,
+  transitionMode: "cut",
+  compositorPreset: "blend",
+  splitLayout: "none",
+  fade: 0,
+  textProbability: 0.5,
+  strictLooseBlend: 0.5,
+  visualVariance: 0.5,
+  crowdSteeringLevel: 0,
+  performerVector: defaultVector,
+  audienceVector: defaultVector,
+  textBlend: {
+    mode: "always-mixed",
+    probability: 0.5,
+    strictRatio: 0.5,
+    looseRatio: 0.5
+  }
+};
+
 export const computeReconnectDelayMs = (attempt: number, jitterSeed: number = 0.5): number => {
   const normalizedAttempt = Math.max(1, attempt);
   const unclampedBase = 1000 * Math.pow(2, normalizedAttempt - 1);
@@ -149,6 +178,7 @@ export const useConductorSession = (hashedId: string): SessionState => {
   );
   const [crowdPickWindow, setCrowdPickWindow] = useState<CrowdPickWindowPayload | null>(null);
   const [crowdPickResult, setCrowdPickResult] = useState<CrowdPickResultPayload | null>(null);
+  const [proceduralState, setProceduralState] = useState<ProgramProceduralState>(defaultProceduralState);
   const [textScene, setTextScene] = useState<TextScenePayload>(defaultTextScene);
   const [phoneAudioCommand, setPhoneAudioCommand] = useState<PhoneAudioCommandPayload | null>(null);
 
@@ -365,6 +395,10 @@ export const useConductorSession = (hashedId: string): SessionState => {
           setTextScene(envelope.data as TextScenePayload);
         }
 
+        if (envelope.kind === "procedural_state") {
+          setProceduralState(envelope.data as ProgramProceduralState);
+        }
+
         if (envelope.kind === "phone_audio_command") {
           setPhoneAudioCommand(envelope.data as PhoneAudioCommandPayload);
         }
@@ -460,6 +494,7 @@ export const useConductorSession = (hashedId: string): SessionState => {
     phoneAudioPoolState,
     crowdPickWindow,
     crowdPickResult,
+    proceduralState,
     textScene,
     phoneAudioCommand,
     sendPermissions,

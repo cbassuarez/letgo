@@ -52,9 +52,10 @@ private enum ImportModuleKind: Identifiable {
 
 struct ConductorSurfaceView: View {
     @ObservedObject var model: ConductorHarnessViewModel
+    @ObservedObject var inspectorPresentation: InspectorPresentationState
 
     @State private var blinkOn = false
-    @State private var inspectorOpen = false
+    @State private var setupModalOpen = false
     @State private var activeImportModal: ImportModuleKind?
 
     private let blinkTimer = Timer.publish(every: 0.45, on: .main, in: .common).autoconnect()
@@ -75,16 +76,17 @@ struct ConductorSurfaceView: View {
 
             flightLogPanel
                 .frame(height: 150)
-
-            if inspectorOpen {
-                inspectorDrawer
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
         }
         .padding(14)
         .frame(minWidth: 1280, minHeight: 860)
         .background(ConsoleTheme.consoleBackground)
         .preferredColorScheme(.dark)
+        .overlay {
+            WindowAccessor { window in
+                WindowChromeCoordinator.applyChromelessHUD(to: window, isResizable: true)
+            }
+            .allowsHitTesting(false)
+        }
         .onReceive(blinkTimer) { _ in
             guard shouldAnimateBlink else {
                 if blinkOn {
@@ -94,17 +96,38 @@ struct ConductorSurfaceView: View {
             }
             blinkOn.toggle()
         }
+        .onAppear {
+            inspectorPresentation.markActive(.fullConsole)
+        }
         .sheet(item: $activeImportModal) { module in
             ImportModuleSheet(module: module, model: model)
                 .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $setupModalOpen) {
+            SetupSheet(model: model)
+                .preferredColorScheme(.dark)
+        }
+        .sheet(
+            isPresented: Binding(
+                get: {
+                    inspectorPresentation.isPresented && inspectorPresentation.source == .fullConsole
+                },
+                set: { isPresented in
+                    if isPresented {
+                        inspectorPresentation.present(from: .fullConsole)
+                    } else {
+                        inspectorPresentation.dismiss()
+                    }
+                }
+            )
+        ) {
+            InspectorModalView(model: model, presentation: inspectorPresentation)
         }
     }
 
     private var shouldAnimateBlink: Bool {
         model.linkState == .connecting
             || model.linkState == .backoff
-            || model.isLatchArmed
-            || model.masterArmKey == .armed
             || model.state == .hold
             || model.state == .aborted
     }
@@ -177,25 +200,44 @@ struct ConductorSurfaceView: View {
 
             Spacer()
 
-            Button {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    inspectorOpen.toggle()
+            HStack(spacing: 8) {
+                Button {
+                    model.refreshSetupInventory()
+                    setupModalOpen = true
+                } label: {
+                    Text("SETUP")
+                        .font(ConsoleTheme.smallTagFont(size: 9))
+                        .tracking(1.4)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(Color.white.opacity(0.7))
+                        .background(ConsoleTheme.panelInnerFill)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(ConsoleTheme.panelStroke, lineWidth: 0.7)
+                        )
                 }
-            } label: {
-                Text(inspectorOpen ? "HIDE INSPECTOR" : "INSPECTOR")
-                    .font(ConsoleTheme.smallTagFont(size: 9))
-                    .tracking(1.4)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .foregroundStyle(Color.white.opacity(0.7))
-                    .background(ConsoleTheme.panelInnerFill)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(ConsoleTheme.panelStroke, lineWidth: 0.7)
-                    )
+                .buttonStyle(.plain)
+
+                Button {
+                    inspectorPresentation.present(from: .fullConsole)
+                } label: {
+                    Text("INSPECTOR")
+                        .font(ConsoleTheme.smallTagFont(size: 9))
+                        .tracking(1.4)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(Color.white.opacity(0.7))
+                        .background(ConsoleTheme.panelInnerFill)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(ConsoleTheme.panelStroke, lineWidth: 0.7)
+                        )
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -411,25 +453,26 @@ struct ConductorSurfaceView: View {
                         .tracking(1.4)
                         .foregroundStyle(Color.white.opacity(0.45))
 
-                    HStack(spacing: 10) {
-                        timelineButton(
+                    HStack(alignment: .top, spacing: 10) {
+                        timelineStepChip(
                             "PRESHOW",
                             laneId: "preshow",
-                            isActive: model.state == .preshow,
-                            action: model.runPreshowTimelineStep
+                            activeState: .preshow,
+                            armAction: model.runPreshowTimelineStep
                         )
-                        timelineButton(
+                        timelineStepChip(
                             "INTRO",
                             laneId: "introduction",
-                            isActive: model.state == .introduction,
-                            action: model.runIntroductionTimelineStep
+                            activeState: .introduction,
+                            armAction: model.runIntroductionTimelineStep
                         )
-                        timelineButton(
+                        timelineStepChip(
                             "ENDING",
                             laneId: "ending",
-                            isActive: model.state == .ending,
-                            action: model.runEndingTimelineStep
+                            activeState: .ending,
+                            armAction: model.runEndingTimelineStep
                         )
+                        timelineTakeColumn
                         Spacer()
                         if let cue = model.latestCue {
                             Text("LAST CUE  \(cue.cueId)")
@@ -446,46 +489,91 @@ struct ConductorSurfaceView: View {
         }
     }
 
-    private func timelineButton(
+    private func timelineStepChip(
         _ label: String,
         laneId: String,
-        isActive: Bool,
-        action: @escaping () -> Void
+        activeState: ShowState,
+        armAction: @escaping () -> Void
     ) -> some View {
         let isLocked = model.isTimelineStepLocked(laneId)
         let isArmed = model.isTimelineStepArmed(laneId)
-        let buttonColor: Color
-        if isLocked {
-            buttonColor = ConsoleTheme.lampRed
-        } else if isArmed {
-            buttonColor = ConsoleTheme.lampAmber
-        } else if isActive {
-            buttonColor = ConsoleTheme.lampBlue
-        } else {
-            buttonColor = ConsoleTheme.lampStandby
-        }
+        let isActive = model.state == activeState
+        let canArm = model.canArmTimelineStep(laneId)
 
-        let subtitle: String?
-        if isLocked {
-            subtitle = "locked"
-        } else if isArmed {
-            subtitle = "armed"
-        } else {
-            subtitle = "queue"
-        }
+        let chipColor: Color = {
+            if isActive { return ConsoleTheme.lampBlue }
+            if isArmed { return ConsoleTheme.lampAmber }
+            if isLocked { return ConsoleTheme.lampRed }
+            return ConsoleTheme.lampStandby
+        }()
 
-        return IlluminatedButton(
-            label: label,
-            subtitle: subtitle,
-            color: buttonColor,
-            isLit: isActive || isArmed || isLocked,
-            isEnabled: model.engineRunning && !isLocked,
-            blinkOn: blinkOn,
-            pulseWhenLit: isArmed,
-            minWidth: 90,
-            minHeight: 36,
-            action: action
-        )
+        let statusLabel: String = {
+            if isActive { return "LIVE" }
+            if isArmed { return "ARMED" }
+            if isLocked { return "LOCKED" }
+            return "READY"
+        }()
+
+        return VStack(alignment: .leading, spacing: 5) {
+            IlluminatedButton(
+                label: label,
+                subtitle: statusLabel.lowercased(),
+                color: chipColor,
+                isLit: isActive || isArmed || isLocked,
+                isEnabled: canArm || isArmed,
+                blinkOn: blinkOn,
+                pulseWhenLit: isArmed,
+                minWidth: 110,
+                minHeight: 52,
+                action: armAction
+            )
+
+            TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
+                let progress = model.timelineStepProgress(for: laneId, at: timeline.date)
+                HStack(spacing: 6) {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule()
+                                .fill(Color.white.opacity(0.09))
+                            Capsule()
+                                .fill(chipColor.opacity(isActive ? 0.95 : 0.65))
+                                .frame(width: max(2, geo.size.width * progress))
+                        }
+                    }
+                    .frame(height: 6)
+
+                    Text("\(Int((progress * 100).rounded()))%")
+                        .font(ConsoleTheme.telemetryFont(size: 8))
+                        .foregroundStyle(Color.white.opacity(0.52))
+                        .frame(width: 26, alignment: .trailing)
+                }
+            }
+            .frame(height: 10)
+        }
+        .frame(minWidth: 118, minHeight: 68, alignment: .topLeading)
+        .opacity((isLocked && !isActive) ? 0.72 : 1.0)
+    }
+
+    private var timelineTakeColumn: some View {
+        VStack(spacing: 6) {
+            Text("TAKE")
+                .font(ConsoleTheme.smallTagFont(size: 9))
+                .tracking(1.6)
+                .foregroundStyle(Color.white.opacity(0.55))
+
+            IlluminatedButton(
+                label: "TAKE",
+                color: ConsoleTheme.lampGreen,
+                isLit: model.canTakeArmedTimelineStep(),
+                isEnabled: model.canTakeArmedTimelineStep(),
+                blinkOn: blinkOn,
+                pulseWhenLit: true,
+                minWidth: 70,
+                minHeight: 78,
+                action: model.takeArmedTimelineStep
+            )
+        }
+        .frame(width: 90)
     }
 
     private var soundControlDeck: some View {
@@ -498,12 +586,21 @@ struct ConductorSurfaceView: View {
             HStack(alignment: .top, spacing: 10) {
                 soundModule(title: "SOUND ENGINE", accent: ConsoleTheme.lampGreen) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(model.quadRouteReady ? "QUAD READY" : "QUAD NOGO")
+                        Text(model.audioRouteStatusSummary)
                             .font(ConsoleTheme.smallTagFont(size: 8))
-                            .foregroundStyle(model.quadRouteReady ? ConsoleTheme.lampGreen : ConsoleTheme.lampAmber)
+                            .foregroundStyle(audioRouteColor)
                         Text("Route \(model.quadRouteChannelCount)ch")
                             .font(ConsoleTheme.telemetryFont(size: 9))
                             .foregroundStyle(Color.white.opacity(0.58))
+                        Text("Bank \(model.activeSampleBank) · FX A \(model.effectsChainState.chainAActive ? "ON" : "OFF") · FX B \(model.effectsChainState.chainBActive ? "ON" : "OFF")")
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.5))
+                        Text("Role \(rightStickRoleLabel) · Clutch \(model.hotasStaticVisualOverrideHeld ? "HELD" : "OFF")")
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.52))
+                        Text("Static m\(decimal(model.staticAudioMacroState.sampleMorph)) a\(decimal(model.staticAudioMacroState.articulation)) t\(decimal(model.staticAudioMacroState.timbre)) s\(decimal(model.staticAudioMacroState.textureSend))")
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.48))
                         HStack(spacing: 6) {
                             Button("CHECK") { model.refreshQuadRouteStatus() }
                                 .buttonStyle(.bordered)
@@ -541,6 +638,9 @@ struct ConductorSurfaceView: View {
                         Text(model.sampleEntrySummary().uppercased())
                             .font(ConsoleTheme.telemetryFont(size: 9))
                             .foregroundStyle(Color.white.opacity(0.62))
+                        Text("Blend strict \(decimal(model.programProceduralState.strictLooseBlend)) · text p \(decimal(model.programProceduralState.textProbability))")
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.5))
                         HStack(spacing: 6) {
                             Button("TRIGGER") { model.triggerSamplePlayback() }
                                 .buttonStyle(.bordered)
@@ -566,6 +666,12 @@ struct ConductorSurfaceView: View {
                         Text("POOL \(model.phoneAudioAvailableDevices.count) · VOICES \(model.phoneAudioActiveVoices.count)")
                             .font(ConsoleTheme.telemetryFont(size: 9))
                             .foregroundStyle(Color.white.opacity(0.6))
+                        Text("Zones \(model.phoneAudioZoneOccupancy.count) · Top \(dominantZoneLabel) · Failover \(model.phoneAudioFailoverCount) · Unhealthy \(unhealthyChoirDeviceCount)")
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.52))
+                        Text("Field s\(decimal(model.choirFieldState.spread)) d\(decimal(model.choirFieldState.depth)) t\(decimal(model.choirFieldState.detune)) · Ctx \(model.hotasPhoneChoirContextActive ? "ON" : "OFF")")
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.52))
                         Picker("Target", selection: $model.phoneAudioTargetMode) {
                             ForEach(PhoneAudioTargetMode.allCases) { mode in
                                 Text(mode.rawValue.uppercased()).tag(mode)
@@ -661,39 +767,139 @@ struct ConductorSurfaceView: View {
         )
     }
 
-    // MARK: - Right column: vectors + telemetry
+    // MARK: - Right column: control plane + action stream + telemetry
 
     private var rightColumn: some View {
         VStack(spacing: 12) {
-            ConsolePanel("DYNAMIC VECTORS", accent: ConsoleTheme.lampGreen) {
-                VStack(spacing: 8) {
-                    HStack(alignment: .bottom, spacing: 4) {
-                        Bargraph(label: "TXT", value: model.vector.textAmount) {
-                            model.patchVector(ParamVectorPatch(textAmount: $0))
-                        }
-                        Bargraph(label: "BIAS", value: model.vector.compositeBias) {
-                            model.patchVector(ParamVectorPatch(compositeBias: $0))
-                        }
-                        Bargraph(label: "GAIN", value: model.vector.audioGain) {
-                            model.patchVector(ParamVectorPatch(audioGain: $0))
-                        }
+            ConsolePanel("CONTROL PLANE", accent: ConsoleTheme.lampGreen) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("RIGHT STICK")
+                            .font(ConsoleTheme.smallTagFont(size: 8))
+                            .tracking(1.2)
+                            .foregroundStyle(Color.white.opacity(0.5))
+                        Spacer()
+                        Text(rightStickRoleLabel)
+                            .font(ConsoleTheme.smallTagFont(size: 8))
+                            .tracking(1.0)
+                            .foregroundStyle(rightStickRoleColor)
                     }
+
+                    HStack {
+                        Text("CLUTCH \(model.hotasStaticVisualOverrideHeld ? "HELD" : "OFF")")
+                        Spacer()
+                        Text("CTX \(model.hotasPhoneChoirContextActive ? "CHOIR" : "MAIN")")
+                    }
+                    .font(ConsoleTheme.telemetryFont(size: 9))
+                    .foregroundStyle(Color.white.opacity(0.58))
+
+                    HStack {
+                        Text("BANK M\(model.activeSampleBank) / C\(model.activeChoirSampleBank)")
+                        Spacer()
+                        Text("FX \(model.activeEffectsPreset.chainAName)/\(model.activeEffectsPreset.chainBName)")
+                    }
+                    .font(ConsoleTheme.telemetryFont(size: 9))
+                    .foregroundStyle(Color.white.opacity(0.58))
+
                     HStack(alignment: .bottom, spacing: 4) {
-                        Bargraph(label: "SPL X", value: model.vector.spatialX) {
+                        Bargraph(label: "SRC X", value: model.vector.spatialX) {
                             model.patchVector(ParamVectorPatch(spatialX: $0))
                         }
-                        Bargraph(label: "SPL Y", value: model.vector.spatialY) {
-                            model.patchVector(ParamVectorPatch(spatialY: $0))
+                        Bargraph(label: "CAD Y", value: model.programProceduralState.cutCadence) {
+                            model.setCutCadenceFromControl($0)
                         }
-                        Bargraph(label: "SPL Z", value: model.vector.spatialZ) {
-                            model.patchVector(ParamVectorPatch(spatialZ: $0))
+                        Bargraph(label: "CMP Z", value: model.programProceduralState.fade) {
+                            model.setCompositorBlendFromControl($0)
+                        }
+                    }
+
+                    HStack(alignment: .bottom, spacing: 4) {
+                        Bargraph(label: "MORPH", value: model.staticAudioMacroState.sampleMorph) {
+                            model.setStaticSampleMorphFromControl($0)
+                        }
+                        Bargraph(label: "ARTIC", value: model.staticAudioMacroState.articulation) {
+                            model.setStaticArticulationFromControl($0)
+                        }
+                        Bargraph(label: "TIMBRE", value: model.staticAudioMacroState.timbre) {
+                            model.setStaticTimbreFromControl($0)
+                        }
+                    }
+
+                    HStack(alignment: .bottom, spacing: 4) {
+                        Bargraph(label: "CHOIR S", value: model.choirFieldState.spread) {
+                            model.setChoirFieldSpreadFromControl($0)
+                        }
+                        Bargraph(label: "CHOIR D", value: model.choirFieldState.depth) {
+                            model.setChoirFieldDepthFromControl($0)
+                        }
+                        Bargraph(label: "CHOIR T", value: model.choirFieldState.detune) {
+                            model.setChoirFieldDetuneFromControl($0)
+                        }
+                    }
+
+                    HStack(alignment: .bottom, spacing: 4) {
+                        Bargraph(label: "A RHY", value: model.effectsChainState.chainAIntensity) {
+                            model.setEffectsChainFromControl(chain: .a, active: $0 > 0.05, intensity: $0)
+                        }
+                        Bargraph(label: "B SPC", value: model.effectsChainState.chainBIntensity) {
+                            model.setEffectsChainFromControl(chain: .b, active: $0 > 0.05, intensity: $0)
+                        }
+                        Bargraph(label: "TXT P", value: model.programProceduralState.textProbability) {
+                            model.setTextProbabilityFromControl($0)
                         }
                     }
                 }
                 .frame(maxWidth: .infinity)
             }
 
-            ConsolePanel("AUDIENCE TELEMETRY", accent: ConsoleTheme.lampBlue) {
+            ConsolePanel("ML COPILOT · ACTION STREAM", accent: ConsoleTheme.lampAmber) {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let proposal = model.activeMLProposal {
+                        Text("ACTIVE \(proposal.lane.rawValue.uppercased()) · CONF \(decimal(proposal.confidence)) · T-\(decimal(model.activeMLProposalCountdownSeconds ?? 0))s")
+                            .font(ConsoleTheme.smallTagFont(size: 8))
+                            .foregroundStyle(ConsoleTheme.lampAmber)
+                        Text(proposal.rationale)
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.75))
+                            .lineLimit(2)
+                        Text(proposal.expectedEffect)
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.55))
+                            .lineLimit(1)
+                        Button("ACCEPT PROPOSAL (JOY_1)") {
+                            _ = model.acceptActiveProposalFromControl()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    } else {
+                        Text("NO ACTIVE PROPOSAL · JOY_1 ARMED")
+                            .font(ConsoleTheme.smallTagFont(size: 8))
+                            .foregroundStyle(Color.white.opacity(0.45))
+                    }
+
+                    Divider().overlay(Color.white.opacity(0.08))
+
+                    ForEach(model.hudTelemetryFrame.events.prefix(8)) { event in
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(event.severity.rawValue)
+                                .font(ConsoleTheme.smallTagFont(size: 8))
+                                .foregroundStyle(color(for: event.severity))
+                                .frame(width: 42, alignment: .leading)
+                            Text(event.stage.rawValue.uppercased())
+                                .font(ConsoleTheme.telemetryFont(size: 9))
+                                .foregroundStyle(Color.white.opacity(0.58))
+                                .frame(width: 48, alignment: .leading)
+                            Text(event.semanticAction ?? event.controlID)
+                                .font(ConsoleTheme.telemetryFont(size: 9))
+                                .foregroundStyle(Color.white.opacity(0.76))
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            ConsolePanel("CHOIR / AUDIENCE TELEMETRY", accent: ConsoleTheme.lampBlue) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text("\(model.devices.count) DEVICES")
@@ -720,6 +926,22 @@ struct ConductorSurfaceView: View {
                         .buttonStyle(.plain)
                     }
 
+                    HStack {
+                        Text("POOL \(model.phoneAudioAvailableDevices.count) · VOICES \(model.phoneAudioActiveVoices.count)")
+                        Spacer()
+                        Text("FAILOVER \(model.phoneAudioFailoverCount)")
+                    }
+                    .font(ConsoleTheme.telemetryFont(size: 9))
+                    .foregroundStyle(Color.white.opacity(0.58))
+
+                    HStack {
+                        Text("ZONES \(model.phoneAudioZoneOccupancy.count) · TOP \(dominantZoneLabel)")
+                        Spacer()
+                        Text("UNHEALTHY \(unhealthyChoirDeviceCount)")
+                    }
+                    .font(ConsoleTheme.telemetryFont(size: 9))
+                    .foregroundStyle(Color.white.opacity(0.58))
+
                     if model.devices.isEmpty {
                         Text("// no devices acquired")
                             .font(ConsoleTheme.telemetryFont(size: 10))
@@ -732,7 +954,7 @@ struct ConductorSurfaceView: View {
                                 }
                             }
                         }
-                        .frame(maxHeight: 140)
+                        .frame(maxHeight: 110)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -749,6 +971,70 @@ struct ConductorSurfaceView: View {
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .foregroundStyle(Color.white.opacity(0.4))
         }
+    }
+
+    private var rightStickRoleLabel: String {
+        if model.hotasPhoneChoirContextActive {
+            return "CHOIR FIELD"
+        }
+        if model.effectiveOutputMode == .static {
+            return model.hotasStaticVisualOverrideHeld ? "VISUAL OVERRIDE (CLUTCH)" : "STATIC AUDIO MACRO"
+        }
+        if model.effectiveOutputMode == .dynamic {
+            return "DYNAMIC VIDEO"
+        }
+        return "VECTOR PATCH"
+    }
+
+    private var rightStickRoleColor: Color {
+        if model.hotasPhoneChoirContextActive {
+            return ConsoleTheme.lampBlue
+        }
+        if model.effectiveOutputMode == .static {
+            return model.hotasStaticVisualOverrideHeld ? ConsoleTheme.lampAmber : ConsoleTheme.lampGreen
+        }
+        if model.effectiveOutputMode == .dynamic {
+            return ConsoleTheme.lampAmber
+        }
+        return Color.white.opacity(0.6)
+    }
+
+    private var unhealthyChoirDeviceCount: Int {
+        model.phoneAudioDeviceHealth.values.reduce(into: 0) { result, health in
+            if health.ackReliability < 0.65 || health.rttMs > 500 {
+                result += 1
+            }
+        }
+    }
+
+    private var dominantZoneLabel: String {
+        model.phoneAudioZoneOccupancy
+            .sorted { lhs, rhs in
+                if lhs.value == rhs.value {
+                    return lhs.key < rhs.key
+                }
+                return lhs.value > rhs.value
+            }
+            .first?.key ?? "-"
+    }
+
+    private func color(for severity: HUDEventSeverity) -> Color {
+        switch severity {
+        case .info:
+            return Color.white.opacity(0.7)
+        case .act:
+            return ConsoleTheme.lampBlue
+        case .apply:
+            return ConsoleTheme.lampGreen
+        case .block:
+            return ConsoleTheme.lampAmber
+        case .error:
+            return ConsoleTheme.lampRed
+        }
+    }
+
+    private func decimal(_ value: Double) -> String {
+        String(format: "%.2f", value)
     }
 
     // MARK: - Flight log
@@ -1057,6 +1343,17 @@ struct ConductorSurfaceView: View {
         case .unavailable: return ConsoleTheme.lampRed
         }
     }
+
+    private var audioRouteColor: Color {
+        switch model.audioRouteCapability {
+        case .quad:
+            return ConsoleTheme.lampGreen
+        case .stereoFallback:
+            return model.allowStereoFallback ? ConsoleTheme.lampAmber : ConsoleTheme.lampRed
+        case .unavailable:
+            return ConsoleTheme.lampRed
+        }
+    }
 }
 
 private struct ImportModuleSheet: View {
@@ -1194,5 +1491,637 @@ private struct ImportModuleSheet: View {
         case .choirProfile:
             model.importChoirProfileFromDisk()
         }
+    }
+}
+
+private struct SetupSheet: View {
+    @ObservedObject var model: ConductorHarnessViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var hotasTrainingOpen = false
+
+    var body: some View {
+        let hotasModeBinding = Binding<ControlInputMode>(
+            get: { model.hotasInputMode },
+            set: { model.updateHOTASInputMode($0) }
+        )
+
+        VStack(alignment: .leading, spacing: 14) {
+            Text("SYSTEM SETUP")
+                .font(.system(size: 18, weight: .black, design: .monospaced))
+                .tracking(1.6)
+                .foregroundStyle(Color.white.opacity(0.9))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("AUDIO OUTPUT")
+                    .font(ConsoleTheme.smallTagFont(size: 9))
+                    .tracking(1.2)
+                    .foregroundStyle(Color.white.opacity(0.55))
+
+                setupMenuRow(label: "Interface", selectedValue: selectedAudioRouteName) {
+                    if model.availableAudioRoutes.isEmpty {
+                        Button("NO OUTPUT ROUTES") {}
+                            .disabled(true)
+                    } else {
+                        ForEach(model.availableAudioRoutes) { route in
+                            Button("\(route.name) (\(route.channelCount)ch)") {
+                                model.selectedAudioRouteID = route.id
+                            }
+                        }
+                    }
+                }
+
+                setupToggleRow(
+                    label: "Enable 2ch fallback when 4ch is unavailable",
+                    isOn: $model.allowStereoFallback
+                )
+
+                Text(model.audioRouteStatusSummary)
+                    .font(ConsoleTheme.telemetryFont(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.62))
+            }
+            .padding(10)
+            .background(ConsoleTheme.panelInnerFill)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(ConsoleTheme.panelStroke, lineWidth: 0.7)
+            )
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("MIDI INPUT")
+                    .font(ConsoleTheme.smallTagFont(size: 9))
+                    .tracking(1.2)
+                    .foregroundStyle(Color.white.opacity(0.55))
+
+                setupMenuRow(label: "MIDI Source", selectedValue: selectedMIDIInputName) {
+                    if model.availableMIDIInputs.isEmpty {
+                        Button("NO MIDI INPUTS") {}
+                            .disabled(true)
+                    } else {
+                        ForEach(model.availableMIDIInputs) { input in
+                            Button(input.name) {
+                                model.selectedMIDIInputID = input.id
+                            }
+                        }
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    setupActionButton("ARM MIDI", variant: .primary, isDisabled: model.selectedMIDIInputID.isEmpty) {
+                        model.armMIDIInput()
+                    }
+                    setupActionButton("DISARM") {
+                        model.stopMIDIInput()
+                    }
+                    setupActionButton("REFRESH IO") {
+                        model.refreshSetupInventory()
+                        model.refreshQuadRouteStatus()
+                    }
+                }
+
+                Text(model.midiInputStatus)
+                    .font(ConsoleTheme.telemetryFont(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.62))
+            }
+            .padding(10)
+            .background(ConsoleTheme.panelInnerFill)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(ConsoleTheme.panelStroke, lineWidth: 0.7)
+            )
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("HOTAS CONTROL")
+                    .font(ConsoleTheme.smallTagFont(size: 9))
+                    .tracking(1.2)
+                    .foregroundStyle(Color.white.opacity(0.55))
+
+                setupSegmentedModeControl(selection: hotasModeBinding)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.hotasInputStatus)
+                        .font(ConsoleTheme.telemetryFont(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.72))
+                    Text("Profile: \(model.hotasProfileName)")
+                        .font(ConsoleTheme.telemetryFont(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.58))
+                    Text(model.hotasMissingRequiredRoles.isEmpty
+                         ? "Required bindings: READY"
+                         : "Required bindings missing: \(model.hotasMissingRequiredRoles.count)")
+                        .font(ConsoleTheme.telemetryFont(size: 10))
+                        .foregroundStyle(model.hotasMissingRequiredRoles.isEmpty ? ConsoleTheme.lampGreen : ConsoleTheme.lampAmber)
+                    Text(model.hotasBindingConflicts.isEmpty
+                         ? "Binding conflicts: none"
+                         : "Binding conflicts: \(model.hotasBindingConflicts.count)")
+                        .font(ConsoleTheme.telemetryFont(size: 10))
+                        .foregroundStyle(model.hotasBindingConflicts.isEmpty ? Color.white.opacity(0.52) : ConsoleTheme.lampAmber)
+                    Text("Sample banks — Main: \(model.activeSampleBank) / Choir: \(model.activeChoirSampleBank)")
+                        .font(ConsoleTheme.telemetryFont(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.56))
+                    Text(model.hotasLastSignalSummary)
+                        .font(ConsoleTheme.telemetryFont(size: 9))
+                        .foregroundStyle(Color.white.opacity(0.42))
+                        .lineLimit(2)
+                }
+
+                setupToggleRow(
+                    label: "Allow HOTAS vector override while STATIC video output is active",
+                    isOn: Binding(
+                        get: { model.hotasStaticVideoOverrideEnabled },
+                        set: { model.updateHOTASStaticVideoOverride($0) }
+                    )
+                )
+
+                HStack(spacing: 8) {
+                    setupActionButton("TRAIN / MAP", variant: .primary) {
+                        model.beginHOTASTraining()
+                        hotasTrainingOpen = true
+                    }
+
+                    setupActionButton("DISABLE HOTAS") {
+                        model.disableHOTASControls()
+                    }
+
+                    setupActionButton("REVERT LAST GOOD") {
+                        model.revertHOTASToLastKnownGood()
+                    }
+                }
+            }
+            .padding(10)
+            .background(ConsoleTheme.panelInnerFill)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(ConsoleTheme.panelStroke, lineWidth: 0.7)
+            )
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("PUSH COMPANION")
+                    .font(ConsoleTheme.smallTagFont(size: 9))
+                    .tracking(1.2)
+                    .foregroundStyle(Color.white.opacity(0.55))
+
+                setupToggleRow(
+                    label: "Enable Push Control lane (non-commit actions only)",
+                    isOn: Binding(
+                        get: { model.pushControlEnabled },
+                        set: { model.updatePushControlEnabled($0) }
+                    )
+                )
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.pushControlEnabled ? "Push lane ON" : "Push lane OFF")
+                        .font(ConsoleTheme.telemetryFont(size: 10))
+                        .foregroundStyle(model.pushControlEnabled ? ConsoleTheme.lampGreen : Color.white.opacity(0.62))
+                    Text("Trusted controllers: \(model.pushTrustedControllerIDs.count)")
+                        .font(ConsoleTheme.telemetryFont(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.58))
+                    Text(model.pushLastSignalSummary)
+                        .font(ConsoleTheme.telemetryFont(size: 9))
+                        .foregroundStyle(Color.white.opacity(0.42))
+                        .lineLimit(2)
+                }
+
+                Text("Recently Seen Controllers")
+                    .font(ConsoleTheme.smallTagFont(size: 8))
+                    .foregroundStyle(Color.white.opacity(0.52))
+
+                if model.pushRecentControllerIDs.isEmpty {
+                    Text("No Push controllers seen yet.")
+                        .font(ConsoleTheme.telemetryFont(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(model.pushRecentControllerIDs, id: \.self) { controllerID in
+                            HStack(spacing: 8) {
+                                Text(controllerID)
+                                    .font(ConsoleTheme.telemetryFont(size: 9))
+                                    .foregroundStyle(Color.white.opacity(0.72))
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                                let trusted = model.isPushControllerTrusted(controllerID)
+                                setupActionButton(trusted ? "UNTRUST" : "TRUST", variant: trusted ? .normal : .primary) {
+                                    model.setPushControllerTrusted(controllerID, trusted: !trusted)
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(Color.white.opacity(0.04))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .stroke(ConsoleTheme.panelStroke, lineWidth: 0.6)
+                            )
+                        }
+                    }
+                }
+            }
+            .padding(10)
+            .background(ConsoleTheme.panelInnerFill)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(ConsoleTheme.panelStroke, lineWidth: 0.7)
+            )
+
+            Spacer(minLength: 0)
+
+            HStack {
+                setupActionButton("Close") {
+                    dismiss()
+                }
+
+                Spacer()
+
+                setupActionButton("Apply Setup", variant: .primary) {
+                    model.applySetupConfiguration()
+                    dismiss()
+                }
+            }
+        }
+        .padding(18)
+        .frame(minWidth: 760, minHeight: 520)
+        .background(ConsoleTheme.consoleBackground)
+        .sheet(isPresented: $hotasTrainingOpen) {
+            HOTASTrainingSheet(model: model, isPresented: $hotasTrainingOpen)
+                .preferredColorScheme(.dark)
+        }
+        .onAppear {
+            model.refreshSetupInventory()
+            model.refreshQuadRouteStatus()
+        }
+    }
+
+    private var selectedAudioRouteName: String {
+        if let selected = model.availableAudioRoutes.first(where: { $0.id == model.selectedAudioRouteID }) {
+            return "\(selected.name) (\(selected.channelCount)ch)"
+        }
+        if let first = model.availableAudioRoutes.first {
+            return "\(first.name) (\(first.channelCount)ch)"
+        }
+        return "NO OUTPUT ROUTES"
+    }
+
+    private var selectedMIDIInputName: String {
+        if let selected = model.availableMIDIInputs.first(where: { $0.id == model.selectedMIDIInputID }) {
+            return selected.name
+        }
+        if let first = model.availableMIDIInputs.first {
+            return first.name
+        }
+        return "NO MIDI INPUTS"
+    }
+
+    @ViewBuilder
+    private func setupMenuRow<Content: View>(
+        label: String,
+        selectedValue: String,
+        @ViewBuilder menuContent: () -> Content
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color.white.opacity(0.82))
+                .frame(width: 84, alignment: .leading)
+
+            Menu {
+                menuContent()
+            } label: {
+                HStack(spacing: 8) {
+                    Text(selectedValue)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.86))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(ConsoleTheme.lampBlue.opacity(0.95))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(ConsoleTheme.panelStroke, lineWidth: 0.7)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func setupToggleRow(label: String, isOn: Binding<Bool>) -> some View {
+        HStack(spacing: 10) {
+            Text(label)
+                .font(ConsoleTheme.telemetryFont(size: 10))
+                .foregroundStyle(Color.white.opacity(0.74))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                isOn.wrappedValue.toggle()
+            } label: {
+                RoundedRectangle(cornerRadius: 11)
+                    .fill(isOn.wrappedValue ? ConsoleTheme.lampBlue.opacity(0.72) : Color.white.opacity(0.14))
+                    .frame(width: 44, height: 24)
+                    .overlay(alignment: isOn.wrappedValue ? .trailing : .leading) {
+                        Circle()
+                            .fill(Color.white.opacity(0.94))
+                            .frame(width: 18, height: 18)
+                            .padding(3)
+                    }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func setupSegmentedModeControl(selection: Binding<ControlInputMode>) -> some View {
+        HStack(spacing: 0) {
+            ForEach(ControlInputMode.allCases, id: \.self) { mode in
+                Button {
+                    selection.wrappedValue = mode
+                } label: {
+                    Text(mode.rawValue.uppercased())
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(0.6)
+                        .foregroundStyle(Color.white.opacity(selection.wrappedValue == mode ? 0.95 : 0.75))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(selection.wrappedValue == mode ? ConsoleTheme.lampBlue.opacity(0.34) : Color.clear)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .background(Color.white.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(ConsoleTheme.panelStroke, lineWidth: 0.7)
+        )
+    }
+
+    private enum SetupActionVariant {
+        case normal
+        case primary
+    }
+
+    private func setupActionButton(
+        _ title: String,
+        variant: SetupActionVariant = .normal,
+        isDisabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .tracking(0.7)
+                .foregroundStyle(Color.white.opacity(isDisabled ? 0.44 : 0.9))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    Group {
+                        if variant == .primary {
+                            ConsoleTheme.lampBlue.opacity(isDisabled ? 0.20 : 0.56)
+                        } else {
+                            Color.white.opacity(0.12)
+                        }
+                    }
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(ConsoleTheme.panelStroke, lineWidth: 0.7)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+    }
+}
+
+private struct HOTASTrainingSheet: View {
+    @ObservedObject var model: ConductorHarnessViewModel
+    @Binding var isPresented: Bool
+    @State private var stepIndex = 0
+
+    private let steps = [
+        "Source",
+        "Live Detect",
+        "Required",
+        "Optional",
+        "Validate"
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("HOTAS TRAINING WIZARD")
+                .font(.system(size: 18, weight: .black, design: .monospaced))
+                .tracking(1.4)
+                .foregroundStyle(Color.white.opacity(0.9))
+
+            HStack(spacing: 6) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { index, label in
+                    Text("\(index + 1). \(label)")
+                        .font(ConsoleTheme.smallTagFont(size: 8))
+                        .tracking(1.0)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(index == stepIndex ? ConsoleTheme.lampBlue.opacity(0.35) : Color.white.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+            }
+
+            Group {
+                switch stepIndex {
+                case 0:
+                    sourceStep
+                case 1:
+                    liveStep
+                case 2:
+                    roleCaptureStep(roles: ControlRole.requiredWizardRoles)
+                case 3:
+                    roleCaptureStep(roles: ControlRole.optionalWizardRoles)
+                default:
+                    validateStep
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            HStack {
+                Button("Disable HOTAS") {
+                    model.disableHOTASControls()
+                }
+                .buttonStyle(.bordered)
+
+                Button("Revert Last Good") {
+                    model.revertHOTASToLastKnownGood()
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+
+                Button("Cancel") {
+                    model.cancelHOTASTraining()
+                    isPresented = false
+                }
+                .buttonStyle(.bordered)
+
+                Button(stepIndex == steps.count - 1 ? "Save + Arm" : "Next") {
+                    if stepIndex == steps.count - 1 {
+                        model.saveAndArmHOTASProfile()
+                        isPresented = false
+                    } else {
+                        stepIndex = min(steps.count - 1, stepIndex + 1)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 860, minHeight: 620)
+        .background(ConsoleTheme.consoleBackground)
+    }
+
+    private var sourceStep: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Choose source mode and confirm devices.")
+                .font(ConsoleTheme.telemetryFont(size: 10))
+                .foregroundStyle(Color.white.opacity(0.62))
+
+            Picker("Input Mode", selection: Binding(
+                get: { model.hotasInputMode },
+                set: { model.updateHOTASInputMode($0) }
+            )) {
+                ForEach(ControlInputMode.allCases, id: \.self) { mode in
+                    Text(mode.rawValue.uppercased()).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text("Detected HOTAS devices")
+                .font(ConsoleTheme.smallTagFont(size: 8))
+                .foregroundStyle(Color.white.opacity(0.55))
+
+            let devices = model.availableHOTASDevices()
+            if devices.isEmpty {
+                Text("No HOTAS HID devices detected. Connect X56 and keep this wizard open.")
+                    .font(ConsoleTheme.telemetryFont(size: 10))
+                    .foregroundStyle(ConsoleTheme.lampAmber)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(devices) { device in
+                            Text("• \(device.name)")
+                                .font(ConsoleTheme.telemetryFont(size: 10))
+                                .foregroundStyle(Color.white.opacity(0.72))
+                        }
+                    }
+                }
+                .frame(maxHeight: 120)
+            }
+        }
+    }
+
+    private var liveStep: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Move controls to verify live signal flow before binding.")
+                .font(ConsoleTheme.telemetryFont(size: 10))
+                .foregroundStyle(Color.white.opacity(0.62))
+
+            statusRow(label: "Input", value: model.hotasInputStatus)
+            statusRow(label: "Last Signal", value: model.hotasLastSignalSummary)
+            statusRow(label: "Missing Required", value: "\(model.hotasMissingRequiredRoles.count)")
+
+            Text("Capture is armed in steps 3-4. Each capture listens for the next incoming signal.")
+                .font(ConsoleTheme.telemetryFont(size: 10))
+                .foregroundStyle(Color.white.opacity(0.5))
+        }
+    }
+
+    private func roleCaptureStep(roles: [ControlRole]) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(roles, id: \.self) { role in
+                    HStack(alignment: .top, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(role.rawValue.uppercased())
+                                .font(ConsoleTheme.smallTagFont(size: 8))
+                                .foregroundStyle(Color.white.opacity(0.68))
+                            Text(model.hotasBinding(for: role)?.controlID ?? "UNBOUND")
+                                .font(ConsoleTheme.telemetryFont(size: 10))
+                                .foregroundStyle(Color.white.opacity(0.5))
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        Button(model.hotasPendingCaptureRole == role ? "LISTENING..." : "CAPTURE") {
+                            model.captureHOTASBinding(for: role)
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button("CLEAR") {
+                            model.clearHOTASBinding(for: role)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(8)
+                    .background(ConsoleTheme.panelInnerFill)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(ConsoleTheme.panelStroke, lineWidth: 0.6)
+                    )
+                }
+            }
+        }
+    }
+
+    private var validateStep: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Validation + dry run")
+                .font(ConsoleTheme.smallTagFont(size: 9))
+                .foregroundStyle(Color.white.opacity(0.72))
+            statusRow(label: "Profile", value: model.hotasProfileName)
+            statusRow(label: "Input", value: model.hotasInputStatus)
+            statusRow(label: "Missing Required", value: "\(model.hotasMissingRequiredRoles.count)")
+            statusRow(label: "Conflicts", value: "\(model.hotasBindingConflicts.count)")
+            statusRow(label: "Last Signal", value: model.hotasLastSignalSummary)
+
+            if model.hotasMissingRequiredRoles.isEmpty, model.hotasBindingConflicts.isEmpty {
+                Text("All required controls are bound. Save + Arm will persist profile and enable HOTAS routing.")
+                    .font(ConsoleTheme.telemetryFont(size: 10))
+                    .foregroundStyle(ConsoleTheme.lampGreen)
+            } else {
+                if !model.hotasMissingRequiredRoles.isEmpty {
+                    let missing = model.hotasMissingRequiredRoles.map { $0.rawValue }.joined(separator: ", ")
+                    Text("Required bindings still missing: \(missing)")
+                        .font(ConsoleTheme.telemetryFont(size: 10))
+                        .foregroundStyle(ConsoleTheme.lampAmber)
+                }
+                if !model.hotasBindingConflicts.isEmpty {
+                    Text("Conflicts: \(model.hotasBindingConflicts.joined(separator: " | "))")
+                        .font(ConsoleTheme.telemetryFont(size: 10))
+                        .foregroundStyle(ConsoleTheme.lampAmber)
+                }
+            }
+        }
+    }
+
+    private func statusRow(label: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label.uppercased())
+                .font(ConsoleTheme.smallTagFont(size: 8))
+                .foregroundStyle(Color.white.opacity(0.55))
+                .frame(width: 120, alignment: .leading)
+            Text(value)
+                .font(ConsoleTheme.telemetryFont(size: 10))
+                .foregroundStyle(Color.white.opacity(0.72))
+                .lineLimit(2)
+        }
+        .padding(8)
+        .background(ConsoleTheme.panelInnerFill)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(ConsoleTheme.panelStroke, lineWidth: 0.6)
+        )
     }
 }

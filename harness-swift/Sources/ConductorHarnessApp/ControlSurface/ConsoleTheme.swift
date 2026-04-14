@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Single source of truth for the launch-console look.
 /// All colors, fonts, and metric constants used by the control-surface
@@ -39,23 +42,43 @@ enum ConsoleTheme {
     // MARK: Fonts
 
     static func labelTapeFont(size: CGFloat = 10) -> Font {
-        .system(size: size, weight: .heavy, design: .monospaced)
+        monoFont(size: size, weight: .heavy)
     }
 
     static func panelTitleFont(size: CGFloat = 11) -> Font {
-        .system(size: size, weight: .black, design: .monospaced)
+        monoFont(size: size, weight: .black)
     }
 
     static func telemetryFont(size: CGFloat = 11) -> Font {
-        .system(size: size, weight: .medium, design: .monospaced)
+        monoFont(size: size, weight: .medium)
     }
 
     static func segmentFont(size: CGFloat = 64) -> Font {
-        .system(size: size, weight: .heavy, design: .monospaced)
+        monoFont(size: size, weight: .heavy)
     }
 
     static func smallTagFont(size: CGFloat = 9) -> Font {
-        .system(size: size, weight: .black, design: .monospaced)
+        monoFont(size: size, weight: .black)
+    }
+
+    static func monoFont(size: CGFloat, weight: Font.Weight = .medium) -> Font {
+        let name: String
+        switch weight {
+        case .bold, .black, .heavy:
+            name = "IBMPlexMono-Bold"
+        case .semibold:
+            name = "IBMPlexMono-SemiBold"
+        case .medium:
+            name = "IBMPlexMono-Medium"
+        default:
+            name = "IBMPlexMono-Regular"
+        }
+        #if canImport(AppKit)
+        if NSFont(name: name, size: size) != nil {
+            return .custom(name, size: size).weight(weight)
+        }
+        #endif
+        return .system(size: size, weight: weight, design: .monospaced)
     }
 
     // MARK: Metrics

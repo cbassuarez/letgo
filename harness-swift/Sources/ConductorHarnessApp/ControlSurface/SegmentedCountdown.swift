@@ -1,6 +1,7 @@
 import SwiftUI
 
 /// Seven-segment style T-minus countdown tuned for low-latency updates.
+/// Displays a single digit (whole seconds only).
 struct SegmentedCountdown: View {
     let seconds: Double?
     let expiresAt: Date?
@@ -8,12 +9,14 @@ struct SegmentedCountdown: View {
     let summary: String
 
     var body: some View {
-        if isArmed {
-            TimelineView(.periodic(from: .now, by: 0.1)) { context in
-                countdownContent(seconds: secondsAt(context.date))
+        Group {
+            if isArmed, expiresAt != nil {
+                TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
+                    countdownContent(seconds: secondsAt(timeline.date))
+                }
+            } else {
+                countdownContent(seconds: secondsAt(Date()))
             }
-        } else {
-            countdownContent(seconds: nil)
         }
     }
 
@@ -29,15 +32,13 @@ struct SegmentedCountdown: View {
                 .foregroundStyle(Color.white.opacity(0.45))
 
             ZStack {
-                Text("88.8")
+                Text("8")
                     .font(ConsoleTheme.segmentFont(size: 64))
                     .foregroundStyle(ConsoleTheme.segmentOff)
-                    .tracking(2)
 
                 Text(displayValue)
                     .font(ConsoleTheme.segmentFont(size: 64))
                     .foregroundStyle(displayColor)
-                    .tracking(2)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 8)
@@ -68,13 +69,12 @@ struct SegmentedCountdown: View {
 
     private func displayString(for seconds: Double?) -> String {
         guard let seconds, isArmed else {
-            return "--.-"
+            return "-"
         }
         let clamped = max(0, seconds)
-        let totalTenths = Int((clamped * 10).rounded(.toNearestOrEven))
-        let whole = max(0, totalTenths / 10)
-        let fractional = abs(totalTenths % 10)
-        return String(format: "%02d.%01d", whole, fractional)
+        let wholeSeconds = Int(ceil(clamped))
+        let digit = max(0, min(9, wholeSeconds))
+        return String(digit)
     }
 
     private func activeColor(for seconds: Double?) -> Color {

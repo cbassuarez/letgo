@@ -1,4 +1,4 @@
-import type { CompositorMode } from "@conductor/protocol";
+import type { CompositorMode, ProgramProceduralState } from "@conductor/protocol";
 import { useEffect, useState } from "react";
 import type { RefObject } from "react";
 import { detectCompositorMode, renderFallbackFrame } from "../lib/compositor";
@@ -10,6 +10,7 @@ interface UseCanvasCompositorInput {
   text: string;
   intensity: number;
   influence: number;
+  procedural: ProgramProceduralState;
 }
 
 export const useCanvasCompositor = ({
@@ -18,7 +19,8 @@ export const useCanvasCompositor = ({
   htmlSourceRef,
   text,
   intensity,
-  influence
+  influence,
+  procedural
 }: UseCanvasCompositorInput): CompositorMode => {
   const [mode, setMode] = useState<CompositorMode>("unsupported");
 
@@ -96,7 +98,8 @@ export const useCanvasCompositor = ({
         text,
         intensity,
         influence,
-        timestampMs: Date.now()
+        timestampMs: Date.now(),
+        procedural
       });
       frameHandle = window.requestAnimationFrame(runFallback);
     };
@@ -114,7 +117,7 @@ export const useCanvasCompositor = ({
         window.cancelAnimationFrame(frameHandle);
       }
     };
-  }, [enabled, canvasRef, htmlSourceRef, intensity, influence, text]);
+  }, [enabled, canvasRef, htmlSourceRef, intensity, influence, procedural, text]);
 
   return mode;
 };

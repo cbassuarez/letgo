@@ -1,4 +1,4 @@
-import type { CompositorMode, ParamVector } from "@conductor/protocol";
+import type { CompositorMode, ParamVector, ProgramProceduralState } from "@conductor/protocol";
 import { motion } from "framer-motion";
 import { useEffect, useMemo, useRef } from "react";
 import { useCanvasCompositor } from "../hooks/useCanvasCompositor";
@@ -8,6 +8,7 @@ interface DynamicOverlayProps {
   line: string;
   enabled: boolean;
   influence: number;
+  procedural: ProgramProceduralState;
   onCompositorModeChange?: (mode: CompositorMode) => void;
 }
 
@@ -16,6 +17,7 @@ export const DynamicOverlay = ({
   line,
   enabled,
   influence,
+  procedural,
   onCompositorModeChange
 }: DynamicOverlayProps): JSX.Element | null => {
   if (!enabled) {
@@ -34,7 +36,8 @@ export const DynamicOverlay = ({
     htmlSourceRef: sourceRef,
     text: line,
     intensity,
-    influence
+    influence,
+    procedural
   });
 
   useEffect(() => {

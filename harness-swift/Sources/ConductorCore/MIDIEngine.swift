@@ -1,11 +1,51 @@
 import Foundation
 
+public enum MIDIEventKind: String, Sendable {
+    case controlChange
+    case noteOn
+    case noteOff
+}
+
 public struct MIDIEvent {
+    public let kind: MIDIEventKind
+    public let channel: Int
     public let controller: Int
+    public let note: Int
     public let value: Int
 
-    public init(controller: Int, value: Int) {
+    public init(controller: Int, value: Int, channel: Int = 0) {
+        kind = .controlChange
+        self.channel = max(0, min(15, channel))
         self.controller = controller
+        note = -1
+        self.value = value
+    }
+
+    public static func noteOn(note: Int, velocity: Int, channel: Int = 0) -> MIDIEvent {
+        MIDIEvent(
+            kind: .noteOn,
+            channel: channel,
+            controller: -1,
+            note: note,
+            value: velocity
+        )
+    }
+
+    public static func noteOff(note: Int, velocity: Int = 0, channel: Int = 0) -> MIDIEvent {
+        MIDIEvent(
+            kind: .noteOff,
+            channel: channel,
+            controller: -1,
+            note: note,
+            value: velocity
+        )
+    }
+
+    public init(kind: MIDIEventKind, channel: Int, controller: Int, note: Int, value: Int) {
+        self.kind = kind
+        self.channel = max(0, min(15, channel))
+        self.controller = controller
+        self.note = note
         self.value = value
     }
 }
@@ -35,6 +75,9 @@ public final class MIDIIngestor {
 
     public func start() {
         source.start { [onVectorPatch] event in
+            guard event.kind == .controlChange else {
+                return
+            }
             let normalized = max(0.0, min(1.0, Double(event.value) / 127.0))
             guard let mapping = MIDIControlMap(rawValue: event.controller) else {
                 return

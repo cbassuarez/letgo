@@ -19,7 +19,7 @@ public enum CueAction: String, Codable {
     case recover
 }
 
-public struct ParamVector: Codable, Equatable {
+public struct ParamVector: Codable, Equatable, Sendable {
     public var textAmount: Double
     public var compositeBias: Double
     public var audioGain: Double
@@ -52,7 +52,7 @@ public struct ParamVector: Codable, Equatable {
     }
 }
 
-public struct ParamVectorPatch {
+public struct ParamVectorPatch: Equatable, Sendable {
     public var textAmount: Double?
     public var compositeBias: Double?
     public var audioGain: Double?

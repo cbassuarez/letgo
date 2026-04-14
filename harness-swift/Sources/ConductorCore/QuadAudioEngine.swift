@@ -1,19 +1,39 @@
 import AVFoundation
 import Foundation
 
+public enum AudioRouteMode: String, Codable, Equatable {
+    case quad
+    case stereoFallback
+    case unavailable
+
+    public var isOutputReady: Bool {
+        self == .quad || self == .stereoFallback
+    }
+}
+
 public struct QuadRouteStatus: Equatable {
     public let channelCount: Int
     public let quadReady: Bool
+    public let stereoFallbackReady: Bool
+    public let mode: AudioRouteMode
     public let routeName: String
 
-    public init(channelCount: Int, quadReady: Bool, routeName: String) {
+    public init(
+        channelCount: Int,
+        quadReady: Bool,
+        stereoFallbackReady: Bool,
+        mode: AudioRouteMode,
+        routeName: String
+    ) {
         self.channelCount = channelCount
         self.quadReady = quadReady
+        self.stereoFallbackReady = stereoFallbackReady
+        self.mode = mode
         self.routeName = routeName
     }
 }
 
-public struct QuadAudioFeatures: Codable, Equatable {
+public struct QuadAudioFeatures: Codable, Equatable, Sendable {
     public var rms: Double
     public var spectralCentroid: Double
     public var flux: Double
@@ -55,6 +75,18 @@ public final class QuadAudioEngine {
     private var samplePlayers: [UUID: AVAudioPlayerNode] = [:]
     private var ambientNoiseBuffer: AVAudioPCMBuffer?
     private var lastFeatureEmitAt: CFAbsoluteTime = 0
+    private let baseSynthVolume: Float = 0.9
+    private let baseSampleVolume: Float = 0.9
+    private let baseAmbientVolume: Float = 0.16
+    private var effectsChainState: EffectsChainState = .idle
+    private var staticMacroFrame = EffectsMacroFrame(
+        chainAIntensity: 0,
+        chainBIntensity: 0,
+        articulation: 0.5,
+        timbre: 0.5,
+        textureSend: 0
+    )
+    private var choirFieldState: ChoirFieldState = .neutral
 
     public init() {
         engine.attach(synthMixer)
@@ -65,9 +97,9 @@ public final class QuadAudioEngine {
         engine.connect(sampleMixer, to: engine.mainMixerNode, format: nil)
         engine.connect(ambientNoisePlayer, to: sampleMixer, format: nil)
 
-        synthMixer.outputVolume = 0.9
-        sampleMixer.outputVolume = 0.9
-        ambientNoisePlayer.volume = 0.16
+        synthMixer.outputVolume = baseSynthVolume
+        sampleMixer.outputVolume = baseSampleVolume
+        ambientNoisePlayer.volume = baseAmbientVolume
 
         installFeatureTap()
         engine.prepare()
@@ -85,9 +117,16 @@ public final class QuadAudioEngine {
         let outputFormat = engine.outputNode.outputFormat(forBus: 0)
         let channelCount = Int(outputFormat.channelCount)
         let routeName = "default-output"
+        let quadReady = channelCount >= 4
+        let stereoFallbackReady = !quadReady && channelCount >= 2
+        let mode: AudioRouteMode = quadReady
+            ? .quad
+            : (stereoFallbackReady ? .stereoFallback : .unavailable)
         return QuadRouteStatus(
             channelCount: channelCount,
-            quadReady: channelCount >= 4,
+            quadReady: quadReady,
+            stereoFallbackReady: stereoFallbackReady,
+            mode: mode,
             routeName: routeName
         )
     }
@@ -105,6 +144,16 @@ public final class QuadAudioEngine {
         stopAllSamples()
         stopAmbientNoise()
         engine.stop()
+        effectsChainState = .idle
+        staticMacroFrame = EffectsMacroFrame(
+            chainAIntensity: 0,
+            chainBIntensity: 0,
+            articulation: 0.5,
+            timbre: 0.5,
+            textureSend: 0
+        )
+        choirFieldState = .neutral
+        applyEffectsState()
         onFeatures?(QuadAudioFeatures.zero)
     }
 
@@ -188,6 +237,62 @@ public final class QuadAudioEngine {
         ambientNoisePlayer.stop()
     }
 
+    public func setEffectsChainState(chain: EffectsChainID, active: Bool, intensity: Double) {
+        effectsChainState.set(chain: chain, active: active, intensity: intensity)
+        applyEffectsState()
+    }
+
+    public func setStaticMacroFrame(_ frame: EffectsMacroFrame) {
+        staticMacroFrame = frame
+        applyEffectsState()
+    }
+
+    public func setChoirFieldState(_ state: ChoirFieldState) {
+        choirFieldState = state
+        applyEffectsState()
+    }
+
+    public func currentEffectsChainState() -> EffectsChainState {
+        effectsChainState
+    }
+
+    private func applyEffectsState() {
+        // Chain A is Rhythm: transient/gate/pump emphasis.
+        let rhythmBoost = effectsChainState.chainAActive ? Float(0.45 * effectsChainState.chainAIntensity) : 0
+        // Chain B is Space: smear/shimmer/spread emphasis.
+        let spaceBoost = effectsChainState.chainBActive ? Float(0.45 * effectsChainState.chainBIntensity) : 0
+
+        let articulation = Float(staticMacroFrame.articulation)
+        let timbre = Float(staticMacroFrame.timbre)
+        let textureSend = Float(staticMacroFrame.textureSend)
+        let choirSpread = Float(choirFieldState.spread)
+        let choirDepth = Float(choirFieldState.depth)
+        let choirDetune = Float(choirFieldState.detune)
+
+        sampleMixer.outputVolume = min(
+            1.0,
+            baseSampleVolume
+                + rhythmBoost * 0.44
+                + articulation * 0.16
+                + choirSpread * 0.08
+        )
+        synthMixer.outputVolume = min(
+            1.0,
+            baseSynthVolume
+                + spaceBoost * 0.34
+                + timbre * 0.14
+                + choirDetune * 0.12
+        )
+        ambientNoisePlayer.volume = min(
+            1.0,
+            baseAmbientVolume
+                + rhythmBoost * 0.12
+                + spaceBoost * 0.24
+                + textureSend * 0.28
+                + choirDepth * 0.16
+        )
+    }
+
     private func installFeatureTap() {
         engine.mainMixerNode.removeTap(onBus: 0)
         let tapFormat = engine.mainMixerNode.outputFormat(forBus: 0)
@@ -220,7 +325,7 @@ public final class QuadAudioEngine {
             }
 
             let now = CFAbsoluteTimeGetCurrent()
-            if now - self.lastFeatureEmitAt < 0.05 {
+            if now - self.lastFeatureEmitAt < 0.1 {
                 return
             }
             self.lastFeatureEmitAt = now

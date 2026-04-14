@@ -95,6 +95,23 @@ const buildAutoZone = (hashedId: string): { name: string; x: number; y: number; 
   };
 };
 
+const buildGeoZone = (
+  hashedId: string,
+  latitude: number,
+  longitude: number
+): { name: string; x: number; y: number; z: number } => {
+  const normalizedX = ((((longitude + 180) / 360) % 1) + 1) % 1;
+  const normalizedY = ((((latitude + 90) / 180) % 1) + 1) % 1;
+  const seed = stableHashToSeed(hashedId);
+  const microJitter = ((seed % 17) / 17) * 0.01;
+  return {
+    name: "geo-field",
+    x: clamp01(normalizedX + microJitter),
+    y: clamp01(normalizedY + microJitter),
+    z: 0.5
+  };
+};
+
 const allShowStates: ShowState[] = [
   "idle",
   "preshow",
@@ -201,6 +218,7 @@ export const DeviceRoute = (): JSX.Element => {
     onAck: sendPhoneAudioAck
   });
   const autoZone = useMemo(() => buildAutoZone(hashedId), [hashedId]);
+  const [liveZone, setLiveZone] = useState(autoZone);
 
   const seededLine = useMemo(() => {
     const seed = stableHashToSeed(hashedId);
@@ -230,12 +248,14 @@ export const DeviceRoute = (): JSX.Element => {
     session.lightingState.targetColor.oklch.c,
     session.lightingState.targetColor.oklch.l
   );
-  const textSceneLine = deviceTextVariance.lines[0] ?? seededLine;
+  const textSceneLine =
+    session.proceduralState.textProbability < 0.08 ? "" : (deviceTextVariance.lines[0] ?? seededLine);
   const textSceneStyle = {
     transform: `translate(${(deviceTextVariance.spec.offsetX * 100).toFixed(2)}%, ${(deviceTextVariance.spec.offsetY * 100).toFixed(2)}%)`,
-    opacity: clamp01(session.textScene.alpha + deviceTextVariance.spec.alphaBias),
+    opacity: clamp01((session.textScene.alpha + deviceTextVariance.spec.alphaBias) * session.proceduralState.textProbability),
     fontWeight: Math.round(360 + clamp01(session.textScene.weight + deviceTextVariance.spec.weightBias) * 420)
   } as CSSProperties;
+  const proceduralClip = session.proceduralState.dynamicBinClipId ?? "none";
   const crowdPickWindow = session.crowdPickWindow;
   const pickWindowIsActive = Boolean(
     crowdPickWindow && clockNow >= crowdPickWindow.opensAt && clockNow <= crowdPickWindow.closesAt
@@ -286,12 +306,49 @@ export const DeviceRoute = (): JSX.Element => {
   }, [permissions, permissionsDone, sendPermissions, session.connected]);
 
   useEffect(() => {
+    setLiveZone(autoZone);
+  }, [autoZone]);
+
+  useEffect(() => {
+    if (!permissionsDone || !permissions.geolocation) {
+      return;
+    }
+    if (!navigator.geolocation) {
+      return;
+    }
+
+    let active = true;
+    const watchID = navigator.geolocation.watchPosition(
+      (position) => {
+        if (!active) {
+          return;
+        }
+        setLiveZone(buildGeoZone(hashedId, position.coords.latitude, position.coords.longitude));
+        zoneSentRef.current = false;
+      },
+      () => {
+        // Keep deterministic fallback zone when geolocation is unavailable.
+      },
+      {
+        enableHighAccuracy: false,
+        maximumAge: 30_000,
+        timeout: 7_000
+      }
+    );
+
+    return () => {
+      active = false;
+      navigator.geolocation.clearWatch(watchID);
+    };
+  }, [hashedId, permissions.geolocation, permissionsDone]);
+
+  useEffect(() => {
     if (!permissionsDone || !session.connected || zoneSentRef.current) {
       return;
     }
-    sendZoneUpdate(autoZone);
+    sendZoneUpdate(liveZone);
     zoneSentRef.current = true;
-  }, [autoZone, permissionsDone, sendZoneUpdate, session.connected]);
+  }, [liveZone, permissionsDone, sendZoneUpdate, session.connected]);
 
   useEffect(() => {
     if (!permissionsDone || !engineRunning) {
@@ -458,25 +515,28 @@ export const DeviceRoute = (): JSX.Element => {
             line={textSceneLine}
             enabled={showDynamic}
             influence={participantVector.influence}
+            procedural={session.proceduralState}
             onCompositorModeChange={setCompositorMode}
           />
-          <motion.section
-            initial={{ opacity: 0, y: 5 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4 }}
-            className="device-variance-text absolute left-1/2 top-[18%] z-20 w-[min(90vw,860px)] -translate-x-1/2 px-4 text-center"
-            style={textSceneStyle}
-          >
-            <p className="cyanotype-kicker">CANONICAL SCENE · LOCAL VARIANCE</p>
-            {deviceTextVariance.lines.map((line, index) => (
-              <p
-                key={`scene-line-${session.textScene.sceneVersion}-${index}`}
-                className="font-display mt-2 text-2xl leading-tight text-cyanotype-000/94 sm:text-4xl"
-              >
-                {line}
-              </p>
-            ))}
-          </motion.section>
+          {textSceneLine ? (
+            <motion.section
+              initial={{ opacity: 0, y: 5 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4 }}
+              className="device-variance-text absolute left-1/2 top-[18%] z-20 w-[min(90vw,860px)] -translate-x-1/2 px-4 text-center"
+              style={textSceneStyle}
+            >
+              <p className="cyanotype-kicker">CANONICAL SCENE · LOCAL VARIANCE</p>
+              {deviceTextVariance.lines.map((line, index) => (
+                <p
+                  key={`scene-line-${session.textScene.sceneVersion}-${index}`}
+                  className="font-display mt-2 text-2xl leading-tight text-cyanotype-000/94 sm:text-4xl"
+                >
+                  {line}
+                </p>
+              ))}
+            </motion.section>
+          ) : null}
           <motion.section
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
@@ -624,6 +684,15 @@ export const DeviceRoute = (): JSX.Element => {
             <p>Flux {(session.audioFeatures.flux * 100).toFixed(0)}%</p>
             <p>PhonePool {session.phoneAudioPoolState.availableDevices.length}</p>
             <p>PhoneGate {session.phoneAudioPoolState.gateCommitted ? "COMMIT" : "SAFE"}</p>
+            <p>Clip {proceduralClip}</p>
+            <p>Cadence {(session.proceduralState.cutCadence * 100).toFixed(0)}%</p>
+            <p>Trans {session.proceduralState.transitionMode}</p>
+            <p>Comp {session.proceduralState.compositorPreset}</p>
+            <p>Split {session.proceduralState.splitLayout}</p>
+            <p>TextP {(session.proceduralState.textProbability * 100).toFixed(0)}%</p>
+            <p>Strict {(session.proceduralState.strictLooseBlend * 100).toFixed(0)}%</p>
+            <p>Variance {(session.proceduralState.visualVariance * 100).toFixed(0)}%</p>
+            <p>CrowdSteer {(session.proceduralState.crowdSteeringLevel * 100).toFixed(0)}%</p>
             <p>Drift {session.driftMs.toFixed(1)}ms</p>
             <p>{session.fallbackActive ? "Fallback" : "Synced"}</p>
             {session.fallbackActive ? <p>FallbackAge {(session.fallbackAgeMs / 1000).toFixed(1)}s</p> : null}

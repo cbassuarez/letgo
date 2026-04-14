@@ -42,8 +42,10 @@ public final class WebSocketConductorClient: NSObject {
         "\"kind\":\"error\"",
         "\"kind\":\"phone_audio_pool_state\"",
         "\"kind\":\"phone_audio_ack\"",
+        "\"kind\":\"show_snapshot\"",
         "\"kind\":\"audio_features\"",
-        "\"kind\":\"show_snapshot\""
+        "\"kind\":\"push_deck_event\"",
+        "\"kind\":\"procedural_state\""
     ]
 
     private var session: URLSession!

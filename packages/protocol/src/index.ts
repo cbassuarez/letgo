@@ -61,6 +61,184 @@ export interface ParamVector {
   spatialZ: number;
 }
 
+export type TransitionMode = "cut" | "crossfade" | "stutter" | "fade";
+export type CompositorPreset =
+  | "blend"
+  | "multiply"
+  | "screen"
+  | "mask"
+  | "pip"
+  | "stutter";
+export type SplitLayout = "none" | "split-2" | "split-3" | "split-4" | "pip";
+
+export type PushDeckControlKind = "pad_down" | "pad_up" | "macro" | "bank_select" | "ml_param";
+export type PushDeckModeContext = "auto" | "dynamic" | "static" | "choir";
+export type PushDeckTimingMode = "immediate" | "quantized";
+export type PushDeckBankDomain = "main" | "choir";
+export type PushDeckMLParamKey = "phone_pad_echo_probability";
+
+export interface PushDeckPadControl {
+  row: number;
+  column: number;
+  slot: number;
+  pressure: number;
+  velocity: number;
+}
+
+export interface PushDeckMacroControl {
+  lane: number;
+  value: number;
+}
+
+export interface PushDeckBankControl {
+  domain: PushDeckBankDomain;
+  bank: number;
+}
+
+export interface PushDeckMLParamControl {
+  key: PushDeckMLParamKey;
+  value: number;
+}
+
+export interface PushDeckEventPayload {
+  eventId: string;
+  sourceId: string;
+  controlKind: PushDeckControlKind;
+  modeContext: PushDeckModeContext;
+  timingMode: PushDeckTimingMode;
+  quantIntervalMs?: number;
+  pad?: PushDeckPadControl;
+  macro?: PushDeckMacroControl;
+  bank?: PushDeckBankControl;
+  mlParam?: PushDeckMLParamControl;
+  issuedAt: number;
+}
+
+export interface DynamicBinClip {
+  id: string;
+  mediaRef: string;
+  tags: string[];
+  weight: number;
+  scopes?: string[];
+}
+
+export interface TextBlendState {
+  mode: "always-mixed";
+  probability: number;
+  strictRatio: number;
+  looseRatio: number;
+}
+
+export interface ProgramProceduralState {
+  epoch: number;
+  seed: number;
+  updatedAt: number;
+  dynamicBinSelection: number;
+  dynamicBinIndex: number;
+  dynamicBinClipId: string | null;
+  dynamicBinManifest: DynamicBinClip[];
+  cutCadence: number;
+  transitionMode: TransitionMode;
+  compositorPreset: CompositorPreset;
+  splitLayout: SplitLayout;
+  fade: number;
+  textProbability: number;
+  strictLooseBlend: number;
+  visualVariance: number;
+  crowdSteeringLevel: number;
+  performerVector: ParamVector;
+  audienceVector: ParamVector;
+  textBlend: TextBlendState;
+}
+
+export type ProposalLane = "audio" | "visual_text";
+export type AudioProposalKind = "texture_nudge" | "structured_latch";
+export type MLProposalDecision = "accepted" | "expired" | "rejected" | "blocked";
+export type AudioStemID = "master" | "main_samples" | "synth_ambient" | "choir" | "ipad_in";
+
+export interface StateDevelopmentMetrics {
+  repeatability: number;
+  intensityTrend: number;
+  noveltySaturation: number;
+  headroom: number;
+  safetyContext: number;
+  stateDevelopmentIndex: number;
+  interventionNeedScore: number;
+  updatedAt: number;
+}
+
+export interface MLProposalPayloadAudio {
+  kind: AudioProposalKind;
+  suggestedBank?: number;
+  suggestedSampleID?: string;
+  chainAIntensityTarget?: number;
+  chainBIntensityTarget?: number;
+  densityTarget?: number;
+  latchSuggested: boolean;
+}
+
+export interface MLProposalPayloadVisualText {
+  dynamicBinSelection?: number;
+  transitionMode?: TransitionMode;
+  compositorPreset?: CompositorPreset;
+  splitLayout?: SplitLayout;
+  fade?: number;
+  textProbability?: number;
+  strictLooseBlend?: number;
+}
+
+export interface MLProposal {
+  id: string;
+  lane: ProposalLane;
+  confidence: number;
+  rationale: string;
+  expectedEffect: string;
+  timeoutMs: number;
+  createdAt: number;
+  audio?: MLProposalPayloadAudio;
+  visualText?: MLProposalPayloadVisualText;
+}
+
+export interface AudioStemFeatureFrame {
+  stem: AudioStemID;
+  rms: number;
+  spectralCentroid: number;
+  flux: number;
+  transientDensity: number;
+}
+
+export interface ProgramAudioState {
+  epoch: number;
+  updatedAt: number;
+  activeSampleBank: number;
+  activeChoirSampleBank: number;
+  choirContextActive: boolean;
+  phoneGateCommitted: boolean;
+  estimatedDensity: number;
+  effects: {
+    chainAActive: boolean;
+    chainAIntensity: number;
+    chainBActive: boolean;
+    chainBIntensity: number;
+  };
+  master: AudioFeaturePayload;
+  stems: AudioStemFeatureFrame[];
+  activeProposalID: string | null;
+  structuredLatchActive: boolean;
+  staticMacros: {
+    sampleMorph: number;
+    articulation: number;
+    timbre: number;
+    textureSend: number;
+  };
+  choirField: {
+    spread: number;
+    depth: number;
+    detune: number;
+  };
+  staticVisualOverrideHeld: boolean;
+}
+
 export type CompositorMode = "html-in-canvas" | "fallback" | "unsupported";
 
 export interface ColorIntentPayload {
@@ -102,6 +280,17 @@ export type PhoneAudioCommandKind =
   | "ambient_noise"
   | "stop_all";
 
+export type PhoneAudioPriority = "high" | "medium" | "low";
+
+export interface PhoneAudioRenderHints {
+  zoneId?: string;
+  pan?: number;
+  detuneCents?: number;
+  grainMix?: number;
+  motionEnergy?: number;
+  priority?: PhoneAudioPriority;
+}
+
 export interface PhoneAudioCommandPayload {
   commandId: string;
   kind: PhoneAudioCommandKind;
@@ -111,6 +300,8 @@ export interface PhoneAudioCommandPayload {
   sampleId?: string;
   gain?: number;
   seed?: number;
+  renderHints?: PhoneAudioRenderHints;
+  renderHintsByTarget?: Record<string, PhoneAudioRenderHints>;
   issuedAt: number;
 }
 
@@ -193,6 +384,17 @@ export interface PhoneAudioPoolStatePayload {
   quadRouteReady: boolean;
   availableDevices: string[];
   activeVoices: Record<string, number>;
+  zoneOccupancy?: Record<string, number>;
+  deviceHealth?: Record<
+    string,
+    {
+      rttMs: number;
+      driftMs: number;
+      ackReliability: number;
+      lastSeenAt: number;
+    }
+  >;
+  failoverCount?: number;
   updatedAt: number;
 }
 
@@ -202,6 +404,10 @@ export interface AudioOpsStatePayload {
   pickWindow: CrowdPickWindowPayload | null;
   pickResult: CrowdPickResultPayload | null;
   textScene: TextScenePayload;
+  proceduralState?: ProgramProceduralState;
+  programAudioState?: ProgramAudioState;
+  stateDevelopmentMetrics?: StateDevelopmentMetrics;
+  activeProposal?: MLProposal | null;
   updatedAt: number;
 }
 
@@ -304,7 +510,9 @@ export interface WireEnvelope<T = unknown> {
     | "crowd_pick_vote"
     | "crowd_pick_result"
     | "text_scene"
-    | "phone_audio_pool_state";
+    | "phone_audio_pool_state"
+    | "push_deck_event"
+    | "procedural_state";
   data: T;
   sentAt: number;
 }

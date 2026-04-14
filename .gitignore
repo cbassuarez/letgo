@@ -14,3 +14,7 @@ Package.resolved
 DerivedData
 web-client/.vite
 backend-realtime/.turbo
+.conda/
+pretrained_models/
+stems/
+*.xcuserstate

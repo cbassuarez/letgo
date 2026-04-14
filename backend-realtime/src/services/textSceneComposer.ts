@@ -14,12 +14,20 @@ interface ScriptCandidate {
   weight: number;
 }
 
-const scriptBank: ScriptCandidate[] = [
+const strictScriptBank: ScriptCandidate[] = [
   { id: "line-1", text: "The cyan night opened and each phone became a tuning fork.", weight: 0.84 },
   { id: "line-2", text: "Every tilt reshaped the choir of screens into one shared breath.", weight: 0.76 },
   { id: "line-3", text: "You are not watching the piece. You are one of its vectors.", weight: 0.91 },
   { id: "line-4", text: "The hall keeps remembering what the crowd just decided.", weight: 0.79 },
   { id: "line-5", text: "A signal becomes a sentence the moment we choose together.", weight: 0.82 }
+];
+
+const looseSourceBank: ScriptCandidate[] = [
+  { id: "loose-1", text: "Bring your thumb to the edge and the frame starts breathing.", weight: 0.68 },
+  { id: "loose-2", text: "We borrow the room’s pulse and print it as temporary weather.", weight: 0.66 },
+  { id: "loose-3", text: "A chorus can be statistical and still feel like a body.", weight: 0.72 },
+  { id: "loose-4", text: "No single screen leads, but all of them bend the horizon.", weight: 0.7 },
+  { id: "loose-5", text: "The cut becomes a vote, then a tremor, then a sentence.", weight: 0.74 }
 ];
 
 const rewriteLexicon: Record<string, string[]> = {
@@ -80,26 +88,48 @@ export class TextSceneComposerService {
     audioFeatures?: AudioFeaturePayload;
     pickResult?: CrowdPickResultPayload | null;
     pickEpoch?: number;
+    textBlend?: { probability?: number; strictRatio?: number };
   }): TextScenePayload {
     const vector = this.normalizeVector(input.vector);
     const audio = input.audioFeatures ?? fallbackAudioFeatures;
     const pickLabel = input.pickResult?.winnerLabel?.toLowerCase() ?? "";
+    const textProbability = clamp01(input.textBlend?.probability ?? vector.textAmount);
+    const strictRatio = clamp01(input.textBlend?.strictRatio ?? 0.5);
+    const looseRatio = clamp01(1 - strictRatio);
 
-    const scored = scriptBank
+    const strictScored = strictScriptBank
       .map((candidate) => ({
         candidate,
         score:
           candidate.weight +
-          vector.textAmount * 0.28 +
-          vector.compositeBias * 0.2 +
-          audio.rms * 0.18 +
-          (pickLabel.includes("chorus") ? 0.12 : 0) +
+          strictRatio * 0.32 +
+          vector.textAmount * 0.26 +
+          vector.compositeBias * 0.19 +
+          audio.rms * 0.15 +
           (pickLabel.includes("focus") ? 0.08 : 0)
       }))
       .sort((lhs, rhs) => rhs.score - lhs.score);
 
-    const lineCount = this.decideLineCount(vector, audio, pickLabel);
-    const selected = scored.slice(0, lineCount).map((entry) => entry.candidate);
+    const looseScored = looseSourceBank
+      .map((candidate) => ({
+        candidate,
+        score:
+          candidate.weight +
+          looseRatio * 0.35 +
+          vector.compositeBias * 0.21 +
+          audio.flux * 0.16 +
+          audio.transientDensity * 0.12 +
+          (pickLabel.includes("echo") ? 0.08 : 0) +
+          (pickLabel.includes("scatter") ? 0.08 : 0)
+      }))
+      .sort((lhs, rhs) => rhs.score - lhs.score);
+
+    const requestedLineCount = textProbability < 0.08 ? 0 : this.decideLineCount(vector, audio, pickLabel);
+    const blendCounts = this.allocateBlendCounts(requestedLineCount, strictRatio);
+
+    const strictSelected = strictScored.slice(0, blendCounts.strict).map((entry) => entry.candidate);
+    const looseSelected = looseScored.slice(0, blendCounts.loose).map((entry) => entry.candidate);
+    const selected = [...strictSelected, ...looseSelected];
     const lines = selected.map((candidate, index) =>
       this.buildSceneLine(candidate, {
         cueId: input.cueId,
@@ -113,7 +143,7 @@ export class TextSceneComposerService {
     const anchor = this.decideAnchor(pickLabel);
     const durationMs = Math.max(
       defaultScene.guardrails.minDurationMs,
-      Math.round(2200 + 4200 * (0.3 + vector.textAmount * 0.4 + audio.rms * 0.3))
+      Math.round(2200 + 4200 * (0.28 + textProbability * 0.36 + audio.rms * 0.36))
     );
 
     this.sceneVersion += 1;
@@ -124,9 +154,9 @@ export class TextSceneComposerService {
       anchor,
       lineCount: lines.length,
       cutMode,
-      alpha: clamp01(0.56 + vector.compositeBias * 0.38),
+      alpha: clamp01((0.42 + vector.compositeBias * 0.36) * textProbability),
       fontScale: 0.8 + vector.textAmount * 0.55,
-      weight: clamp01(0.35 + vector.compositeBias * 0.5 + audio.transientDensity * 0.15),
+      weight: clamp01(0.33 + vector.compositeBias * 0.42 + audio.transientDensity * 0.15 + looseRatio * 0.1),
       durationMs,
       lines,
       guardrails: {
@@ -209,6 +239,22 @@ export class TextSceneComposerService {
       return 2;
     }
     return 1;
+  }
+
+  private allocateBlendCounts(lineCount: number, strictRatio: number): { strict: number; loose: number } {
+    if (lineCount <= 0) {
+      return { strict: 0, loose: 0 };
+    }
+    if (lineCount === 1) {
+      return strictRatio >= 0.5 ? { strict: 1, loose: 0 } : { strict: 0, loose: 1 };
+    }
+
+    const targetStrict = Math.round(lineCount * strictRatio);
+    const strict = Math.min(lineCount - 1, Math.max(1, targetStrict));
+    return {
+      strict,
+      loose: lineCount - strict
+    };
   }
 
   private decideCutMode(audio: AudioFeaturePayload, pickLabel: string): TextScenePayload["cutMode"] {

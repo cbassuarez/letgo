@@ -184,6 +184,22 @@ public struct OutputLatchController: Sendable {
             return nil
         }
 
+        if let expiresAt = snapshot.expiresAt, now >= expiresAt {
+            snapshot = OutputLatchSnapshot(
+                pendingMode: nil,
+                pendingLaneId: nil,
+                latchId: nil,
+                armedAt: nil,
+                expiresAt: nil,
+                status: StatusLineEvent(
+                    message: "Arm timeout",
+                    severity: .warn,
+                    timestamp: now
+                )
+            )
+            return nil
+        }
+
         if pendingMode == "static", snapshot.pendingLaneId == nil {
             snapshot = OutputLatchSnapshot(
                 pendingMode: snapshot.pendingMode,
