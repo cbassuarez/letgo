@@ -42,7 +42,7 @@ jobs:
 
       - name: Build frontend
         env:
-          VITE_APP_BASE: /letgo/
+          VITE_APP_BASE: /
         run: npm run build --workspace web-client
 
       - name: Add SPA fallback
