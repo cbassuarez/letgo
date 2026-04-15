@@ -9,25 +9,38 @@ export const PermissionGate = ({ onDone }: PermissionGateProps): JSX.Element => 
   const { permissions, completed, enableAudio, enableGeo, enableMotion } = usePermissionFlow();
 
   return (
-    <section className="mx-auto mt-10 w-full max-w-4xl border-t border-cyanotype-200/30 py-8">
-      <p className="cyanotype-kicker">ACCESS PROTOCOL</p>
-      <h2 className="mt-3 text-4xl font-semibold leading-[0.95] sm:text-6xl">Join The Conductor Field</h2>
-      <p className="font-display mt-6 text-2xl text-cyanotype-000/88 sm:text-4xl">
-        Activate your device as an expressive instrument.
-      </p>
-      <p className="mt-4 max-w-3xl text-sm text-cyanotype-100/80 sm:text-base">
-        This phone becomes a unique participant. Enable audio and motion to join live control.
-        Location is optional and only improves spatial grouping.
+    <motion.section
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.26 }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Live access permissions"
+      className="live-permission-modal"
+    >
+      <p className="live-ribbon-label">ACCESS</p>
+      <h2 className="live-permission-title">Enable Device Permissions</h2>
+      <p className="live-permission-copy">
+        Audio and motion are required. Location is optional.
       </p>
 
-      <div className="mt-8 grid gap-4 border-t border-cyanotype-200/25 pt-5">
-        <button className="cyanotype-cta text-left" onClick={() => void enableAudio()}>
+      <div className="live-permission-grid">
+        <button
+          className={`live-permission-button ${permissions.audio ? "ready" : ""}`}
+          onClick={() => void enableAudio()}
+        >
           {permissions.audio ? "Audio Ready" : "Enable Audio"}
         </button>
-        <button className="cyanotype-cta text-left" onClick={() => void enableMotion()}>
+        <button
+          className={`live-permission-button ${permissions.motion ? "ready" : ""}`}
+          onClick={() => void enableMotion()}
+        >
           {permissions.motion ? "Motion Ready" : "Enable Motion"}
         </button>
-        <button className="cyanotype-cta text-left" onClick={() => void enableGeo()}>
+        <button
+          className={`live-permission-button ${permissions.geolocation ? "ready" : ""}`}
+          onClick={() => void enableGeo()}
+        >
           {permissions.geolocation ? "Location Ready" : "Enable Location (Optional)"}
         </button>
       </div>
@@ -36,12 +49,12 @@ export const PermissionGate = ({ onDone }: PermissionGateProps): JSX.Element => 
         <motion.button
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          className="cyanotype-cta mt-8 w-fit"
+          className="live-permission-continue"
           onClick={() => onDone(permissions)}
         >
-          Continue To Film
+          Continue
         </motion.button>
       ) : null}
-    </section>
+    </motion.section>
   );
 };
