@@ -38,25 +38,44 @@ describe("FixedVideoLayer", () => {
       />
     );
 
-    const video = screen.getByTestId("fixed-video-layer").querySelector("video");
-    expect(video?.getAttribute("src")).toContain("/media/interstitial-loop.mp4");
+    const layer = screen.getByTestId("fixed-video-layer");
+    expect(layer.getAttribute("data-active-source")).toContain("/media/interstitial-loop.mp4");
   });
 
-  it("uses lane source when showFixedLaneId is present", () => {
+  it("uses explicit shared media ref when provided", () => {
     render(
       <FixedVideoLayer
         cue={{
           ...baseCue,
           showState: "main",
-          payload: { showFixedLaneId: "lane-a" }
+          payload: { showFixedMediaRef: "media/show-fixed/main-01.mp4" }
         }}
         logicalNow={0}
         enabled
       />
     );
 
-    const video = screen.getByTestId("fixed-video-layer").querySelector("video");
-    expect(video?.getAttribute("src")).toContain("/media/show-fixed/lane-a.mp4");
+    const layer = screen.getByTestId("fixed-video-layer");
+    expect(layer.getAttribute("data-active-source")).toContain("/media/show-fixed/main-01.mp4");
+  });
+
+  it("treats m3u8 refs as stream output and disables looping", () => {
+    render(
+      <FixedVideoLayer
+        cue={{
+          ...baseCue,
+          showState: "main",
+          payload: { showFixedMediaRef: "https://stream.example.com/main.m3u8" }
+        }}
+        logicalNow={0}
+        enabled
+      />
+    );
+
+    const layer = screen.getByTestId("fixed-video-layer");
+    expect(layer.getAttribute("data-active-source")).toBe("https://stream.example.com/main.m3u8");
+    const video = layer.querySelector("video");
+    expect(video?.loop).toBe(false);
   });
 
   it("hides fallback when video can play", () => {

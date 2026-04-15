@@ -194,6 +194,7 @@ export const DeviceRoute = (): JSX.Element => {
   const [selectedVoteOptionId, setSelectedVoteOptionId] = useState<string | null>(null);
   const [controlsOpen, setControlsOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [fixedLayerErrored, setFixedLayerErrored] = useState(false);
   const permissionsSentRef = useRef(false);
   const zoneSentRef = useRef(false);
   const handledPhoneCommandRef = useRef<string>("");
@@ -458,6 +459,7 @@ export const DeviceRoute = (): JSX.Element => {
   }, [handleCommand, session.phoneAudioCommand]);
 
   const statusToastLabel = !session.connected ? "reconnecting" : !engineRunning ? "awaiting engine" : null;
+  const showDynamicWithFallback = showDynamic || (showFixed && fixedLayerErrored);
   const diagnosticLines = [
     session.connected ? "Live Link" : "Field Reconnect",
     `Link ${session.linkState}`,
@@ -534,11 +536,16 @@ export const DeviceRoute = (): JSX.Element => {
       className="live-stage-shell relative min-h-dvh overflow-hidden text-cyanotype-050"
       data-testid="live-stage"
     >
-      <FixedVideoLayer cue={session.cue} logicalNow={session.logicalNow} enabled={showFixed} />
+      <FixedVideoLayer
+        cue={session.cue}
+        logicalNow={session.logicalNow}
+        enabled={showFixed}
+        onPlaybackErrorChange={setFixedLayerErrored}
+      />
       <DynamicOverlay
         vector={session.vector}
         line={textSceneLine}
-        enabled={showDynamic}
+        enabled={showDynamicWithFallback}
         influence={participantVector.influence}
         procedural={session.proceduralState}
         onCompositorModeChange={setCompositorMode}

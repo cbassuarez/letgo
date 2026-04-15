@@ -230,6 +230,64 @@ private struct MediaManifest: Codable {
     }
 }
 
+private struct HLSStreamConfig {
+    let preshowURL: String?
+    let introductionURL: String?
+    let mainURL: String?
+    let endingURL: String?
+    let interstitialURL: String?
+    let laneBaseURL: String?
+
+    static func fromEnvironment(_ env: [String: String] = ProcessInfo.processInfo.environment) -> HLSStreamConfig {
+        let baseURL = normalized(env["CONDUCTOR_HLS_BASE_URL"])
+        return HLSStreamConfig(
+            preshowURL: normalized(env["CONDUCTOR_HLS_PRESHOW_URL"]) ?? baseURL.map { join($0, "preshow.m3u8") },
+            introductionURL: normalized(env["CONDUCTOR_HLS_INTRODUCTION_URL"]) ?? baseURL.map { join($0, "introduction.m3u8") },
+            mainURL: normalized(env["CONDUCTOR_HLS_MAIN_URL"]) ?? baseURL.map { join($0, "main.m3u8") },
+            endingURL: normalized(env["CONDUCTOR_HLS_ENDING_URL"]) ?? baseURL.map { join($0, "ending.m3u8") },
+            interstitialURL: normalized(env["CONDUCTOR_HLS_INTERSTITIAL_URL"]) ?? baseURL.map { join($0, "interstitial.m3u8") },
+            laneBaseURL: normalized(env["CONDUCTOR_HLS_LANE_BASE_URL"]) ?? baseURL.map { join($0, "lanes") }
+        )
+    }
+
+    func sceneURL(for showState: ShowState) -> String? {
+        switch showState {
+        case .preshow:
+            return preshowURL
+        case .introduction:
+            return introductionURL
+        case .main:
+            return mainURL
+        case .ending:
+            return endingURL
+        case .idle, .hold, .aborted, .recovery:
+            return nil
+        }
+    }
+
+    func laneURL(for laneId: String) -> String? {
+        guard let laneBaseURL else {
+            return nil
+        }
+        let encodedLaneId = laneId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? laneId
+        return Self.join(laneBaseURL, "\(encodedLaneId).m3u8")
+    }
+
+    private static func normalized(_ rawValue: String?) -> String? {
+        guard let rawValue else {
+            return nil
+        }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func join(_ base: String, _ component: String) -> String {
+        let trimmedBase = base.hasSuffix("/") ? String(base.dropLast()) : base
+        let trimmedComponent = component.hasPrefix("/") ? String(component.dropFirst()) : component
+        return "\(trimmedBase)/\(trimmedComponent)"
+    }
+}
+
 private enum BackendEndpoints {
     static let host: String = {
         if let envHost = ProcessInfo.processInfo.environment["CONDUCTOR_BACKEND_HOST"]?
@@ -358,6 +416,7 @@ private struct OutputProfile {
     let loopsIndefinitely: Bool
     let usesInterstitialMedia: Bool
     let showFixedLaneId: String?
+    let showFixedMediaRef: String?
 
     var payload: [String: String] {
         var payload: [String: String] = [
@@ -369,6 +428,12 @@ private struct OutputProfile {
         ]
         if let showFixedLaneId {
             payload["showFixedLaneId"] = showFixedLaneId
+        }
+        if let showFixedMediaRef {
+            payload["showFixedMediaRef"] = showFixedMediaRef
+            if showFixedMediaRef.lowercased().contains(".m3u8") {
+                payload["showFixedMediaMime"] = "application/vnd.apple.mpegurl"
+            }
         }
         return payload
     }
@@ -565,6 +630,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private var mediaDurationTaskCache: [String: Task<TimeInterval?, Never>] = [:]
     private var showFixedCounter = 0
     private var sequenceWorkItems: [DispatchWorkItem] = []
+    private let hlsStreamConfig = HLSStreamConfig.fromEnvironment()
     private var phoneCommandSequence = 0
     private var lastLatchStatus: StatusLineEvent?
     private var midiIngestor: MIDIIngestor?
@@ -1989,6 +2055,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         effectiveOutputMode = .interstitial
         activeStaticLaneId = nil
         timelineStepPlaybackWindows.removeAll()
+        lockedTimelineLaneIDs.removeAll()
         previewStatus = "Output INTER"
         let now = Date()
         let snapshot = latchController.reset(now: now, message: "Engine started")
@@ -2049,6 +2116,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         committedOutputMode = .off
         activeStaticLaneId = nil
         timelineStepPlaybackWindows.removeAll()
+        lockedTimelineLaneIDs.removeAll()
         let now = Date()
         let snapshot = latchController.reset(now: now, message: "Engine stopped")
         syncLatchState(snapshot, now: now)
@@ -2180,6 +2248,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         activeStaticLaneId = nil
         effectiveOutputMode = .off
         timelineStepPlaybackWindows.removeAll()
+        lockedTimelineLaneIDs.removeAll()
         let now = Date()
         let snapshot = latchController.reset(now: now, message: "Show reset")
         syncLatchState(snapshot, now: now)
@@ -5147,6 +5216,20 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         return abs(currentSeconds - targetSeconds) > 0.20
     }
 
+    private func resolveShowFixedMediaRef(
+        showState: ShowState,
+        usesInterstitialMedia: Bool,
+        showFixedLaneId: String?
+    ) -> String? {
+        if usesInterstitialMedia {
+            return hlsStreamConfig.interstitialURL
+        }
+        if let showFixedLaneId, let laneURL = hlsStreamConfig.laneURL(for: showFixedLaneId) {
+            return laneURL
+        }
+        return hlsStreamConfig.sceneURL(for: showState)
+    }
+
     private func resolveOutputProfile(
         for showState: ShowState,
         overrideStaticLaneId: String? = nil
@@ -5160,16 +5243,23 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                     showDynamic: false,
                     loopsIndefinitely: false,
                     usesInterstitialMedia: false,
-                    showFixedLaneId: nil
+                    showFixedLaneId: nil,
+                    showFixedMediaRef: nil
                 )
             }
+            let showFixedMediaRef = resolveShowFixedMediaRef(
+                showState: showState,
+                usesInterstitialMedia: true,
+                showFixedLaneId: nil
+            )
             return OutputProfile(
                 mode: .interstitial,
                 showFixed: true,
                 showDynamic: false,
                 loopsIndefinitely: true,
                 usesInterstitialMedia: true,
-                showFixedLaneId: nil
+                showFixedLaneId: nil,
+                showFixedMediaRef: showFixedMediaRef
             )
         case .dynamic:
             return OutputProfile(
@@ -5178,39 +5268,58 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 showDynamic: true,
                 loopsIndefinitely: false,
                 usesInterstitialMedia: false,
-                showFixedLaneId: nil
+                showFixedLaneId: nil,
+                showFixedMediaRef: nil
             )
         case .static:
             let laneId = overrideStaticLaneId ?? activeStaticLaneId
             if let laneId, laneMediaURL(for: laneId) != nil {
+                let showFixedMediaRef = resolveShowFixedMediaRef(
+                    showState: showState,
+                    usesInterstitialMedia: false,
+                    showFixedLaneId: laneId
+                )
                 return OutputProfile(
                     mode: .static,
                     showFixed: true,
                     showDynamic: false,
                     loopsIndefinitely: false,
                     usesInterstitialMedia: false,
-                    showFixedLaneId: laneId
+                    showFixedLaneId: laneId,
+                    showFixedMediaRef: showFixedMediaRef
                 )
             }
 
             if shouldUseInterstitial(for: showState) {
+                let showFixedMediaRef = resolveShowFixedMediaRef(
+                    showState: showState,
+                    usesInterstitialMedia: true,
+                    showFixedLaneId: laneId
+                )
                 return OutputProfile(
                     mode: .interstitial,
                     showFixed: true,
                     showDynamic: false,
                     loopsIndefinitely: true,
                     usesInterstitialMedia: true,
-                    showFixedLaneId: laneId
+                    showFixedLaneId: laneId,
+                    showFixedMediaRef: showFixedMediaRef
                 )
             }
 
+            let showFixedMediaRef = resolveShowFixedMediaRef(
+                showState: showState,
+                usesInterstitialMedia: false,
+                showFixedLaneId: laneId
+            )
             return OutputProfile(
                 mode: .static,
                 showFixed: true,
                 showDynamic: false,
                 loopsIndefinitely: false,
                 usesInterstitialMedia: false,
-                showFixedLaneId: laneId
+                showFixedLaneId: laneId,
+                showFixedMediaRef: showFixedMediaRef
             )
         }
     }

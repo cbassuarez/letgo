@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useEffect } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { DeviceRoute } from "../src/routes/DeviceRoute";
 
@@ -7,11 +8,22 @@ const validHash = "0123456789abcdef0123456789abcdef";
 
 let sessionState: any;
 let permissionState: any;
+let fixedLayerShouldError = false;
 
 vi.mock("../src/components/FixedVideoLayer", () => ({
-  FixedVideoLayer: ({ enabled }: { enabled: boolean }): JSX.Element | null => (
-    enabled ? <div data-testid="fixed-layer" /> : null
-  )
+  FixedVideoLayer: ({
+    enabled,
+    onPlaybackErrorChange
+  }: {
+    enabled: boolean;
+    onPlaybackErrorChange?: (hasError: boolean) => void;
+  }): JSX.Element | null => {
+    useEffect(() => {
+      onPlaybackErrorChange?.(enabled && fixedLayerShouldError);
+    }, [enabled, onPlaybackErrorChange]);
+
+    return enabled ? <div data-testid="fixed-layer" /> : null;
+  }
 }));
 
 vi.mock("../src/components/DynamicOverlay", () => ({
@@ -242,6 +254,7 @@ const renderLive = () => {
 describe("DeviceRoute minimal live UI", () => {
   beforeEach(() => {
     sessionState = baseSession();
+    fixedLayerShouldError = false;
     permissionState = {
       permissions: {
         audio: true,
@@ -394,6 +407,21 @@ describe("DeviceRoute minimal live UI", () => {
 
     expect(screen.getByTestId("fixed-layer")).toBeTruthy();
     expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
+  });
+
+  it("falls back to dynamic overlay when fixed layer errors", async () => {
+    sessionState.cue.showState = "ending";
+    sessionState.cue.payload.outputMode = "program";
+    sessionState.cue.payload.showFixed = true;
+    sessionState.cue.payload.showDynamic = false;
+    fixedLayerShouldError = true;
+
+    renderLive();
+
+    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId("dynamic-overlay")).toBeTruthy();
+    });
   });
 
   it("shows blocking permission modal until onDone completes", async () => {

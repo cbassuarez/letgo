@@ -20,3 +20,12 @@ Place fixed-scene files in `public/media`:
 - `introduction.mp4`
 - `show-fixed.mp4`
 - `ending.mp4`
+
+## HLS Live Streams
+
+`/live` prefers a cue payload stream ref when present:
+
+- `showFixedMediaRef` (supports `.m3u8` HLS playlists)
+- `showFixedMediaMime` optional (set to `application/vnd.apple.mpegurl` for explicit HLS typing)
+
+When no stream ref is provided, it falls back to local files in `public/media`.

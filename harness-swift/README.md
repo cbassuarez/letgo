@@ -30,6 +30,28 @@ macOS conductor app and core engine modules.
   - `start`, `hold`, `jump`, `abort`, `recover`
 - Local cue IDs are still generated for rehearsal logging and deterministic local timing.
 
+## HLS Cue Output
+
+Harness cue payloads can include `showFixedMediaRef` for participant `/live` playback.
+Configure stream URLs with environment variables:
+
+- `CONDUCTOR_HLS_BASE_URL` (optional shortcut; derives defaults below)
+- `CONDUCTOR_HLS_PRESHOW_URL`
+- `CONDUCTOR_HLS_INTRODUCTION_URL`
+- `CONDUCTOR_HLS_MAIN_URL`
+- `CONDUCTOR_HLS_ENDING_URL`
+- `CONDUCTOR_HLS_INTERSTITIAL_URL`
+- `CONDUCTOR_HLS_LANE_BASE_URL` (lane IDs map to `<lane-base>/<lane-id>.m3u8`)
+
+If only `CONDUCTOR_HLS_BASE_URL` is set, defaults are:
+
+- `<base>/preshow.m3u8`
+- `<base>/introduction.m3u8`
+- `<base>/main.m3u8`
+- `<base>/ending.m3u8`
+- `<base>/interstitial.m3u8`
+- lane base `<base>/lanes/`
+
 ## Run
 
 ```bash
