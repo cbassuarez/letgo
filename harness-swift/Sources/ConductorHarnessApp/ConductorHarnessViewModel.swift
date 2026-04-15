@@ -1045,6 +1045,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 self?.publishLatestAudioFeatures()
                 self?.publishProceduralState(force: true)
                 self?.publishPushPadLabelsForActiveMainBank(force: true)
+                self?.publishCurrentCueSnapshot(reason: "ws_open")
                 self?.pushStatus(StatusLineEvent(
                     message: "WS link online",
                     severity: .success,
@@ -1304,6 +1305,35 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return "choir_stop_all"
         case .setPhoneChoirContextActive(let active):
             return active ? "choir_ctx_on" : "choir_ctx_off"
+        }
+    }
+
+    private func publishCurrentCueSnapshot(reason: String) {
+        guard linkState == .online || linkState == .degraded else { return }
+
+        let outputProfile = resolveOutputProfile(for: state)
+        var payload = outputProfile.payload
+        payload["engineRunning"] = engineRunning ? "true" : "false"
+        payload["sequence"] = "sync"
+        payload["sequenceStep"] = reason
+
+        Task {
+            do {
+                try await websocket.sendCommand(
+                    .jump,
+                    targetState: state,
+                    payload: payload
+                )
+            } catch {
+                await MainActor.run {
+                    self.lastLinkError = error.localizedDescription
+                    self.pushStatus(StatusLineEvent(
+                        message: "Cue sync failed: \(error.localizedDescription)",
+                        severity: .warn,
+                        timestamp: Date()
+                    ))
+                }
+            }
         }
     }
 
@@ -5236,17 +5266,6 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     ) -> OutputProfile {
         switch committedOutputMode {
         case .off:
-            guard engineRunning else {
-                return OutputProfile(
-                    mode: .off,
-                    showFixed: false,
-                    showDynamic: false,
-                    loopsIndefinitely: false,
-                    usesInterstitialMedia: false,
-                    showFixedLaneId: nil,
-                    showFixedMediaRef: nil
-                )
-            }
             let showFixedMediaRef = resolveShowFixedMediaRef(
                 showState: showState,
                 usesInterstitialMedia: true,

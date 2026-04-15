@@ -385,6 +385,27 @@ describe("DeviceRoute minimal live UI", () => {
     expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
   });
 
+  it("falls back to fixed output when no cue has arrived yet", () => {
+    sessionState.cue = null;
+
+    renderLive();
+
+    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
+    expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
+  });
+
+  it("infers dynamic output for main state when output mode is missing", () => {
+    sessionState.cue.showState = "main";
+    sessionState.cue.payload = {
+      engineRunning: true
+    };
+
+    renderLive();
+
+    expect(screen.queryByTestId("fixed-layer")).toBeNull();
+    expect(screen.getByTestId("dynamic-overlay")).toBeTruthy();
+  });
+
   it("renders main dynamic mode on dynamic layer only", () => {
     sessionState.cue.showState = "main";
     sessionState.cue.payload.outputMode = "dynamic";

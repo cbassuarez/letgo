@@ -8,6 +8,7 @@ import {
   type CrowdPickVotePayload,
   type CrowdPickResultPayload,
   type CueCommand,
+  type ShowState,
   isCueCommand,
   type LightingStatePayload,
   normalizeVector,
@@ -145,6 +146,64 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   let lastPushPadLabels: PushPadLabelsPayload | null = null;
   let baseProceduralState = createDefaultProceduralState(deps.show.snapshot().vector);
   let effectiveProceduralState = baseProceduralState;
+  const defaultColorPolicy = {
+    enabled: true,
+    roles: ["audience", "performer", "observer"],
+    showStates: ["idle", "preshow", "introduction", "main", "ending", "hold", "aborted", "recovery"]
+  } as const;
+
+  const fallbackOutputForState = (
+    showState: ShowState
+  ): Pick<CueCommand["payload"], "outputMode" | "showFixed" | "showDynamic" | "interstitialActive"> => {
+    switch (showState) {
+      case "preshow":
+      case "introduction":
+      case "ending":
+        return {
+          outputMode: "static",
+          showFixed: true,
+          showDynamic: false,
+          interstitialActive: false
+        };
+      case "main":
+        return {
+          outputMode: "dynamic",
+          showFixed: false,
+          showDynamic: true,
+          interstitialActive: false
+        };
+      case "idle":
+      case "hold":
+      case "aborted":
+      case "recovery":
+      default:
+        return {
+          outputMode: "off",
+          showFixed: true,
+          showDynamic: false,
+          interstitialActive: true
+        };
+    }
+  };
+
+  const buildSnapshotCue = (): CueCommand => {
+    const snapshot = deps.show.snapshot();
+    const output = fallbackOutputForState(snapshot.state);
+    return {
+      cueId: `${snapshot.state}:${Math.round(snapshot.logicalTime)}:snapshot`,
+      showState: snapshot.state,
+      logicalTime: snapshot.logicalTime,
+      payload: {
+        ...output,
+        vector: snapshot.vector,
+        colorPolicy: defaultColorPolicy,
+        engineRunning: snapshot.state !== "idle"
+      },
+      version: snapshot.version,
+      action: "jump"
+    };
+  };
+  let latestCue: CueCommand = buildSnapshotCue();
 
   deps.crowdPickPulse.tick(0, Date.now());
   const initialPulse = deps.crowdPickPulse.snapshot();
@@ -189,6 +248,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       }
 
       if (inbound.kind === "cue" && isCueCommand(inbound.data)) {
+        latestCue = inbound.data;
         await deps.replayService.record({
           type: "cue",
           timestamp: Date.now(),
@@ -210,6 +270,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
             inbound.data.targetState,
             inbound.data.payload ?? {}
           );
+          latestCue = cue;
 
           await deps.replayService.record({
             type: "cue",
@@ -758,9 +819,19 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   }
 
   function pushInitialSnapshot(socket: WebSocket, role: "harness" | "device"): void {
+    const snapshot = deps.show.snapshot();
+
     send(socket, {
       kind: "show_snapshot",
-      data: deps.show.snapshot(),
+      data: snapshot,
+      sentAt: Date.now()
+    } satisfies WireEnvelope);
+
+    // Always provide a cue envelope at connection time so clients have an
+    // immediately renderable output mode/layer state.
+    send(socket, {
+      kind: "cue",
+      data: latestCue ?? buildSnapshotCue(),
       sentAt: Date.now()
     } satisfies WireEnvelope);
 
@@ -1052,6 +1123,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   }
 
   function broadcastCue(cue: CueCommand): void {
+    latestCue = cue;
     const envelope = {
       kind: "cue",
       data: cue,

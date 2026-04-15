@@ -70,7 +70,7 @@ const boolFromPayload = (value: unknown, fallback = false): boolean => {
 
 const outputModeLabel = (rawMode: string): string => {
   const normalized = rawMode.toLowerCase();
-  if (normalized === "interstitial" || normalized === "off") {
+  if (normalized.includes("interstitial") || normalized === "off") {
     return "INTER";
   }
   if (normalized === "static") {
@@ -227,9 +227,10 @@ export const DeviceRoute = (): JSX.Element => {
     return deterministicPick(seed, scriptBank).text;
   }, [hashedId]);
 
+  const inferredOutputMode = session.cue?.showState === "main" ? "dynamic" : "off";
   const defaultDynamicEnabled = session.cue?.showState === "main";
-  const engineRunning = boolFromPayload(cuePayload.engineRunning, false);
-  const rawOutputMode = typeof cuePayload.outputMode === "string" ? cuePayload.outputMode : "legacy";
+  const engineRunning = boolFromPayload(cuePayload.engineRunning, session.cue?.showState !== "idle");
+  const rawOutputMode = typeof cuePayload.outputMode === "string" ? cuePayload.outputMode : inferredOutputMode;
   const normalizedOutputMode = rawOutputMode.toLowerCase();
   const interMode = normalizedOutputMode.includes("interstitial") || normalizedOutputMode === "off";
   const fixedStageState = session.cue?.showState === "preshow" || session.cue?.showState === "introduction" || session.cue?.showState === "ending";

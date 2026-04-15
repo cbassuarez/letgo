@@ -122,13 +122,18 @@ export const FixedVideoLayer = ({
     : typeof payload.showFixedMime === "string"
       ? payload.showFixedMime
       : null;
-  const source = useMemo(() => (interstitialActive
-    ? toBaseAssetUrl(mediaForState.interstitial)
-    : explicitFixedMediaRef
-      ? toSharedMediaUrl(explicitFixedMediaRef)
-      : cue
-        ? toBaseAssetUrl(mediaForState[cue.showState] ?? mediaForState.main)
-        : toBaseAssetUrl(mediaForState.preshow)), [cue, explicitFixedMediaRef, interstitialActive]);
+  const source = useMemo(() => {
+    if (explicitFixedMediaRef) {
+      return toSharedMediaUrl(explicitFixedMediaRef);
+    }
+    if (interstitialActive) {
+      return toBaseAssetUrl(mediaForState.interstitial);
+    }
+    if (cue) {
+      return toBaseAssetUrl(mediaForState[cue.showState] ?? mediaForState.main);
+    }
+    return toBaseAssetUrl(mediaForState.preshow);
+  }, [cue, explicitFixedMediaRef, interstitialActive]);
   const hlsSource = looksLikeHlsSource(source, explicitMimeHint);
   const shouldLoop = hlsSource ? false : boolFromPayload(payload.outputLoop, true);
   const fallbackLabel = interstitialActive ? "INTERSTITIAL" : (cue?.showState ?? "preshow").toUpperCase();

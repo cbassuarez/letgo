@@ -42,6 +42,26 @@ describe("FixedVideoLayer", () => {
     expect(layer.getAttribute("data-active-source")).toContain("/media/interstitial-loop.mp4");
   });
 
+  it("prefers explicit media ref over interstitial fallback when both are present", () => {
+    render(
+      <FixedVideoLayer
+        cue={{
+          ...baseCue,
+          showState: "main",
+          payload: {
+            outputMode: "interstitial_loop",
+            showFixedMediaRef: "https://stream.example.com/interstitial.m3u8"
+          }
+        }}
+        logicalNow={0}
+        enabled
+      />
+    );
+
+    const layer = screen.getByTestId("fixed-video-layer");
+    expect(layer.getAttribute("data-active-source")).toBe("https://stream.example.com/interstitial.m3u8");
+  });
+
   it("uses explicit shared media ref when provided", () => {
     render(
       <FixedVideoLayer
