@@ -84,6 +84,7 @@ struct HOTASHotspotDescriptor: Identifiable, Equatable {
         .engineStopHold: ("Engine Stop", .x56Stick, .button, 0.78, 0.14),
         .rightTrigger1: ("Trigger A", .x56Stick, .button, 0.14, 0.09),
         .rightTrigger2: ("Trigger B", .x56Stick, .button, 0.28, 0.09),
+        .ultrachunkOverlayToggle: ("Ultrachunk FX", .x56Stick, .button, 0.62, 0.14),
         .rightStickX: ("Stick X", .x56Stick, .axis, 0.39, 0.60),
         .rightStickY: ("Stick Y", .x56Stick, .axis, 0.49, 0.60),
         .rightStickTwist: ("Twist", .x56Stick, .axis, 0.44, 0.70),

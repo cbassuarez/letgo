@@ -17,6 +17,11 @@ export default {
           900: "#061b30",
           950: "#040e1c"
         },
+        participant: {
+          cream: "#f7efe4",
+          smoke: "#c3b8cb",
+          blush: "#f1d0bc"
+        },
         ink: "#040e1c",
         fog: "#c9ecff"
       },

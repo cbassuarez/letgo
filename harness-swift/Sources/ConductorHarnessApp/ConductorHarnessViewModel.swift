@@ -451,6 +451,13 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     @Published private(set) var activeEffectsPreset = EffectsChainPreset(chainAName: "Rhythm", chainBName: "Space", bankID: 1)
     @Published private(set) var staticAudioMacroState: StaticAudioMacroState = .neutral
     @Published private(set) var choirFieldState: ChoirFieldState = .neutral
+    @Published private(set) var ultrachunkControlFrame: UltrachunkControlFrame = .neutral
+    @Published private(set) var ultrachunkDSPState: UltrachunkDSPState = .neutral
+    @Published private(set) var ultrachunkGranularity: Double = 0
+    @Published private(set) var ultrachunkIntensity: Double = 0
+    @Published private(set) var ultrachunkPrimarySampleID: String?
+    @Published private(set) var ultrachunkSecondarySampleID: String?
+    @Published private(set) var hotasUltrachunkOverlayEnabled = false
     @Published private(set) var dynamicBinManifest: [DynamicBinClip] = []
     @Published private(set) var programProceduralState: ProgramProceduralState = .default()
     @Published private(set) var programAudioState: ProgramAudioState = .default
@@ -606,6 +613,11 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private var hotasLastRhythmAccentAtMs: TimeInterval = 0
     private var hotasLastSpaceAccentAtMs: TimeInterval = 0
     private var hotasLastPaulstretchAtMs: TimeInterval = 0
+    private var hotasLastPaulstretchMorphAtMs: TimeInterval = 0
+    private var hotasUltrachunkLastFrameAtMs: TimeInterval = 0
+    private var hotasUltrachunkLastRenderAtMs: TimeInterval = 0
+    private var hotasUltrachunkLastFrame: UltrachunkControlFrame = .neutral
+    private let hotasUltrachunkQualityProfile: UltrachunkQualityProfile = .maxQuality
 
     private struct RoutedHOTASActionContext {
         let signal: ControlSignal
@@ -650,6 +662,16 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
 
     private static func clamp01(_ value: Double) -> Double {
         min(1, max(0, value))
+    }
+
+    private static func remap01(_ value: Double, min: Double, max: Double) -> Double {
+        guard max > min else { return value >= max ? 1 : 0 }
+        return clamp01((value - min) / (max - min))
+    }
+
+    private static func smoothstep01(_ value: Double) -> Double {
+        let t = clamp01(value)
+        return t * t * (3 - (2 * t))
     }
 
     private static func normalizedMilliseconds(_ timestamp: TimeInterval) -> TimeInterval {
@@ -1190,6 +1212,8 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return "strict_loose_blend"
         case .setVisualVariance:
             return "visual_variance"
+        case .toggleUltrachunkOverlay:
+            return "ultrachunk_overlay_toggle"
         case .contextualTake:
             return "contextual_take"
         case .setMasterArm(let armed):
@@ -1343,6 +1367,10 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             || previous.stems != stems
             || previous.activeProposalID != activeMLProposal?.id
             || previous.structuredLatchActive != proposalStructuredLatchActive
+            || previous.ultrachunkFrame != ultrachunkControlFrame
+            || previous.ultrachunkDSPState != ultrachunkDSPState
+            || previous.ultrachunkPrimarySampleID != ultrachunkPrimarySampleID
+            || previous.ultrachunkSecondarySampleID != ultrachunkSecondarySampleID
             || abs(previous.estimatedDensity - densityEstimate) > 0.01
 
         let epoch = changed ? previous.epoch + 1 : previous.epoch
@@ -1365,7 +1393,11 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             structuredLatchActive: proposalStructuredLatchActive,
             staticMacros: staticAudioMacroState,
             choirField: choirFieldState,
-            staticVisualOverrideHeld: hotasStaticVisualOverrideHeld
+            staticVisualOverrideHeld: hotasStaticVisualOverrideHeld,
+            ultrachunkFrame: ultrachunkControlFrame,
+            ultrachunkDSPState: ultrachunkDSPState,
+            ultrachunkPrimarySampleID: ultrachunkPrimarySampleID,
+            ultrachunkSecondarySampleID: ultrachunkSecondarySampleID
         )
     }
 
@@ -3946,6 +3978,41 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         }
     }
 
+    func toggleUltrachunkOverlayFromControl() {
+        hotasUltrachunkOverlayEnabled.toggle()
+        let nowMs = ConductorHarnessViewModel.nowMilliseconds()
+        let enabled = hotasUltrachunkOverlayEnabled
+
+        if !enabled {
+            ultrachunkDSPState = .neutral
+            ultrachunkGranularity = 0
+            ultrachunkIntensity = 0
+        }
+
+        recordSoundManipulationFocus(
+            lane: enabled ? "ULTRACHUNK OVERLAY ON" : "ULTRACHUNK OVERLAY OFF",
+            value: enabled ? 1 : 0,
+            controlIDHint: "fx:ultrachunk_overlay"
+        )
+
+        pushStatus(StatusLineEvent(
+            message: enabled ? "ULTRACHUNK overlay enabled" : "ULTRACHUNK overlay disabled",
+            severity: .info,
+            timestamp: Date()
+        ))
+        refreshProgramAudioState(nowMs: nowMs)
+        Task { [hudTelemetryStore] in
+            await hudTelemetryStore.ingestSystem(
+                stage: .applied,
+                severity: .apply,
+                controlID: "fx:ultrachunk_overlay",
+                semanticAction: "ultrachunk_overlay_toggle",
+                outcome: enabled ? "ON" : "OFF",
+                detail: nil
+            )
+        }
+    }
+
     func setPhoneChoirContextActiveFromControl(_ active: Bool) {
         guard hotasPhoneChoirContextActive != active else { return }
         hotasPhoneChoirContextActive = active
@@ -4080,13 +4147,16 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return
         }
 
-        let signedAxisDelta = updateHOTASSampleSpace(axis: axis, normalizedControlValue: normalizedControlValue)
-        let axisDelta = abs(signedAxisDelta)
-        // Ignore tiny center jitter; only movement should fire sound.
-        guard axisDelta >= 0.018 else { return }
+        let nowMs = ConductorHarnessViewModel.nowMilliseconds()
+        let (controlFrame, axisDelta) = updateUltrachunkControlFrame(
+            axis: axis,
+            normalizedControlValue: normalizedControlValue,
+            nowMs: nowMs
+        )
+        guard axisDelta >= 0.006 || controlFrame.speed >= 0.018 else { return }
 
-        let candidateIDs = mainBankSampleIDs(for: activeSampleBank)
-        guard !candidateIDs.isEmpty else {
+        let atlas = ultrachunkSampleAtlas(for: activeSampleBank)
+        guard !atlas.isEmpty else {
             maybeEmitHOTASStaticAuditionStatus(
                 dynamicMode
                     ? "HOTAS scoring blocked: load sample pack first"
@@ -4096,88 +4166,164 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return
         }
 
-        let driftScale: Double = switch axis {
-        case .x: 1.20
-        case .y: 0.70
-        case .z: 0.55
-        }
-        hotasSampleSpaceDrift += signedAxisDelta * Double(candidateIDs.count) * driftScale
-        hotasSampleSpaceDrift = min(
-            Double(candidateIDs.count),
-            max(-Double(candidateIDs.count), hotasSampleSpaceDrift)
-        )
+        let chainA = effectsChainState.chainAActive ? effectsChainState.chainAIntensity : 0
+        let chainB = effectsChainState.chainBActive ? effectsChainState.chainBIntensity : 0
 
-        guard var resolvedIndex = resolveHOTASSampleSpaceIndex(sampleCount: candidateIDs.count) else { return }
-        if effectsChainState.chainBActive, candidateIDs.count > 1 {
-            let spread = max(1, Int((effectsChainState.chainBIntensity * Double(candidateIDs.count)) * 0.06))
-            let wobble = Int(((hotasSampleSpaceZ - 0.5) * 2.0 * Double(spread)).rounded())
-            resolvedIndex = min(max(0, resolvedIndex + wobble), candidateIDs.count - 1)
-        }
-        let selectedID = candidateIDs[resolvedIndex]
-        selectedSampleID = selectedID
-        guard let sampleURL = samplePackEntries[selectedID] else { return }
-
-        let nowMs = ConductorHarnessViewModel.nowMilliseconds()
-        let sameSample = selectedID == hotasStaticSampleAuditionLastSampleID
-        let rhythmRateMultiplier: Double = effectsChainState.chainAActive
-            ? max(0.45, 1.0 - (effectsChainState.chainAIntensity * 0.55))
-            : 1.0
-        let baseIntervalMs: TimeInterval = sameSample ? 260 : 70
-        let minIntervalMs = baseIntervalMs * rhythmRateMultiplier
+        let ultrachunkOverlayEnabled = hotasUltrachunkOverlayEnabled
+        let computedGranularity = ultrachunkGranularity(for: controlFrame.speed)
+        let computedIntensity = ultrachunkIntensity(for: controlFrame.speed)
+        let granularity = ultrachunkOverlayEnabled ? computedGranularity : 0
+        let intensity = ultrachunkOverlayEnabled ? computedIntensity : 0
+        ultrachunkGranularity = granularity
+        ultrachunkIntensity = intensity
+        let density = ConductorHarnessViewModel.clamp01(granularity + (chainA * 0.46))
+        let minIntervalMs = max(18, 176 - (density * 142) - (chainA * 54))
         guard nowMs - hotasStaticSampleAuditionLastAtMs >= minIntervalMs else { return }
 
-        // If sample selection did not change, require stronger motion before re-fire.
-        if sameSample, axisDelta < 0.11 {
+        let selection = selectUltrachunkSamples(from: atlas, frame: controlFrame, intensity: intensity)
+        guard let primaryURL = samplePackEntries[selection.primary.sampleID] else { return }
+
+        let sameSample = selection.primary.sampleID == hotasStaticSampleAuditionLastSampleID
+        if sameSample, axisDelta < 0.03, controlFrame.speed < 0.08 {
             return
         }
 
-        let fxBoost = (effectsChainState.chainAActive ? effectsChainState.chainAIntensity * 0.24 : 0)
-            + (effectsChainState.chainBActive ? effectsChainState.chainBIntensity * 0.18 : 0)
-        let movementBoost = min(0.30, axisDelta * 0.95)
-        let gainBase: Double = dynamicMode
-            ? (0.18 + performerProceduralState.cutCadence * 0.22 + performerProceduralState.fade * 0.14)
-            : (0.18 + staticAudioMacroState.articulation * 0.24 + staticAudioMacroState.timbre * 0.18)
-        let gain = min(0.96, max(0.14, gainBase + movementBoost + fxBoost))
+        selectedSampleID = selection.primary.sampleID
+        ultrachunkPrimarySampleID = selection.primary.sampleID
+        ultrachunkSecondarySampleID = selection.secondary?.sampleID
 
-        do {
-            try quadAudioEngine.triggerSample(url: sampleURL, gain: gain)
-            let previousSampleID = hotasStaticSampleAuditionLastSampleID
-            hotasStaticSampleAuditionLastAtMs = nowMs
-            hotasStaticSampleAuditionLastValueByLane[lane] = normalizedControlValue
-            hotasStaticSampleAuditionLastSampleID = selectedID
-            triggerHOTASEffectsAccentsIfNeeded(
-                selectedID: selectedID,
-                candidateIDs: candidateIDs,
-                baseGain: gain,
-                nowMs: nowMs
+        let dspState = ultrachunkOverlayEnabled
+            ? deriveUltrachunkDSPState(
+                twist: controlFrame.twist,
+                intensity: intensity,
+                spaceBoost: chainB
             )
-            triggerHOTASPaulstretchIfNeeded(
-                sampleURL: sampleURL,
-                axisDelta: axisDelta,
-                nowMs: nowMs
+            : .neutral
+        ultrachunkDSPState = dspState
+        Task { [hudTelemetryStore] in
+            await hudTelemetryStore.ingestTrace(id: "trace:ultrachunk_speed", value: controlFrame.speed)
+            await hudTelemetryStore.ingestTrace(id: "trace:ultrachunk_granularity", value: granularity)
+            await hudTelemetryStore.ingestTrace(id: "trace:ultrachunk_intensity", value: intensity)
+            await hudTelemetryStore.ingestTrace(id: "trace:ultrachunk_twist", value: controlFrame.twist)
+            await hudTelemetryStore.ingestTrace(
+                id: "trace:ultrachunk_lane",
+                value: dspState.twistLane == .spectral ? 1 : (dspState.twistLane == .crusher ? 0 : 0.5)
             )
+        }
 
-            if selectedID != previousSampleID || nowMs - hotasStaticSampleAuditionLastStatusAtMs >= 1_200 {
-                hotasStaticSampleAuditionLastStatusAtMs = nowMs
-                pushStatus(StatusLineEvent(
-                    message: dynamicMode
-                        ? "HOTAS scoring sample: \(sampleURL.lastPathComponent)"
-                        : "HOTAS sample audition: \(sampleURL.lastPathComponent)",
-                    severity: .info,
-                    timestamp: Date()
-                ))
+        let baseGain: Double = dynamicMode
+            ? (0.18 + (performerProceduralState.cutCadence * 0.18) + (performerProceduralState.fade * 0.12))
+            : (0.16 + (staticAudioMacroState.articulation * 0.2) + (staticAudioMacroState.textureSend * 0.18))
+        let movementGain = min(0.34, controlFrame.speed * 0.42)
+        let gain = min(0.95, max(0.08, baseGain + movementGain + (chainA * 0.08)))
+
+        let forward = ConductorHarnessViewModel.remap01(controlFrame.y, min: 0.5, max: 1)
+        let back = ConductorHarnessViewModel.remap01(1 - controlFrame.y, min: 0.5, max: 1)
+        let localityTilt = (controlFrame.x - 0.5) * 2
+
+        let baseChunkWindow = (1 - granularity) * hotasUltrachunkQualityProfile.maxChunkWindowMs
+        let chunkWindowMs = max(
+            hotasUltrachunkQualityProfile.minChunkWindowMs,
+            min(
+                hotasUltrachunkQualityProfile.maxChunkWindowMs,
+                baseChunkWindow + (forward * 220) - (back * 70)
+            )
+        )
+        let jitterMs = min(300, 8 + (intensity * 124) + (chainA * 84))
+        let releaseMs = min(1_300, 90 + (forward * 460) + ((1 - granularity) * 120))
+        let baseRate = 1 + (localityTilt * 0.22) - (forward * 0.1) + (back * 0.08)
+        let densityRate = 1 + ((density - 0.5) * 0.3)
+        let recipe = UltrachunkVoiceRecipe(
+            sampleID: selection.primary.sampleID,
+            startNormalized: hotasSampleSpaceX,
+            chunkWindowMs: chunkWindowMs,
+            jitterMs: jitterMs,
+            rate: max(0.22, min(2.4, baseRate * densityRate)),
+            gain: gain,
+            releaseMs: releaseMs,
+            density: density
+        )
+
+        let dryGain = max(0.06, min(0.74, gain * (0.34 + (chainA * 0.18))))
+        try? quadAudioEngine.triggerSample(url: primaryURL, gain: dryGain)
+
+        if ultrachunkOverlayEnabled {
+            do {
+                try quadAudioEngine.triggerUltrachunkVoice(
+                    url: primaryURL,
+                    recipe: recipe,
+                    dsp: dspState,
+                    qualityProfile: hotasUltrachunkQualityProfile
+                )
+
+                if let secondary = selection.secondary,
+                   let secondaryURL = samplePackEntries[secondary.sampleID] {
+                    let secondaryGain = min(0.54, max(0.06, gain * (0.38 + (chainB * 0.34))))
+                    let secondaryRecipe = UltrachunkVoiceRecipe(
+                        sampleID: secondary.sampleID,
+                        startNormalized: ConductorHarnessViewModel.clamp01((hotasSampleSpaceX * 0.72) + 0.14),
+                        chunkWindowMs: min(1_200, chunkWindowMs * (1.18 + (forward * 0.34))),
+                        jitterMs: min(420, jitterMs * 1.3),
+                        rate: max(0.14, min(2.2, recipe.rate * (0.92 + (chainB * 0.2)))),
+                        gain: secondaryGain,
+                        releaseMs: min(2_000, releaseMs * (1.1 + (chainB * 0.35))),
+                        density: min(1, density + (chainB * 0.22))
+                    )
+                    try quadAudioEngine.triggerUltrachunkVoice(
+                        url: secondaryURL,
+                        recipe: secondaryRecipe,
+                        dsp: dspState,
+                        qualityProfile: hotasUltrachunkQualityProfile
+                    )
+                }
+                hotasUltrachunkLastRenderAtMs = nowMs
+            } catch {
+                if nowMs - hotasStaticSampleAuditionLastStatusAtMs >= 900 {
+                    hotasStaticSampleAuditionLastStatusAtMs = nowMs
+                    pushStatus(StatusLineEvent(
+                        message: "Ultrachunk failed: \(error.localizedDescription)",
+                        severity: .error,
+                        timestamp: Date()
+                    ))
+                }
             }
-        } catch {
-            if nowMs - hotasStaticSampleAuditionLastStatusAtMs >= 900 {
-                hotasStaticSampleAuditionLastStatusAtMs = nowMs
-                pushStatus(StatusLineEvent(
-                    message: dynamicMode
-                        ? "HOTAS scoring failed: \(error.localizedDescription)"
-                        : "HOTAS sample audition failed: \(error.localizedDescription)",
-                    severity: .error,
-                    timestamp: Date()
-                ))
-            }
+        }
+
+        maybeTriggerHOTASPaulstretchMorphFromXY(
+            primaryURL: primaryURL,
+            secondaryURL: selection.secondary.flatMap { samplePackEntries[$0.sampleID] },
+            frame: controlFrame,
+            axis: axis,
+            axisDelta: axisDelta,
+            dynamicMode: dynamicMode,
+            nowMs: nowMs
+        )
+        triggerHOTASEffectsAccentsLegacy(
+            selectedID: selection.primary.sampleID,
+            candidateIDs: atlas.map(\.sampleID),
+            baseGain: dryGain,
+            nowMs: nowMs
+        )
+        triggerHOTASLegacyStretchLayerIfNeeded(
+            sampleURL: primaryURL,
+            axisDelta: axisDelta,
+            dynamicMode: dynamicMode,
+            nowMs: nowMs
+        )
+
+        hotasStaticSampleAuditionLastAtMs = nowMs
+        hotasStaticSampleAuditionLastValueByLane[lane] = normalizedControlValue
+        hotasStaticSampleAuditionLastSampleID = selection.primary.sampleID
+        refreshProgramAudioState(nowMs: nowMs)
+
+        if nowMs - hotasStaticSampleAuditionLastStatusAtMs >= 1_100 || !sameSample {
+            hotasStaticSampleAuditionLastStatusAtMs = nowMs
+            let layerLabel = ultrachunkOverlayEnabled ? "ULTRACHUNK" : "HOTAS SOUND"
+            pushStatus(StatusLineEvent(
+                message: "\(layerLabel) \(selection.primary.sampleID) g\(String(format: "%.2f", granularity)) i\(String(format: "%.2f", intensity)) \(dspState.twistLane.rawValue.uppercased())",
+                severity: .info,
+                timestamp: Date()
+            ))
         }
     }
 
@@ -4202,18 +4348,171 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         }
     }
 
-    private func resolveHOTASSampleSpaceIndex(sampleCount: Int) -> Int? {
-        guard sampleCount > 0 else { return nil }
-        let maxIndex = sampleCount - 1
-        let primary = hotasSampleSpaceX * Double(maxIndex)
-        let yOffset = (hotasSampleSpaceY - 0.5) * Double(sampleCount) * 0.18
-        let zOrbit = sin(hotasSampleSpaceZ * (.pi * 2.0)) * Double(sampleCount) * 0.10
-        let resolvedContinuous = primary + yOffset + zOrbit + hotasSampleSpaceDrift
-        hotasSampleSpaceDrift *= 0.68
-        let wrapped = resolvedContinuous.truncatingRemainder(dividingBy: Double(sampleCount))
-        let wrappedPositive = wrapped < 0 ? wrapped + Double(sampleCount) : wrapped
-        let resolved = Int(wrappedPositive.rounded())
-        return min(max(0, resolved), maxIndex)
+    private func updateUltrachunkControlFrame(
+        axis: HOTASSampleSpaceAxis,
+        normalizedControlValue: Double,
+        nowMs: TimeInterval
+    ) -> (UltrachunkControlFrame, Double) {
+        let signedAxisDelta = updateHOTASSampleSpace(axis: axis, normalizedControlValue: normalizedControlValue)
+        let axisDelta = abs(signedAxisDelta)
+        let lastAt = hotasUltrachunkLastFrameAtMs == 0 ? nowMs - 16 : hotasUltrachunkLastFrameAtMs
+        let dtSeconds = max(0.008, (nowMs - lastAt) / 1_000)
+        let instantaneousSpeed = ConductorHarnessViewModel.clamp01((axisDelta / dtSeconds) * 0.2)
+        let smoothedSpeed = max(instantaneousSpeed, hotasUltrachunkLastFrame.speed * 0.82)
+        let frame = UltrachunkControlFrame(
+            x: hotasSampleSpaceX,
+            y: hotasSampleSpaceY,
+            twist: hotasSampleSpaceZ,
+            speed: smoothedSpeed,
+            timestamp: nowMs
+        )
+        hotasUltrachunkLastFrameAtMs = nowMs
+        hotasUltrachunkLastFrame = frame
+        ultrachunkControlFrame = frame
+        return (frame, axisDelta)
+    }
+
+    private func ultrachunkGranularity(for speed: Double) -> Double {
+        UltrachunkMapping.granularity(forSpeed: speed)
+    }
+
+    private func ultrachunkIntensity(for speed: Double) -> Double {
+        UltrachunkMapping.intensity(forSpeed: speed)
+    }
+
+    private func deriveUltrachunkDSPState(
+        twist: Double,
+        intensity: Double,
+        spaceBoost: Double
+    ) -> UltrachunkDSPState {
+        UltrachunkMapping.twistDSPState(
+            twistNormalized: twist,
+            intensity: intensity,
+            spaceBoost: spaceBoost
+        )
+    }
+
+    private func ultrachunkSampleAtlas(for bank: Int) -> [SampleAtlasEntry] {
+        var orderedIDs: [String] = []
+        var seen: Set<String> = []
+
+        func appendID(_ id: String) {
+            guard samplePackEntries[id] != nil else { return }
+            if seen.insert(id).inserted {
+                orderedIDs.append(id)
+            }
+        }
+
+        for id in mainBankSampleIDs(for: bank) {
+            appendID(id)
+        }
+
+        let bankPrefix = "main_b\(min(3, max(1, bank)))_"
+        for id in samplePackEntries.keys
+            .filter({ $0.lowercased().hasPrefix(bankPrefix.lowercased()) })
+            .sorted() {
+            appendID(id)
+        }
+
+        if orderedIDs.isEmpty {
+            for id in samplePackEntries.keys.sorted() {
+                appendID(id)
+            }
+        }
+
+        guard !orderedIDs.isEmpty else { return [] }
+        let regionCount = max(4, min(12, Int((Double(orderedIDs.count) / 6).rounded())))
+        return orderedIDs.enumerated().map { index, sampleID in
+            let region = Int((Double(index) / Double(max(1, orderedIDs.count - 1)) * Double(regionCount - 1)).rounded())
+            let depthClass = classifySampleDepth(sampleID: sampleID)
+            return SampleAtlasEntry(
+                sampleID: sampleID,
+                region: region,
+                depthClass: depthClass,
+                isLongTexture: depthClass == .texture
+            )
+        }
+    }
+
+    private func classifySampleDepth(sampleID: String) -> SampleDepthClass {
+        let loweredID = sampleID.lowercased()
+        let loweredName = samplePackEntries[sampleID]?.lastPathComponent.lowercased() ?? loweredID
+        let token = loweredID + " " + loweredName
+        if token.contains("long")
+            || token.contains("paul")
+            || token.contains("stretch")
+            || token.contains("texture")
+            || token.contains("drone")
+            || token.contains("ambient")
+            || token.contains("wash") {
+            return .texture
+        }
+        if token.contains("kick")
+            || token.contains("snare")
+            || token.contains("perc")
+            || token.contains("stab")
+            || token.contains("hit")
+            || token.contains("pluck") {
+            return .transient
+        }
+        if let renderClass = sampleMetadataByID[sampleID]?.renderClass {
+            switch renderClass {
+            case .texture:
+                return .texture
+            case .percussion:
+                return .transient
+            default:
+                break
+            }
+        }
+        return .balanced
+    }
+
+    private func selectUltrachunkSamples(
+        from atlas: [SampleAtlasEntry],
+        frame: UltrachunkControlFrame,
+        intensity: Double
+    ) -> (primary: SampleAtlasEntry, secondary: SampleAtlasEntry?) {
+        let regionCount = max(1, (atlas.map(\.region).max() ?? 0) + 1)
+        let targetRegion = Int((frame.x * Double(max(1, regionCount - 1))).rounded())
+        let forward = ConductorHarnessViewModel.remap01(frame.y, min: 0.5, max: 1)
+        let back = ConductorHarnessViewModel.remap01(1 - frame.y, min: 0.5, max: 1)
+        let preferTexture = forward >= back
+
+        let scored = atlas.map { entry -> (entry: SampleAtlasEntry, score: Double) in
+            let regionDistance = abs(Double(entry.region - targetRegion)) / Double(max(1, regionCount - 1))
+            let depthPenalty: Double = switch entry.depthClass {
+            case .texture:
+                preferTexture ? 0 : (0.52 + (back * 0.24))
+            case .transient:
+                preferTexture ? (0.52 + (forward * 0.24)) : 0
+            case .balanced:
+                0.22
+            }
+            let longPenalty = preferTexture
+                ? (entry.isLongTexture ? 0 : (0.12 + (forward * 0.2)))
+                : (entry.isLongTexture ? (0.18 + (back * 0.16)) : 0)
+            let score = (regionDistance * 0.68) + depthPenalty + longPenalty
+            return (entry, score)
+        }
+        .sorted {
+            if abs($0.score - $1.score) > 0.0001 {
+                return $0.score < $1.score
+            }
+            return $0.entry.sampleID < $1.entry.sampleID
+        }
+
+        let primary = scored.first!.entry
+        let secondaryThreshold = 0.16 + (intensity * 0.28)
+        let secondary = scored
+            .dropFirst()
+            .first(where: { candidate in
+                candidate.entry.sampleID != primary.sampleID
+                    && candidate.score <= (scored.first!.score + secondaryThreshold)
+            })?
+            .entry
+
+        return (primary: primary, secondary: secondary)
     }
 
     private func resetHOTASStaticSampleAuditionState() {
@@ -4228,9 +4527,19 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         hotasLastRhythmAccentAtMs = 0
         hotasLastSpaceAccentAtMs = 0
         hotasLastPaulstretchAtMs = 0
+        hotasLastPaulstretchMorphAtMs = 0
+        hotasUltrachunkLastFrameAtMs = 0
+        hotasUltrachunkLastRenderAtMs = 0
+        hotasUltrachunkLastFrame = .neutral
+        ultrachunkControlFrame = .neutral
+        ultrachunkDSPState = .neutral
+        ultrachunkGranularity = 0
+        ultrachunkIntensity = 0
+        ultrachunkPrimarySampleID = nil
+        ultrachunkSecondarySampleID = nil
     }
 
-    private func triggerHOTASEffectsAccentsIfNeeded(
+    private func triggerHOTASEffectsAccentsLegacy(
         selectedID: String,
         candidateIDs: [String],
         baseGain: Double,
@@ -4243,7 +4552,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 let intensity = effectsChainState.chainAIntensity
                 let accents = max(1, Int((intensity * 2.2).rounded()))
                 let spacingSeconds = max(0.035, 0.08 - (intensity * 0.045))
-                for step in 1...accents {
+                for step in 1 ... accents {
                     let accentGain = min(0.82, max(0.10, baseGain * (0.65 - (0.12 * Double(step - 1)))))
                     DispatchQueue.main.asyncAfter(deadline: .now() + (spacingSeconds * Double(step))) { [weak self] in
                         guard let self else { return }
@@ -4275,18 +4584,19 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         }
     }
 
-    private func triggerHOTASPaulstretchIfNeeded(
+    private func triggerHOTASLegacyStretchLayerIfNeeded(
         sampleURL: URL,
         axisDelta: Double,
+        dynamicMode: Bool,
         nowMs: TimeInterval
     ) {
         let spaceInfluence = effectsChainState.chainBActive ? effectsChainState.chainBIntensity : 0
-        let textureInfluence = currentHOTASOutputModeID() == .dynamic
+        let textureInfluence = dynamicMode
             ? performerProceduralState.fade
             : staticAudioMacroState.textureSend
         let movementInfluence = min(1, axisDelta * 3.4)
         let impetus = max(spaceInfluence, max(textureInfluence, movementInfluence))
-        guard impetus >= 0.26 else { return }
+        guard impetus >= 0.20 else { return }
 
         let cooldownMs = max(180, 520 - (impetus * 300))
         guard nowMs - hotasLastPaulstretchAtMs >= cooldownMs else { return }
@@ -4302,7 +4612,66 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 rate: rate
             )
         } catch {
-            // Stretch layer is additive. Base sample trigger already succeeded.
+            // Additive only; dry/ultrachunk paths are already active.
+        }
+    }
+
+    private func maybeTriggerHOTASPaulstretchMorphFromXY(
+        primaryURL: URL,
+        secondaryURL: URL?,
+        frame: UltrachunkControlFrame,
+        axis: HOTASSampleSpaceAxis,
+        axisDelta: Double,
+        dynamicMode: Bool,
+        nowMs: TimeInterval
+    ) {
+        guard axis == .x || axis == .y else { return }
+
+        let movement = ConductorHarnessViewModel.clamp01((axisDelta * 8.5) + (frame.speed * 0.72))
+        let textureBias = dynamicMode ? performerProceduralState.fade : staticAudioMacroState.textureSend
+        let spaceBias = effectsChainState.chainBActive ? effectsChainState.chainBIntensity : 0
+        let impetus = max(movement, max(textureBias, spaceBias))
+        guard impetus >= 0.14 else { return }
+
+        let cooldownMs = max(115, 420 - (impetus * 260))
+        guard nowMs - hotasLastPaulstretchMorphAtMs >= cooldownMs else { return }
+        hotasLastPaulstretchMorphAtMs = nowMs
+
+        let forward = ConductorHarnessViewModel.remap01(frame.y, min: 0.5, max: 1)
+        let back = ConductorHarnessViewModel.remap01(1 - frame.y, min: 0.5, max: 1)
+        let stretchRate = max(0.05, min(0.32, 0.30 - (impetus * 0.16) - (forward * 0.08) + (back * 0.04)))
+        let baseGain = max(0.07, min(0.44, 0.10 + (impetus * 0.28) + (forward * 0.08)))
+
+        do {
+            try quadAudioEngine.triggerPaulstretchedSample(
+                url: primaryURL,
+                gain: baseGain,
+                rate: stretchRate
+            )
+
+            guard let secondaryURL else { return }
+            let xEdgeWeight = abs(frame.x - 0.5) * 2
+            let secondaryMix = ConductorHarnessViewModel.clamp01(0.26 + (xEdgeWeight * 0.52) + (movement * 0.24))
+            let secondaryGain = max(0.05, min(0.38, baseGain * secondaryMix))
+            let secondaryRate = max(0.05, min(0.34, stretchRate * (0.92 + (forward * 0.14) + (xEdgeWeight * 0.08))))
+            let delay = max(0.02, 0.06 - (impetus * 0.03))
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                try? self.quadAudioEngine.triggerPaulstretchedSample(
+                    url: secondaryURL,
+                    gain: secondaryGain,
+                    rate: secondaryRate
+                )
+            }
+        } catch {
+            if nowMs - hotasStaticSampleAuditionLastStatusAtMs >= 900 {
+                hotasStaticSampleAuditionLastStatusAtMs = nowMs
+                pushStatus(StatusLineEvent(
+                    message: "Paulstretch morph failed: \(error.localizedDescription)",
+                    severity: .error,
+                    timestamp: Date()
+                ))
+            }
         }
     }
 
@@ -5561,6 +5930,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             .rightTakeButton,
             .rightTrigger1,
             .rightTrigger2,
+            .ultrachunkOverlayToggle,
             .leftStaticVisualClutch
         ]
 

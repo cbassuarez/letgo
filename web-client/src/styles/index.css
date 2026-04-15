@@ -1,5 +1,25 @@
 @import url("https://fonts.googleapis.com/css2?family=Public+Sans:opsz,wght@8..144,300..900&family=Source+Serif+4:ital,wght@1,400;1,600;1,700&display=swap");
 
+@font-face {
+  font-family: "Edwardian Script ITC";
+  src:
+    local("Edwardian Script ITC"),
+    local("EdwardianScriptITC"),
+    url("https://db.onlinewebfonts.com/t/cf16d998be1c74cee8ff195025392aaa.woff2") format("woff2"),
+    url("https://db.onlinewebfonts.com/t/cf16d998be1c74cee8ff195025392aaa.woff") format("woff");
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "DIN 1451";
+  src:
+    local("DIN 1451"),
+    local("DIN1451"),
+    url("https://db.onlinewebfonts.com/t/74467e521f59aa6518ee6f22302f34d5.woff2") format("woff2"),
+    url("https://db.onlinewebfonts.com/t/74467e521f59aa6518ee6f22302f34d5.woff") format("woff");
+  font-display: swap;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -14,6 +34,12 @@
   --cyanotype-700: #0b3353;
   --cyanotype-900: #061e35;
   --cyanotype-950: #03111f;
+  --participant-ink: #07040f;
+  --participant-violet: #1c1438;
+  --participant-navy: #121326;
+  --participant-cream: #f7efe4;
+  --participant-smoke: #c3b8cb;
+  --participant-blush: #f1d0bc;
 }
 
 * {
@@ -58,6 +84,184 @@ body::before {
   font-family: "Source Serif 4", serif;
   font-style: italic;
   letter-spacing: 0.005em;
+}
+
+.participant-root {
+  position: relative;
+  overflow: hidden;
+  font-family: "DIN 1451", "Bahnschrift", "FF DIN", "Avenir Next", "Helvetica Neue", sans-serif;
+  letter-spacing: 0.01em;
+  background:
+    radial-gradient(circle at 14% 16%, rgba(226, 142, 111, 0.16), transparent 38%),
+    radial-gradient(circle at 86% 10%, rgba(97, 63, 130, 0.24), transparent 44%),
+    linear-gradient(138deg, var(--participant-ink) 0%, var(--participant-navy) 48%, #1f172f 100%);
+}
+
+.participant-root-keyless {
+  min-height: 100%;
+}
+
+.participant-atmosphere {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.participant-atmosphere::before,
+.participant-atmosphere::after {
+  content: "";
+  position: absolute;
+  inset: -12%;
+}
+
+.participant-atmosphere::before {
+  opacity: 0.3;
+  background:
+    radial-gradient(circle at 25% 38%, rgba(255, 232, 220, 0.22) 0%, transparent 40%),
+    radial-gradient(circle at 73% 70%, rgba(221, 163, 255, 0.14) 0%, transparent 42%);
+  mix-blend-mode: screen;
+  animation: participant-breath 17s ease-in-out infinite;
+}
+
+.participant-atmosphere::after {
+  opacity: 0.18;
+  background-image:
+    repeating-linear-gradient(
+      80deg,
+      rgba(251, 233, 218, 0.33) 0px,
+      rgba(251, 233, 218, 0.33) 1px,
+      transparent 1px,
+      transparent 88px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(230, 181, 222, 0.16) 0px,
+      rgba(230, 181, 222, 0.16) 1px,
+      transparent 1px,
+      transparent 58px
+    );
+  animation: participant-drift 25s linear infinite;
+}
+
+.participant-frame {
+  position: relative;
+  z-index: 2;
+}
+
+.participant-nav-wrap {
+  position: relative;
+  z-index: 5;
+  border: 1px solid rgba(196, 176, 211, 0.2);
+  background: linear-gradient(120deg, rgba(9, 7, 17, 0.88), rgba(24, 20, 42, 0.72));
+  backdrop-filter: blur(10px);
+}
+
+.participant-kicker {
+  margin: 0;
+  font-size: 0.69rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: rgba(218, 202, 225, 0.72);
+}
+
+.participant-headline {
+  font-family: "DIN 1451", "Bahnschrift", "FF DIN", "Avenir Next", "Helvetica Neue", sans-serif;
+  text-transform: uppercase;
+}
+
+.participant-script {
+  font-family: "Edwardian Script ITC", "Snell Roundhand", "Apple Chancery", "Zapfino", cursive;
+  letter-spacing: 0.02em;
+}
+
+.participant-nav-link {
+  color: rgba(240, 227, 235, 0.77);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  padding-bottom: 0.16rem;
+  transition: color 220ms ease, border-color 220ms ease, letter-spacing 220ms ease;
+}
+
+.participant-nav-link:hover {
+  color: var(--participant-cream);
+  border-color: rgba(247, 239, 228, 0.6);
+}
+
+.participant-nav-link.active {
+  color: var(--participant-cream);
+  border-color: rgba(247, 239, 228, 0.88);
+  letter-spacing: 0.23em;
+}
+
+.participant-nav-link-secondary {
+  color: rgba(205, 192, 212, 0.72);
+}
+
+.participant-enter-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  border: 1px solid rgba(244, 200, 178, 0.54);
+  background: linear-gradient(110deg, rgba(78, 34, 56, 0.56), rgba(106, 63, 43, 0.3));
+  color: var(--participant-cream);
+  padding: 0.43rem 0.72rem;
+  text-decoration: none;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.participant-enter-link:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 216, 188, 0.88);
+  background: linear-gradient(110deg, rgba(91, 42, 64, 0.68), rgba(132, 78, 53, 0.42));
+}
+
+.participant-enter-link.active {
+  border-color: rgba(255, 216, 188, 0.95);
+}
+
+.participant-card {
+  border-top: 1px solid rgba(196, 176, 211, 0.3);
+  border-bottom: 1px solid rgba(196, 176, 211, 0.16);
+  background: linear-gradient(180deg, rgba(7, 4, 15, 0.35), rgba(23, 17, 33, 0.22));
+  padding: 1.1rem 0;
+}
+
+@keyframes participant-breath {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0.6%, -0.8%, 0) scale(1.04);
+  }
+}
+
+@keyframes participant-drift {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(-2%, 1.2%, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .participant-atmosphere::before,
+  .participant-atmosphere::after {
+    animation: none;
+  }
+
+  .participant-nav-link,
+  .participant-enter-link {
+    transition: none;
+  }
+
+  .participant-enter-link:hover {
+    transform: none;
+  }
 }
 
 .cyanotype-shell {

@@ -76,6 +76,7 @@ public enum ControlAction: Equatable, Sendable {
     case setTextProbability(Double)
     case setStrictLooseBlend(Double)
     case setVisualVariance(Double)
+    case toggleUltrachunkOverlay
     case contextualTake
     case setMasterArm(isArmed: Bool)
     case phoneGateTake

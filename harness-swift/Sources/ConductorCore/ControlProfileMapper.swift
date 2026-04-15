@@ -40,6 +40,7 @@ public final class ControlProfileMapper {
     private var latchedChoirSampleBank: Int = 1
     private var toggle1Direction: Int = 0
     private var strictLooseBlendSetting: Double = 0.5
+    private var ultrachunkOverlayEnabled = false
     private var roleAxisThresholdLatched: [String: Bool] = [:]
     private var holdCaptureStartedAt: [ControlRole: TimeInterval] = [:]
 
@@ -55,6 +56,7 @@ public final class ControlProfileMapper {
         latchedChoirSampleBank = 1
         toggle1Direction = 0
         strictLooseBlendSetting = 0.5
+        ultrachunkOverlayEnabled = false
         roleAxisThresholdLatched.removeAll()
         holdCaptureStartedAt.removeAll()
     }
@@ -168,6 +170,11 @@ public final class ControlProfileMapper {
                 signal: signal,
                 intensity: normalized
             )
+
+        case .ultrachunkOverlayToggle:
+            guard signal.phase == .began else { return [] }
+            ultrachunkOverlayEnabled.toggle()
+            return [.toggleUltrachunkOverlay]
 
         case .leftMainThrottle:
             guard signal.kind == .axis else { return [] }

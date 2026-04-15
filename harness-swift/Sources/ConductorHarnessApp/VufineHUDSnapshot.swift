@@ -67,6 +67,13 @@ struct VufineHUDSnapshot: Equatable {
         let effectsChainState: EffectsChainState
         let activeEffectsPreset: EffectsChainPreset
         let programProceduralState: ProgramProceduralState
+        let ultrachunkControlFrame: UltrachunkControlFrame
+        let ultrachunkDSPState: UltrachunkDSPState
+        let ultrachunkGranularity: Double
+        let ultrachunkIntensity: Double
+        let ultrachunkPrimarySampleID: String?
+        let ultrachunkSecondarySampleID: String?
+        let hotasUltrachunkOverlayEnabled: Bool
 
         let vector: ParamVector
         let latestAudioFeatures: QuadAudioFeatures
@@ -89,6 +96,7 @@ struct VufineHUDSnapshot: Equatable {
     let phoneLine: String
     let bankLine: String
     let effectsLine: String
+    let ultrachunkLine: String
     let controlRoleLine: String
     let proceduralLine: String
     let textBlendLine: String
@@ -132,17 +140,18 @@ struct VufineHUDSnapshot: Equatable {
         let phoneLine = "PHONE gate \(statusToken)  pool \(input.phonePoolCount)  voices \(input.phoneVoiceCount)  zones \(input.phoneZoneOccupancy.count)  top \(dominantZone)  failovers \(input.phoneFailoverCount)"
         let bankLine = "BANKS main \(input.activeSampleBank)  choir \(input.activeChoirSampleBank)  choirCtx \(input.hotasPhoneChoirContextActive ? "ON" : "OFF")"
         let effectsLine = "FX A \(Self.effectState(active: input.effectsChainState.chainAActive, intensity: input.effectsChainState.chainAIntensity))  B \(Self.effectState(active: input.effectsChainState.chainBActive, intensity: input.effectsChainState.chainBIntensity))"
+        let ultrachunkLine = "ULTRACHUNK layer \(input.hotasUltrachunkOverlayEnabled ? "ON" : "OFF")  speed \(Self.decimal(input.ultrachunkControlFrame.speed))  gran \(Self.decimal(input.ultrachunkGranularity))  int \(Self.decimal(input.ultrachunkIntensity))  twist \(input.ultrachunkDSPState.twistLane.rawValue.uppercased())  p \(input.ultrachunkPrimarySampleID ?? "-")  s \(input.ultrachunkSecondarySampleID ?? "-")"
         let rightStickRole: String
         if input.hotasPhoneChoirContextActive {
             rightStickRole = "CHOIR FIELD"
         } else if input.effectiveOutputMode == .static {
-            rightStickRole = input.hotasStaticVisualOverrideHeld ? "VISUAL OVERRIDE (CLUTCH)" : "AUDIO MACRO"
-        } else if input.effectiveOutputMode == .dynamic {
-            rightStickRole = "DYNAMIC VIDEO"
+            rightStickRole = input.hotasStaticVisualOverrideHeld ? "VISUAL OVERRIDE (CLUTCH)" : "ULTRACHUNK AUDIO"
+        } else if input.effectiveOutputMode == .off {
+            rightStickRole = "ULTRACHUNK AUDIO (IDLE)"
         } else {
-            rightStickRole = "VECTOR PATCH"
+            rightStickRole = "ULTRACHUNK AUDIO"
         }
-        let controlRoleLine = "CTRL RIGHT[\(rightStickRole)]  LEFT[BANK/CUE/TRANSPORT]  CLUTCH \(input.hotasStaticVisualOverrideHeld ? "HELD" : "OFF")"
+        let controlRoleLine = "CTRL RIGHT[\(rightStickRole)]  LEFT[BANK/CUE/TRANSPORT]  CLUTCH \(input.hotasStaticVisualOverrideHeld ? "HELD" : "OFF")  UC \(input.hotasUltrachunkOverlayEnabled ? "ON" : "OFF")"
         let proceduralLine = "PROC clip \(clip)  cad \(Self.decimal(procedural.cutCadence))  tr \(procedural.transitionMode.rawValue)  comp \(procedural.compositorPreset.rawValue)  split \(procedural.splitLayout.rawValue)  fade \(Self.decimal(procedural.fade))"
         let textBlendLine = "TEXT p \(Self.decimal(procedural.textProbability))  strict \(Self.decimal(procedural.strictLooseBlend))  loose \(Self.decimal(procedural.textBlend.looseRatio))  var \(Self.decimal(procedural.visualVariance))  crowd \(Self.decimal(procedural.crowdSteeringLevel))"
         let vectorLine = "VECTOR x \(Self.decimal(input.vector.spatialX))  y \(Self.decimal(input.vector.spatialY))  z \(Self.decimal(input.vector.spatialZ))  gain \(Self.decimal(input.vector.audioGain))  comp \(Self.decimal(input.vector.compositeBias))  text \(Self.decimal(input.vector.textAmount))"
@@ -256,6 +265,42 @@ struct VufineHUDSnapshot: Equatable {
                 warning: 0.92
             ),
             gauge(
+                id: "ultrachunk-speed",
+                title: "ULTRA SPEED",
+                unitLabel: "VEL",
+                value: input.ultrachunkControlFrame.speed,
+                valueText: Self.decimal(input.ultrachunkControlFrame.speed),
+                traceID: "trace:ultrachunk_speed",
+                frame: input.hudTelemetryFrame,
+                fallback: input.ultrachunkControlFrame.speed,
+                caution: 0.70,
+                warning: 0.88
+            ),
+            gauge(
+                id: "ultrachunk-granularity",
+                title: "ULTRA GRAIN",
+                unitLabel: "G",
+                value: input.ultrachunkGranularity,
+                valueText: Self.decimal(input.ultrachunkGranularity),
+                traceID: "trace:ultrachunk_granularity",
+                frame: input.hudTelemetryFrame,
+                fallback: input.ultrachunkGranularity,
+                caution: 0.66,
+                warning: 0.86
+            ),
+            gauge(
+                id: "ultrachunk-intensity",
+                title: "ULTRA INTENS",
+                unitLabel: "I",
+                value: input.ultrachunkIntensity,
+                valueText: Self.decimal(input.ultrachunkIntensity),
+                traceID: "trace:ultrachunk_intensity",
+                frame: input.hudTelemetryFrame,
+                fallback: input.ultrachunkIntensity,
+                caution: 0.72,
+                warning: 0.9
+            ),
+            gauge(
                 id: "static-sample-morph",
                 title: "STATIC MORPH",
                 unitLabel: "AUDIO",
@@ -299,6 +344,7 @@ struct VufineHUDSnapshot: Equatable {
             phoneLine,
             bankLine,
             effectsLine,
+            ultrachunkLine,
             controlRoleLine,
             "CHOIR HEALTH unhealthy \(input.phoneUnhealthyDeviceCount) / \(input.phonePoolCount)",
             proposalLine,
@@ -326,6 +372,7 @@ struct VufineHUDSnapshot: Equatable {
             phoneLine: phoneLine,
             bankLine: bankLine,
             effectsLine: effectsLine,
+            ultrachunkLine: ultrachunkLine,
             controlRoleLine: controlRoleLine,
             proceduralLine: proceduralLine,
             textBlendLine: textBlendLine,
@@ -431,6 +478,13 @@ extension ConductorHarnessViewModel {
             effectsChainState: effectsChainState,
             activeEffectsPreset: activeEffectsPreset,
             programProceduralState: programProceduralState,
+            ultrachunkControlFrame: ultrachunkControlFrame,
+            ultrachunkDSPState: ultrachunkDSPState,
+            ultrachunkGranularity: ultrachunkGranularity,
+            ultrachunkIntensity: ultrachunkIntensity,
+            ultrachunkPrimarySampleID: ultrachunkPrimarySampleID,
+            ultrachunkSecondarySampleID: ultrachunkSecondarySampleID,
+            hotasUltrachunkOverlayEnabled: hotasUltrachunkOverlayEnabled,
             vector: vector,
             latestAudioFeatures: latestAudioFeatures,
             statusTime: statusLineTimestamp,

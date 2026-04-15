@@ -96,6 +96,16 @@ final class ControlActionRouterTests: XCTestCase {
         XCTAssertEqual(delegate.visualVariance, 0.22)
     }
 
+    func testUltrachunkOverlayToggleRoutesToDelegate() {
+        let delegate = RouterDelegateMock()
+        let router = ControlActionRouter(delegate: delegate, commitCooldownSeconds: 0)
+
+        router.route(.toggleUltrachunkOverlay)
+        router.route(.toggleUltrachunkOverlay)
+
+        XCTAssertEqual(delegate.ultrachunkOverlayToggleCount, 2)
+    }
+
     func testProposalAcceptRoutingUsesDelegateDecision() {
         let delegate = RouterDelegateMock()
         let router = ControlActionRouter(delegate: delegate, commitCooldownSeconds: 0)
@@ -145,6 +155,7 @@ private final class RouterDelegateMock: ControlActionRouting {
     var textProbability: Double = 0
     var strictLooseBlend: Double = 0
     var visualVariance: Double = 0
+    var ultrachunkOverlayToggleCount = 0
     var proposalDecision: MLProposalDecision = .blocked
 
     var isLatchArmed: Bool { isLatchArmedStorage }
@@ -177,6 +188,7 @@ private final class RouterDelegateMock: ControlActionRouting {
     func setTextProbabilityFromControl(_ value: Double) { textProbability = value }
     func setStrictLooseBlendFromControl(_ value: Double) { strictLooseBlend = value }
     func setVisualVarianceFromControl(_ value: Double) { visualVariance = value }
+    func toggleUltrachunkOverlayFromControl() { ultrachunkOverlayToggleCount += 1 }
     func setMasterArmFromControl(_ isArmed: Bool) { masterArmState = isArmed }
     func takePhoneAudioGate() {}
     func safePhoneAudioGate() {}

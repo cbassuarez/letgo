@@ -1084,7 +1084,16 @@ struct ConductorSurfaceView: View {
                         Text("Role \(rightStickRoleLabel) · Clutch \(model.hotasStaticVisualOverrideHeld ? "HELD" : "OFF")")
                             .font(ConsoleTheme.telemetryFont(size: 9))
                             .foregroundStyle(Color.white.opacity(0.52))
+                        Text("Ultrachunk overlay \(model.hotasUltrachunkOverlayEnabled ? "ON" : "OFF")")
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(model.hotasUltrachunkOverlayEnabled ? Color.white.opacity(0.64) : Color.white.opacity(0.42))
                         Text("Static m\(decimal(model.staticAudioMacroState.sampleMorph)) a\(decimal(model.staticAudioMacroState.articulation)) t\(decimal(model.staticAudioMacroState.timbre)) s\(decimal(model.staticAudioMacroState.textureSend))")
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.48))
+                        Text("Ultrachunk s\(decimal(model.ultrachunkControlFrame.speed)) g\(decimal(model.ultrachunkGranularity)) i\(decimal(model.ultrachunkIntensity)) twist \(model.ultrachunkDSPState.twistLane.rawValue.uppercased())")
+                            .font(ConsoleTheme.telemetryFont(size: 9))
+                            .foregroundStyle(Color.white.opacity(0.56))
+                        Text("Active \(model.ultrachunkPrimarySampleID ?? "-") · sec \(model.ultrachunkSecondarySampleID ?? "-") · XY \(decimal(model.ultrachunkControlFrame.x))/\(decimal(model.ultrachunkControlFrame.y))")
                             .font(ConsoleTheme.telemetryFont(size: 9))
                             .foregroundStyle(Color.white.opacity(0.48))
                         HStack(spacing: 6) {
@@ -1287,6 +1296,22 @@ struct ConductorSurfaceView: View {
                     .font(ConsoleTheme.telemetryFont(size: 9))
                     .foregroundStyle(Color.white.opacity(0.58))
 
+                    HStack {
+                        Text("ULTRACHUNK \(model.hotasUltrachunkOverlayEnabled ? "ON" : "OFF")  S \(decimal(model.ultrachunkControlFrame.speed))  G \(decimal(model.ultrachunkGranularity))  I \(decimal(model.ultrachunkIntensity))")
+                        Spacer()
+                        Text("TWIST \(model.ultrachunkDSPState.twistLane.rawValue.uppercased())")
+                    }
+                    .font(ConsoleTheme.telemetryFont(size: 9))
+                    .foregroundStyle(Color.white.opacity(0.62))
+
+                    HStack {
+                        Text("PRIMARY \(model.ultrachunkPrimarySampleID ?? "-")")
+                        Spacer()
+                        Text("SECONDARY \(model.ultrachunkSecondarySampleID ?? "-")")
+                    }
+                    .font(ConsoleTheme.telemetryFont(size: 8))
+                    .foregroundStyle(Color.white.opacity(0.52))
+
                     ControlPlaneBargraphCluster(
                         values: ControlPlaneBargraphCluster.Values(
                             spatialX: model.vector.spatialX,
@@ -1356,12 +1381,12 @@ struct ConductorSurfaceView: View {
             return "CHOIR FIELD"
         }
         if model.effectiveOutputMode == .static {
-            return model.hotasStaticVisualOverrideHeld ? "VISUAL OVERRIDE (CLUTCH)" : "STATIC AUDIO MACRO"
+            return model.hotasStaticVisualOverrideHeld ? "VISUAL OVERRIDE (CLUTCH)" : "ULTRACHUNK AUDIO"
         }
-        if model.effectiveOutputMode == .dynamic {
-            return "DYNAMIC VIDEO"
+        if model.effectiveOutputMode == .off {
+            return "ULTRACHUNK AUDIO (IDLE)"
         }
-        return "VECTOR PATCH"
+        return "ULTRACHUNK AUDIO"
     }
 
     private var rightStickRoleColor: Color {
@@ -1372,7 +1397,7 @@ struct ConductorSurfaceView: View {
             return model.hotasStaticVisualOverrideHeld ? ConsoleTheme.lampAmber : ConsoleTheme.lampGreen
         }
         if model.effectiveOutputMode == .dynamic {
-            return ConsoleTheme.lampAmber
+            return ConsoleTheme.lampGreen
         }
         return Color.white.opacity(0.6)
     }

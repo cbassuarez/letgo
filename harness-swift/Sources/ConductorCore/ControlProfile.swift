@@ -28,6 +28,7 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
     case engineStopHold
     case rightTrigger1
     case rightTrigger2
+    case ultrachunkOverlayToggle
 
     case leftMainThrottle
     case leftAuxThrottle
@@ -87,6 +88,7 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
         .rightTopSlider,
         .rightTrigger1,
         .rightTrigger2,
+        .ultrachunkOverlayToggle,
         .engineStartHold,
         .engineStopHold,
         .leftPlaybackButton,
@@ -139,6 +141,8 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
             return .transport
         case .rightTrigger1, .rightTrigger2:
             return .effects
+        case .ultrachunkOverlayToggle:
+            return .effects
         case .leftToggle1Up,
              .leftToggle1Down,
              .leftToggle1Directional:
@@ -162,6 +166,7 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
         case .engineStopHold: return "Engine Stop (Hold 5s)"
         case .rightTrigger1: return "Trigger A (Rhythm)"
         case .rightTrigger2: return "Trigger B (Space)"
+        case .ultrachunkOverlayToggle: return "Ultrachunk Overlay Toggle"
         case .leftMainThrottle: return "Left Main Throttle"
         case .leftAuxThrottle: return "Left Aux Throttle"
         case .leftSecondThrottle: return "Left Second Throttle"
@@ -209,6 +214,7 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
         case .leftSecondThrottle: return "2ND THR"
         case .leftModeRotary: return "MODE ROT"
         case .leftRotary1Decrease: return "ROTARY 1"
+        case .ultrachunkOverlayToggle: return "UC LAYER"
         case .leftToggle1Up: return "CHOIR ON"
         case .leftToggle1Down: return "CHOIR OFF"
         case .leftStaticVisualClutch: return "CLUTCH"
@@ -259,6 +265,8 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
             return "Legacy choir directional axis. Prefer explicit Up/Down binds."
         case .leftRotary1Decrease:
             return "Continuous strict/loose blend axis (Rotary 1)."
+        case .ultrachunkOverlayToggle:
+            return "Toggles ultrachunk overlay layer on/off over base X/Y paulstretch morph."
         case .leftStaticVisualClutch:
             return "Hold to temporarily repurpose right stick for static visual override."
         case .engineStartHold:
@@ -283,7 +291,8 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
              .engineStartHold,
              .engineStopHold,
              .rightTrigger1,
-             .rightTrigger2:
+             .rightTrigger2,
+             .ultrachunkOverlayToggle:
             return .x56Stick
         case .leftMainThrottle,
              .leftAuxThrottle,
@@ -340,6 +349,8 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
              .leftHatRight,
              .leftHatDown:
             return [.hat]
+        case .ultrachunkOverlayToggle:
+            return [.button]
         default:
             return [.button]
         }

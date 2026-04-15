@@ -69,6 +69,25 @@ final class VufineHUDSnapshotTests: XCTestCase {
                 performerVector: .neutral,
                 audienceVector: .neutral
             ),
+            ultrachunkControlFrame: UltrachunkControlFrame(
+                x: 0.62,
+                y: 0.74,
+                twist: 0.81,
+                speed: 0.49,
+                timestamp: 123_456
+            ),
+            ultrachunkDSPState: UltrachunkDSPState(
+                twistLane: .spectral,
+                spectralAmount: 0.63,
+                crushAmount: 0.0,
+                downsampleFactor: 1,
+                bitDepth: 16
+            ),
+            ultrachunkGranularity: 0.58,
+            ultrachunkIntensity: 0.61,
+            ultrachunkPrimarySampleID: "main_b2_11",
+            ultrachunkSecondarySampleID: "main_b2_long_02",
+            hotasUltrachunkOverlayEnabled: true,
             vector: ParamVector.neutral.merged(ParamVectorPatch(
                 textAmount: 0.55,
                 compositeBias: 0.41,
@@ -190,6 +209,7 @@ final class VufineHUDSnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.phoneLine.contains("pool 12"))
         XCTAssertTrue(snapshot.bankLine.contains("choirCtx ON"))
         XCTAssertTrue(snapshot.effectsLine.contains("A ON"))
+        XCTAssertTrue(snapshot.ultrachunkLine.contains("ULTRACHUNK layer ON"))
         XCTAssertTrue(snapshot.controlRoleLine.contains("CHOIR FIELD"))
         XCTAssertTrue(snapshot.proceduralLine.contains("clip main-03"))
         XCTAssertTrue(snapshot.textBlendLine.contains("strict 0.35"))
@@ -199,7 +219,7 @@ final class VufineHUDSnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.audioStateLine.contains("latch ON"))
         XCTAssertTrue(snapshot.statusLine.contains("WARN"))
         XCTAssertTrue(snapshot.statusLine.contains("GO blocked"))
-        XCTAssertEqual(snapshot.dynamicGauges.count, 10)
+        XCTAssertEqual(snapshot.dynamicGauges.count, 13)
         XCTAssertNotNil(snapshot.proposalWidget)
         XCTAssertEqual(snapshot.actionFeed.count, 1)
         XCTAssertFalse(snapshot.safetyTokens.isEmpty)

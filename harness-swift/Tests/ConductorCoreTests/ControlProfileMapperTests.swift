@@ -58,6 +58,21 @@ final class ControlProfileMapperTests: XCTestCase {
         XCTAssertEqual(actions, [.queueTimelineStep("introduction")])
     }
 
+    func testUltrachunkOverlayToggleMapsToControlAction() {
+        var profile = ControlProfile.defaultX56StrictLive
+        profile.bindings = [ControlBinding(
+            role: .ultrachunkOverlayToggle,
+            controlID: "btn:13",
+            sourceKind: .hotas,
+            kind: .button,
+            required: false
+        )]
+
+        let mapper = ControlProfileMapper(profile: profile)
+        let actions = mapper.map(signal: button("btn:13"), laneIDs: [])
+        XCTAssertEqual(actions, [.toggleUltrachunkOverlay])
+    }
+
     func testRightAcceptButtonMapsToProposalAcceptAction() {
         var profile = ControlProfile.defaultX56StrictLive
         profile.bindings = [ControlBinding(

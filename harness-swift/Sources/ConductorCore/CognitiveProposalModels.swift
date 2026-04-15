@@ -217,6 +217,10 @@ public struct ProgramAudioState: Codable, Equatable, Sendable {
     public var staticMacros: StaticAudioMacroState
     public var choirField: ChoirFieldState
     public var staticVisualOverrideHeld: Bool
+    public var ultrachunkFrame: UltrachunkControlFrame
+    public var ultrachunkDSPState: UltrachunkDSPState
+    public var ultrachunkPrimarySampleID: String?
+    public var ultrachunkSecondarySampleID: String?
 
     public static let `default` = ProgramAudioState(
         epoch: 0,
@@ -233,7 +237,11 @@ public struct ProgramAudioState: Codable, Equatable, Sendable {
         structuredLatchActive: false,
         staticMacros: .neutral,
         choirField: .neutral,
-        staticVisualOverrideHeld: false
+        staticVisualOverrideHeld: false,
+        ultrachunkFrame: .neutral,
+        ultrachunkDSPState: .neutral,
+        ultrachunkPrimarySampleID: nil,
+        ultrachunkSecondarySampleID: nil
     )
 
     public init(
@@ -251,7 +259,11 @@ public struct ProgramAudioState: Codable, Equatable, Sendable {
         structuredLatchActive: Bool,
         staticMacros: StaticAudioMacroState,
         choirField: ChoirFieldState,
-        staticVisualOverrideHeld: Bool
+        staticVisualOverrideHeld: Bool,
+        ultrachunkFrame: UltrachunkControlFrame = .neutral,
+        ultrachunkDSPState: UltrachunkDSPState = .neutral,
+        ultrachunkPrimarySampleID: String? = nil,
+        ultrachunkSecondarySampleID: String? = nil
     ) {
         self.epoch = max(0, epoch)
         self.updatedAt = updatedAt
@@ -268,5 +280,9 @@ public struct ProgramAudioState: Codable, Equatable, Sendable {
         self.staticMacros = staticMacros
         self.choirField = choirField
         self.staticVisualOverrideHeld = staticVisualOverrideHeld
+        self.ultrachunkFrame = ultrachunkFrame
+        self.ultrachunkDSPState = ultrachunkDSPState
+        self.ultrachunkPrimarySampleID = ultrachunkPrimarySampleID
+        self.ultrachunkSecondarySampleID = ultrachunkSecondarySampleID
     }
 }

@@ -194,6 +194,7 @@ struct VufineRealtimeView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(hud.vectorLine)
             Text(hud.audioLine)
+            Text(hud.ultrachunkLine)
             Text(hud.controlRoleLine)
             Text(hud.statusLine)
         }

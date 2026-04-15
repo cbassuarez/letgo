@@ -33,6 +33,7 @@ protocol ControlActionRouting: AnyObject {
     func setTextProbabilityFromControl(_ value: Double)
     func setStrictLooseBlendFromControl(_ value: Double)
     func setVisualVarianceFromControl(_ value: Double)
+    func toggleUltrachunkOverlayFromControl()
     func setMasterArmFromControl(_ isArmed: Bool)
     func takePhoneAudioGate()
     func safePhoneAudioGate()
@@ -159,6 +160,10 @@ final class ControlActionRouter {
 
         case .setVisualVariance(let value):
             delegate.setVisualVarianceFromControl(value)
+            return .applied
+
+        case .toggleUltrachunkOverlay:
+            delegate.toggleUltrachunkOverlayFromControl()
             return .applied
 
         case .contextualTake:

@@ -484,7 +484,7 @@ export const DeviceRoute = (): JSX.Element => {
             This browser cannot provide the motion/real-time APIs required for live participation.
             Open the same participant link in a modern mobile Chromium browser.
           </p>
-          <Link to="/" className="cyanotype-cta mt-8 inline-flex">
+          <Link to={`/${hashedId}`} className="cyanotype-cta mt-8 inline-flex">
             Return To Briefing
           </Link>
         </section>

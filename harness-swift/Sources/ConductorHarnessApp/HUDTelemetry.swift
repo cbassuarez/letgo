@@ -182,6 +182,18 @@ actor HUDTelemetryStore {
         appendEvent(event)
     }
 
+    func ingestTrace(
+        id: String,
+        value: Double,
+        timestamp: TimeInterval = Date().timeIntervalSince1970
+    ) {
+        appendTrace(
+            id: id,
+            value: value,
+            timestamp: normalizedTimestamp(timestamp)
+        )
+    }
+
     func snapshot(maxEvents: Int = 140) -> HUDTelemetryFrame {
         let boundedEvents = Array(Array(events.suffix(max(1, maxEvents))).reversed())
         let boundedTraces: [HUDControlTrace] = traceUpdatedAt
@@ -326,6 +338,8 @@ private extension ControlAction {
             return "strict_loose_blend"
         case .setVisualVariance:
             return "visual_variance"
+        case .toggleUltrachunkOverlay:
+            return "ultrachunk_overlay_toggle"
         case .contextualTake:
             return "contextual_take"
         case .setMasterArm(let isArmed):
@@ -375,6 +389,8 @@ private extension ControlAction {
             return held ? 1 : 0
         case .setEffectsChain(_, _, let intensity):
             return intensity
+        case .toggleUltrachunkOverlay:
+            return nil
         case .patchVector(let patch):
             if let value = patch.spatialX { return value }
             if let value = patch.audioGain { return value }
@@ -422,6 +438,8 @@ private extension ControlAction {
             return "trace:vector"
         case .setEffectsChain:
             return "trace:fx"
+        case .toggleUltrachunkOverlay:
+            return nil
         default:
             return nil
         }

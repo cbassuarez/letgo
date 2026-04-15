@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import SwiftUI
 
 struct SafetyMonitorView: View {
@@ -53,6 +54,10 @@ struct SafetyMonitorView: View {
                 statusLine("Arm", model.masterArmKey == .armed ? "ARMED" : "SAFE")
                 statusLine("Latch", model.latchSummary)
                 statusLine("Route", model.audioRouteStatusSummary)
+                statusLine(
+                    "Ultrachunk",
+                    "\(model.hotasUltrachunkOverlayEnabled ? "ON" : "OFF") · S \(decimal(model.ultrachunkControlFrame.speed)) · G \(decimal(model.ultrachunkGranularity)) · I \(decimal(model.ultrachunkIntensity)) · \(model.ultrachunkDSPState.twistLane.rawValue.uppercased()) · \(model.ultrachunkPrimarySampleID ?? "-")"
+                )
                 statusLine("Last", "[\(model.statusLineTimestamp)] \(model.statusLineEvent.message)")
             }
 
@@ -199,6 +204,10 @@ struct SafetyMonitorView: View {
                 .foregroundStyle(Color.white.opacity(0.78))
                 .lineLimit(1)
         }
+    }
+
+    private func decimal(_ value: Double) -> String {
+        String(format: "%.2f", value)
     }
 
     private var topBar: some View {
