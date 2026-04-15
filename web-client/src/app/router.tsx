@@ -49,4 +49,11 @@ export const appRoutes: RouteObject[] = [
   }
 ];
 
-export const router = createBrowserRouter(appRoutes);
+const resolveRouterBasename = (baseUrl: string): string | undefined => {
+  const normalized = baseUrl.endsWith("/") && baseUrl.length > 1 ? baseUrl.slice(0, -1) : baseUrl;
+  return normalized === "/" ? undefined : normalized;
+};
+
+export const router = createBrowserRouter(appRoutes, {
+  basename: resolveRouterBasename(import.meta.env.BASE_URL)
+});
