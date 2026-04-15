@@ -43,6 +43,17 @@ Configure stream URLs with environment variables:
 - `CONDUCTOR_HLS_INTERSTITIAL_URL`
 - `CONDUCTOR_HLS_LANE_BASE_URL` (lane IDs map to `<lane-base>/<lane-id>.m3u8`)
 
+Example (R2 test-shots prefix):
+
+```bash
+export CONDUCTOR_HLS_PRESHOW_URL="https://media.letgofilm.com/test-shots-v1/preshow/preshow.m3u8"
+export CONDUCTOR_HLS_INTRODUCTION_URL="https://media.letgofilm.com/test-shots-v1/introduction/introduction.m3u8"
+export CONDUCTOR_HLS_INTERSTITIAL_URL="https://media.letgofilm.com/test-shots-v1/interstitial/interstitial.m3u8"
+export CONDUCTOR_HLS_ENDING_URL="https://media.letgofilm.com/test-shots-v1/ending/ending.m3u8"
+unset CONDUCTOR_HLS_MAIN_URL
+unset CONDUCTOR_HLS_LANE_BASE_URL
+```
+
 If only `CONDUCTOR_HLS_BASE_URL` is set, defaults are:
 
 - `<base>/preshow.m3u8`

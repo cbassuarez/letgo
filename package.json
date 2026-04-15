@@ -13,6 +13,9 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "dev:backend": "npm run dev --workspace backend-realtime",
-    "dev:web": "npm run dev --workspace web-client"
+    "dev:web": "npm run dev --workspace web-client",
+    "hls:build:test-shots": "bash ./scripts/hls/build_test_shots_hls.sh",
+    "hls:build:test-shots:hybrid-live": "PACKAGER_PROFILE=hybrid-live bash ./scripts/hls/build_test_shots_hls.sh",
+    "hls:upload:r2": "bash ./scripts/hls/upload_hls_to_r2.sh ./tmp/hls-test-shots"
   }
 }

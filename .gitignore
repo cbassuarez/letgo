@@ -17,4 +17,6 @@ backend-realtime/.turbo
 .conda/
 pretrained_models/
 stems/
+tmp/hls-test-shots/
+tmp/hls-test-shots-smoke-*/
 *.xcuserstate
