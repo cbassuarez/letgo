@@ -156,3 +156,155 @@ struct PushQuantizeModal: View {
         onChangeMs(clamped)
     }
 }
+
+struct PushLongLatchFadeModal: View {
+    @ObservedObject var model: PushDeckViewModel
+    let onClose: () -> Void
+
+    private let fadeRange: ClosedRange<Double> = 0.02...4.0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Long Latch Fade")
+                        .font(DeckThemeTokens.monoFont(size: 20, weight: .bold))
+                        .foregroundStyle(Color.white.opacity(0.97))
+                    Text("Set how quickly long-sound latch enters and releases.")
+                        .font(DeckThemeTokens.monoFont(size: 11, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.78))
+                        .blendMode(.overlay)
+                }
+                Spacer()
+                Button("Close") {
+                    onClose()
+                }
+                .font(DeckThemeTokens.monoFont(size: 11, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.95))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Rectangle().fill(Color.white.opacity(0.08)))
+                .buttonStyle(.plain)
+            }
+
+            sectionCard(title: "FADE IN") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        Slider(
+                            value: Binding(
+                                get: { model.longSoundsLatchFadeInSeconds },
+                                set: { model.setLongSoundsLatchFadeInSeconds($0) }
+                            ),
+                            in: fadeRange
+                        )
+                        .tint(DeckThemeTokens.accentApply)
+                        Text(String(format: "%.2fs", model.longSoundsLatchFadeInSeconds))
+                            .font(DeckThemeTokens.monoFont(size: 12, weight: .bold))
+                            .foregroundStyle(Color.white.opacity(0.96))
+                            .frame(width: 58, alignment: .trailing)
+                    }
+                    presetRow(
+                        values: [0.05, 0.12, 0.25, 0.40, 0.80],
+                        selected: model.longSoundsLatchFadeInSeconds,
+                        tint: DeckThemeTokens.accentApply,
+                        apply: model.setLongSoundsLatchFadeInSeconds
+                    )
+                }
+            }
+
+            sectionCard(title: "FADE OUT") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        Slider(
+                            value: Binding(
+                                get: { model.longSoundsLatchFadeOutSeconds },
+                                set: { model.setLongSoundsLatchFadeOutSeconds($0) }
+                            ),
+                            in: fadeRange
+                        )
+                        .tint(DeckThemeTokens.accentWarn)
+                        Text(String(format: "%.2fs", model.longSoundsLatchFadeOutSeconds))
+                            .font(DeckThemeTokens.monoFont(size: 12, weight: .bold))
+                            .foregroundStyle(Color.white.opacity(0.96))
+                            .frame(width: 58, alignment: .trailing)
+                    }
+                    presetRow(
+                        values: [0.08, 0.18, 0.35, 0.60, 1.20],
+                        selected: model.longSoundsLatchFadeOutSeconds,
+                        tint: DeckThemeTokens.accentWarn,
+                        apply: model.setLongSoundsLatchFadeOutSeconds
+                    )
+                }
+            }
+
+            sectionCard(title: "LIVE READOUT") {
+                HStack(spacing: 8) {
+                    metadataChip("IN", value: String(format: "%.2fs", model.longSoundsLatchFadeInSeconds))
+                    metadataChip("OUT", value: String(format: "%.2fs", model.longSoundsLatchFadeOutSeconds))
+                    metadataChip("RANGE", value: "0.02s-4.00s")
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+        .background(
+            DeckThemeTokens.stageGradient
+                .overlay(Color.black.opacity(0.16))
+        )
+    }
+
+    private func sectionCard<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(DeckThemeTokens.monoFont(size: 10, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.7))
+            content()
+        }
+        .padding(12)
+        .background(Color.black.opacity(0.34))
+        .overlay(Rectangle().stroke(Color.white.opacity(0.16), lineWidth: 1))
+    }
+
+    private func presetRow(
+        values: [Double],
+        selected: Double,
+        tint: Color,
+        apply: @escaping (Double) -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            ForEach(values, id: \.self) { value in
+                let active = abs(value - selected) < 0.005
+                Button(String(format: "%.2fs", value)) {
+                    apply(value)
+                }
+                .font(DeckThemeTokens.monoFont(size: 11, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.95))
+                .frame(minWidth: 74, minHeight: 40)
+                .background(
+                    Rectangle().fill(active ? tint.opacity(0.3) : Color.white.opacity(0.08))
+                )
+                .overlay(
+                    Rectangle().stroke(active ? tint.opacity(0.95) : Color.white.opacity(0.22), lineWidth: 1)
+                )
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func metadataChip(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(DeckThemeTokens.monoFont(size: 8, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.62))
+            Text(value)
+                .font(DeckThemeTokens.monoFont(size: 10, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.95))
+                .blendMode(.overlay)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(Rectangle().fill(DeckThemeTokens.accentMain.opacity(0.14)))
+        .overlay(Rectangle().stroke(DeckThemeTokens.accentMain.opacity(0.64), lineWidth: 1))
+    }
+}

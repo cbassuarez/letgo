@@ -51,6 +51,11 @@ struct ConductorHarnessApp: App {
             )
         }
         .windowResizability(.contentSize)
+
+        WindowGroup("HOTAS Mapper Studio", id: AppWindowID.hotasMapper.rawValue) {
+            HOTASMapperStudioView(model: model)
+        }
+        .windowResizability(.contentSize)
     }
 }
 
@@ -99,6 +104,12 @@ private struct PerformanceModeCommands: Commands {
                 NSApp.activate(ignoringOtherApps: true)
             }
             .keyboardShortcut("i", modifiers: [.command])
+
+            Button("HOTAS Mapper Studio") {
+                openWindow(id: AppWindowID.hotasMapper.rawValue)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            .keyboardShortcut("m", modifiers: [.command, .shift])
         }
     }
 

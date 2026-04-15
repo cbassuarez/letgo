@@ -40,6 +40,8 @@ public final class ControlProfileMapper {
     private var latchedChoirSampleBank: Int = 1
     private var toggle1Direction: Int = 0
     private var strictLooseBlendSetting: Double = 0.5
+    private var roleAxisThresholdLatched: [String: Bool] = [:]
+    private var holdCaptureStartedAt: [ControlRole: TimeInterval] = [:]
 
     public init(profile: ControlProfile) {
         self.profile = profile
@@ -53,6 +55,8 @@ public final class ControlProfileMapper {
         latchedChoirSampleBank = 1
         toggle1Direction = 0
         strictLooseBlendSetting = 0.5
+        roleAxisThresholdLatched.removeAll()
+        holdCaptureStartedAt.removeAll()
     }
 
     public func map(
@@ -91,14 +95,10 @@ public final class ControlProfileMapper {
             if context.activeOutputMode == .dynamic {
                 return scalarAction(signal: signal, action: .setDynamicBinSelection(normalized))
             }
-            if context.activeOutputMode == .static {
-                if shouldRouteStaticVisualOverride(in: context) {
-                    return vectorPatch(signal: signal, patch: ParamVectorPatch(spatialX: normalized))
-                }
-                return scalarAction(signal: signal, action: .setStaticSampleMorph(normalized))
+            if shouldRouteStaticVisualOverride(in: context) {
+                return vectorPatch(signal: signal, patch: ParamVectorPatch(spatialX: normalized))
             }
-            guard shouldEmitVectorPatch(in: context) else { return [] }
-            return vectorPatch(signal: signal, patch: ParamVectorPatch(spatialX: normalized))
+            return scalarAction(signal: signal, action: .setStaticSampleMorph(normalized))
         case .rightStickY:
             if context.phoneChoirModeActive {
                 return scalarAction(signal: signal, action: .setChoirFieldDepth(normalized))
@@ -106,14 +106,10 @@ public final class ControlProfileMapper {
             if context.activeOutputMode == .dynamic {
                 return scalarAction(signal: signal, action: .setCutCadence(normalized))
             }
-            if context.activeOutputMode == .static {
-                if shouldRouteStaticVisualOverride(in: context) {
-                    return vectorPatch(signal: signal, patch: ParamVectorPatch(audioGain: normalized))
-                }
-                return scalarAction(signal: signal, action: .setStaticArticulation(normalized))
+            if shouldRouteStaticVisualOverride(in: context) {
+                return vectorPatch(signal: signal, patch: ParamVectorPatch(audioGain: normalized))
             }
-            guard shouldEmitVectorPatch(in: context) else { return [] }
-            return vectorPatch(signal: signal, patch: ParamVectorPatch(audioGain: normalized))
+            return scalarAction(signal: signal, action: .setStaticArticulation(normalized))
         case .rightStickTwist:
             if context.phoneChoirModeActive {
                 return scalarAction(signal: signal, action: .setChoirFieldDetune(normalized))
@@ -121,14 +117,10 @@ public final class ControlProfileMapper {
             if context.activeOutputMode == .dynamic {
                 return scalarAction(signal: signal, action: .setCompositorBlend(normalized))
             }
-            if context.activeOutputMode == .static {
-                if shouldRouteStaticVisualOverride(in: context) {
-                    return vectorPatch(signal: signal, patch: ParamVectorPatch(compositeBias: normalized))
-                }
-                return scalarAction(signal: signal, action: .setStaticTimbre(normalized))
+            if shouldRouteStaticVisualOverride(in: context) {
+                return vectorPatch(signal: signal, patch: ParamVectorPatch(compositeBias: normalized))
             }
-            guard shouldEmitVectorPatch(in: context) else { return [] }
-            return vectorPatch(signal: signal, patch: ParamVectorPatch(compositeBias: normalized))
+            return scalarAction(signal: signal, action: .setStaticTimbre(normalized))
         case .rightThumbX:
             guard shouldEmitVectorPatch(in: context) else { return [] }
             return vectorPatch(signal: signal, patch: ParamVectorPatch(spatialY: normalized))
@@ -144,6 +136,22 @@ public final class ControlProfileMapper {
 
         case .rightTakeButton:
             return signal.phase == .began ? [.contextualTake] : []
+
+        case .engineStartHold:
+            return holdAction(
+                signal: signal,
+                role: .engineStartHold,
+                minimumDurationSeconds: 5.0,
+                action: .startEngine
+            )
+
+        case .engineStopHold:
+            return holdAction(
+                signal: signal,
+                role: .engineStopHold,
+                minimumDurationSeconds: 5.0,
+                action: .stopEngine
+            )
 
         case .rightTrigger1:
             return effectsActions(
@@ -185,7 +193,16 @@ public final class ControlProfileMapper {
             return signal.phase == .began ? [.togglePreviewPlayback] : []
 
         case .leftModeRotary:
-            let bank = resolvedBank(from: normalized)
+            let bank: Int
+            if signal.kind == .button || binding.kind == .button {
+                guard signal.phase == .began,
+                      let resolved = resolvedDiscreteModeRotaryBank(signal: signal) else {
+                    return []
+                }
+                bank = resolved
+            } else {
+                bank = resolvedBank(from: normalized)
+            }
             let domain: SampleBankDomain = context.phoneChoirModeActive ? .choir : .main
             switch domain {
             case .main:
@@ -198,9 +215,17 @@ public final class ControlProfileMapper {
             return [.setSampleBank(bank, domain: domain)]
 
         case .leftRotary1Decrease:
+            if signal.kind == .axis || binding.kind == .axis {
+                return scalarAction(signal: signal, action: .setStrictLooseBlend(normalized))
+            }
+            // Legacy button-step fallback for older profiles.
             return blendStepActions(signal: signal, delta: -0.08)
 
         case .leftRotary1Increase:
+            // Legacy fallback role for older button-based profiles.
+            if signal.kind == .axis || binding.kind == .axis {
+                return scalarAction(signal: signal, action: .setStrictLooseBlend(normalized))
+            }
             return blendStepActions(signal: signal, delta: 0.08)
 
         case .leftRotary2Axis:
@@ -228,6 +253,12 @@ public final class ControlProfileMapper {
         case .leftCueToggleCenter:
             return signal.phase == .began ? [.phoneGateSafe] : []
 
+        case .leftToggle1Up:
+            return toggleDirectionalDiscreteUpActions(signal: signal, normalized: normalized)
+
+        case .leftToggle1Down:
+            return toggleDirectionalDiscreteDownActions(signal: signal, normalized: normalized)
+
         case .leftToggle1Directional:
             return toggleDirectionalActions(centered: centered)
 
@@ -242,6 +273,31 @@ public final class ControlProfileMapper {
             return [.patchVector(patch)]
         case .ended:
             return []
+        }
+    }
+
+    private func holdAction(
+        signal: ControlSignal,
+        role: ControlRole,
+        minimumDurationSeconds: TimeInterval,
+        action: ControlAction
+    ) -> [ControlAction] {
+        switch signal.phase {
+        case .began:
+            holdCaptureStartedAt[role] = signal.timestamp
+            return []
+        case .changed:
+            return []
+        case .ended:
+            guard let startedAt = holdCaptureStartedAt.removeValue(forKey: role) else {
+                return []
+            }
+            let rawDelta = max(0, signal.timestamp - startedAt)
+            let durationSeconds = rawDelta > 120 ? (rawDelta / 1_000.0) : rawDelta
+            guard durationSeconds >= minimumDurationSeconds else {
+                return []
+            }
+            return [action]
         }
     }
 
@@ -332,10 +388,94 @@ public final class ControlProfileMapper {
         return [.setStrictLooseBlend(strictLooseBlendSetting)]
     }
 
+    private func blendStepAxisActions(
+        signal: ControlSignal,
+        role: ControlRole,
+        normalized: Double,
+        engageThreshold: Double,
+        delta: Double
+    ) -> [ControlAction] {
+        let key = "\(role.rawValue):\(signal.sourceDeviceID):\(HOTASLogicalDeviceMatcher.normalizedControlID(signal.controlID))"
+        let shouldEngage = delta < 0 ? normalized <= engageThreshold : normalized >= engageThreshold
+        let wasEngaged = roleAxisThresholdLatched[key] ?? false
+        roleAxisThresholdLatched[key] = shouldEngage
+        guard shouldEngage, !wasEngaged else { return [] }
+        strictLooseBlendSetting = min(1, max(0, strictLooseBlendSetting + delta))
+        return [.setStrictLooseBlend(strictLooseBlendSetting)]
+    }
+
+    private func toggleDirectionalDiscreteUpActions(signal: ControlSignal, normalized: Double) -> [ControlAction] {
+        let isAxisActive = signal.kind == .axis && (normalized >= 0.8 || normalized <= 0.2)
+        let isActuated = signal.phase == .began
+            || (signal.phase == .changed && (signal.rawValue > 0 || isAxisActive))
+            || isAxisActive
+        guard isActuated else { return [] }
+        guard toggle1Direction != 1 else { return [] }
+        toggle1Direction = 1
+        return [
+            .setPhoneChoirContextActive(true),
+            .triggerPhoneChoirNoteOn
+        ]
+    }
+
+    private func toggleDirectionalDiscreteDownActions(signal: ControlSignal, normalized: Double) -> [ControlAction] {
+        let isAxisActive = signal.kind == .axis && (normalized >= 0.8 || normalized <= 0.2)
+        let isActuated = signal.phase == .began
+            || (signal.phase == .changed && (signal.rawValue > 0 || isAxisActive))
+            || isAxisActive
+        guard isActuated else { return [] }
+        guard toggle1Direction != -1 else { return [] }
+        toggle1Direction = -1
+        return [
+            .setPhoneChoirContextActive(false),
+            .triggerPhoneChoirNoteOff,
+            .stopAllPhoneAudio
+        ]
+    }
+
+    private func resolvedDiscreteModeRotaryBank(signal: ControlSignal) -> Int? {
+        let normalizedControlID = HOTASLogicalDeviceMatcher.normalizedControlID(signal.controlID)
+        if let direct = explicitModeRotaryBank(for: normalizedControlID) {
+            return direct
+        }
+
+        let orderedButtons = Set(profile.bindings
+            .filter { $0.role == .leftModeRotary && $0.sourceKind == signal.sourceKind }
+            .compactMap { modeRotaryButtonNumber(from: HOTASLogicalDeviceMatcher.normalizedControlID($0.controlID)) }
+        )
+            .sorted()
+
+        guard let signalButton = modeRotaryButtonNumber(from: normalizedControlID),
+              let index = orderedButtons.firstIndex(of: signalButton) else {
+            return nil
+        }
+        return min(3, max(1, index + 1))
+    }
+
+    private func explicitModeRotaryBank(for normalizedControlID: String) -> Int? {
+        guard let button = modeRotaryButtonNumber(from: normalizedControlID) else {
+            return nil
+        }
+        switch button {
+        case 34:
+            return 1
+        case 35:
+            return 2
+        case 36:
+            return 3
+        default:
+            return nil
+        }
+    }
+
+    private func modeRotaryButtonNumber(from normalizedControlID: String) -> Int? {
+        guard normalizedControlID.hasPrefix("btn:") else { return nil }
+        return Int(normalizedControlID.dropFirst(4))
+    }
+
     private func toggleDirectionalActions(centered: Double) -> [ControlAction] {
         let upThreshold = 0.45
         let downThreshold = -0.45
-        let neutralBand = 0.2
 
         if centered >= upThreshold {
             if toggle1Direction != 1 {
@@ -358,17 +498,6 @@ public final class ControlProfileMapper {
                 ]
             }
             return []
-        }
-
-        if abs(centered) <= neutralBand {
-            if toggle1Direction == 1 {
-                toggle1Direction = 0
-                return [
-                    .triggerPhoneChoirNoteOff,
-                    .setPhoneChoirContextActive(false)
-                ]
-            }
-            toggle1Direction = 0
         }
 
         return []

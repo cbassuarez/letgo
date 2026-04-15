@@ -69,6 +69,80 @@ enum PhoneAudioTargetMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum SoundModePrimary: String, Equatable {
+    case normal = "NORMAL"
+    case phoneChoir = "PHONE CHOIR"
+}
+
+enum SoundModeDetail: String, Equatable {
+    case `static` = "STATIC"
+    case dynamic = "DYNAMIC"
+    case inter = "INTER"
+    case off = "OFF"
+}
+
+enum SoundSignalLevel: Equatable {
+    case nominal
+    case caution
+    case critical
+}
+
+enum ActiveSoundBankDomain: String, Equatable {
+    case main = "MAIN"
+    case choir = "CHOIR"
+}
+
+struct SoundBankImportState: Equatable {
+    let mainBank: Int
+    let choirBank: Int
+    let samplePackFile: String
+    let sampleEntryCount: Int
+    let synthPresetFile: String
+    let choirProfileFile: String
+    let sampleImportReady: Bool
+    let level: SoundSignalLevel
+}
+
+struct SoundIOState: Equatable {
+    let outputRouteName: String
+    let outputRouteSummary: String
+    let midiInputName: String
+    let midiStatus: String
+    let hotasStatus: String
+    let pushStatus: String
+    let level: SoundSignalLevel
+}
+
+struct ActiveSoundTarget: Equatable {
+    let sampleID: String
+    let label: String
+    let fileName: String
+    let bankDomain: ActiveSoundBankDomain
+    let bank: Int
+}
+
+struct SoundManipulationFocus: Equatable {
+    let source: String
+    let controlID: String
+    let lane: String
+    let normalizedValue: Double
+    let updatedAt: TimeInterval
+}
+
+struct SoundSituationalSnapshot: Equatable {
+    static let manipulationStaleThresholdMs: TimeInterval = 1400
+
+    let banksImport: SoundBankImportState
+    let modePrimary: SoundModePrimary
+    let modeDetail: SoundModeDetail
+    let modeLevel: SoundSignalLevel
+    let io: SoundIOState
+    let activeTarget: ActiveSoundTarget
+    let manipulation: SoundManipulationFocus?
+    let manipulationIsStale: Bool
+    let generatedAt: TimeInterval
+}
+
 enum AudioRouteCapability: String, CaseIterable, Identifiable {
     case unavailable
     case stereoFallback
@@ -202,6 +276,21 @@ private struct SamplePackManifest: Codable {
     let samples: [SampleEntry]
 }
 
+private struct PushCompanionPadMap: Codable {
+    struct Slice: Codable {
+        let slot: Int
+        let fileName: String?
+        let label: String?
+        let startSec: Double?
+        let oneShotSec: Double?
+    }
+
+    let bank: Int?
+    let title: String?
+    let sourceFile: String?
+    let slices: [Slice]
+}
+
 private struct PushPadLabelsPayload: Codable {
     var padLabels: [String]
     var bank: Int
@@ -310,6 +399,8 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     @Published var modelRuntimeFailures: Int = 0
     @Published var modelCandidates: [CompiledModelCandidate] = []
     @Published var selectedModelCandidateID: String = ""
+    @Published var modelSearchPaths: [String] = []
+    @Published var modelSearchOverridePath: String? = nil
 
     @Published var previewScene: ShowState = .idle
     @Published var previewStatus: String = "No preview media loaded"
@@ -339,7 +430,10 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     @Published private(set) var hotasProfileName: String = ControlProfile.defaultX56StrictLive.name
     @Published private(set) var hotasMissingRequiredRoles: [ControlRole] = []
     @Published private(set) var hotasBindingConflicts: [String] = []
+    @Published private(set) var hotasConflictRoles: Set<ControlRole> = []
     @Published private(set) var hotasLastSignalSummary = "No HOTAS signal"
+    @Published private(set) var hotasLastSignal: ControlSignal?
+    @Published private(set) var hotasObservedSignals: [ControlSignal] = []
     @Published private(set) var hotasPendingCaptureRole: ControlRole?
     @Published private(set) var hotasTrainingActive = false
     @Published private(set) var hotasPhoneChoirContextActive = false
@@ -351,6 +445,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     @Published private(set) var pushTrustedControllerIDs: [String] = []
     @Published private(set) var pushLastSignalSummary = "Push OFF"
     @Published private(set) var pushPhonePadEchoProbability: Double = 0
+    @Published private(set) var soundManipulationFocus: SoundManipulationFocus?
     @Published private(set) var hotasStaticVisualOverrideHeld = false
     @Published private(set) var effectsChainState: EffectsChainState = .idle
     @Published private(set) var activeEffectsPreset = EffectsChainPreset(chainAName: "Rhythm", chainBName: "Space", bankID: 1)
@@ -471,7 +566,17 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private var hotasMapper: ControlProfileMapper?
     private var hotasInputMultiplexer: InputMultiplexer?
     private var hotasCaptureRole: ControlRole?
+    private var hotasCaptureExpectedKinds: Set<ControlSignalKind> = Set(ControlSignalKind.allCases)
+    private var hotasCaptureAxisCandidateControlID: String?
+    private var hotasCaptureAxisCandidateSamples: Int = 0
+    private var hotasCaptureAxisCandidateStrength: Double = 0
+    private var hotasCaptureAxisCandidateUpdatedAtMs: TimeInterval = 0
+    private var hotasCaptureArmedAtMs: TimeInterval = 0
+    private var hotasCaptureBaselineByControlKey: [String: ControlSignal] = [:]
     private var hotasTrainingBackupProfile: ControlProfile?
+    private var hotasObservedByControlKey: [String: ControlSignal] = [:]
+    private var hotasLastObservationPublishAtMs: TimeInterval = 0
+    private var hotasLastSummaryPublishAtMs: TimeInterval = 0
     private var activeChoirMIDINotes: [Int: Int] = [:]
     private var sampleMetadataByID: [String: SampleMetadata] = [:]
     private var sampleLabelByID: [String: String] = [:]
@@ -490,11 +595,28 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private var pushLastPadLabelsSignature: String = ""
     private var pushActiveChoirPadNotes: [Int: Int] = [:]
     private var pushQuantizedPadWorkItems: [String: DispatchWorkItem] = [:]
+    private var hotasStaticSampleAuditionLastAtMs: TimeInterval = 0
+    private var hotasStaticSampleAuditionLastValueByLane: [String: Double] = [:]
+    private var hotasStaticSampleAuditionLastSampleID: String?
+    private var hotasStaticSampleAuditionLastStatusAtMs: TimeInterval = 0
+    private var hotasSampleSpaceX: Double = 0.5
+    private var hotasSampleSpaceY: Double = 0.5
+    private var hotasSampleSpaceZ: Double = 0.5
+    private var hotasSampleSpaceDrift: Double = 0
+    private var hotasLastRhythmAccentAtMs: TimeInterval = 0
+    private var hotasLastSpaceAccentAtMs: TimeInterval = 0
+    private var hotasLastPaulstretchAtMs: TimeInterval = 0
 
     private struct RoutedHOTASActionContext {
         let signal: ControlSignal
         let action: ControlAction
         var emittedAppliedEventFromStatus = false
+    }
+
+    private enum HOTASSampleSpaceAxis {
+        case x
+        case y
+        case z
     }
 
     private let privilegedLaneStateMap: [String: ShowState] = [
@@ -574,10 +696,243 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         }
     }
 
+    var selectedAudioRouteDisplayName: String {
+        Self.resolveAudioRouteDisplayName(
+            routes: availableAudioRoutes,
+            selectedRouteID: selectedAudioRouteID
+        )
+    }
+
+    func audioRouteMenuLabel(_ route: AudioRoute) -> String {
+        var parts: [String] = ["\(route.name)", "\(route.channelCount)ch"]
+        if route.isSystemDefault {
+            parts.append("SYSTEM")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    var selectedMIDIInputDisplayName: String {
+        Self.resolveMIDIInputDisplayName(
+            inputs: availableMIDIInputs,
+            selectedInputID: selectedMIDIInputID
+        )
+    }
+
+    var soundSituationalSnapshot: SoundSituationalSnapshot {
+        let nowMs = ConductorHarnessViewModel.nowMilliseconds()
+
+        let modeDerivation = Self.deriveSoundMode(
+            engineRunning: engineRunning,
+            effectiveOutputMode: effectiveOutputMode,
+            choirContextActive: hotasPhoneChoirContextActive,
+            phonePoolCount: phoneAudioAvailableDevices.count,
+            phoneGateCommitted: phoneAudioGateCommitted
+        )
+
+        let importLevel: SoundSignalLevel = {
+            if samplePackEntries.isEmpty {
+                return .critical
+            }
+            if samplePackManifestURL == nil {
+                return .caution
+            }
+            return .nominal
+        }()
+
+        let ioLevel = Self.deriveSoundIOLevel(audioRouteCapability: audioRouteCapability)
+
+        let target = Self.resolveActiveSoundTarget(
+            selectedSampleID: selectedSampleID,
+            sampleEntries: samplePackEntries,
+            labels: sampleLabelByID,
+            choirContextActive: hotasPhoneChoirContextActive,
+            activeSampleBank: activeSampleBank,
+            activeChoirSampleBank: activeChoirSampleBank
+        )
+        let focus = soundManipulationFocus
+        let stale = Self.isSoundManipulationStale(focus, nowMs: nowMs)
+
+        return SoundSituationalSnapshot(
+            banksImport: SoundBankImportState(
+                mainBank: activeSampleBank,
+                choirBank: activeChoirSampleBank,
+                samplePackFile: samplePackFilename(),
+                sampleEntryCount: samplePackEntries.count,
+                synthPresetFile: synthPresetFilename(),
+                choirProfileFile: choirProfileFilename(),
+                sampleImportReady: !samplePackEntries.isEmpty,
+                level: importLevel
+            ),
+            modePrimary: modeDerivation.primary,
+            modeDetail: modeDerivation.detail,
+            modeLevel: modeDerivation.level,
+            io: SoundIOState(
+                outputRouteName: selectedAudioRouteDisplayName,
+                outputRouteSummary: audioRouteStatusSummary,
+                midiInputName: selectedMIDIInputDisplayName,
+                midiStatus: midiInputStatus,
+                hotasStatus: hotasInputStatus,
+                pushStatus: pushControlEnabled ? pushLastSignalSummary : "Push OFF",
+                level: ioLevel
+            ),
+            activeTarget: target,
+            manipulation: focus,
+            manipulationIsStale: stale,
+            generatedAt: nowMs
+        )
+    }
+
+    nonisolated static func resolveAudioRouteDisplayName(routes: [AudioRoute], selectedRouteID: String) -> String {
+        if let selected = routes.first(where: { $0.id == selectedRouteID }) {
+            let suffix = selected.isSystemDefault ? " · SYSTEM" : ""
+            return "\(selected.name) (\(selected.channelCount)ch)\(suffix)"
+        }
+        if let fallbackDefault = routes.first(where: { $0.isSystemDefault }) {
+            return "\(fallbackDefault.name) (\(fallbackDefault.channelCount)ch) · SYSTEM"
+        }
+        if let first = routes.first {
+            return "\(first.name) (\(first.channelCount)ch)"
+        }
+        return "NO OUTPUT ROUTES"
+    }
+
+    nonisolated static func resolveMIDIInputDisplayName(inputs: [MIDIInputOption], selectedInputID: String) -> String {
+        if let selected = inputs.first(where: { $0.id == selectedInputID }) {
+            return selected.name
+        }
+        if let first = inputs.first {
+            return first.name
+        }
+        return "NO MIDI INPUTS"
+    }
+
+    nonisolated static func deriveSoundMode(
+        engineRunning: Bool,
+        effectiveOutputMode: EffectiveOutputMode,
+        choirContextActive: Bool,
+        phonePoolCount: Int,
+        phoneGateCommitted: Bool
+    ) -> (primary: SoundModePrimary, detail: SoundModeDetail, level: SoundSignalLevel) {
+        let primary: SoundModePrimary = choirContextActive ? .phoneChoir : .normal
+        let detail: SoundModeDetail = {
+            if !engineRunning {
+                return .off
+            }
+            switch effectiveOutputMode {
+            case .static:
+                return .static
+            case .dynamic:
+                return .dynamic
+            case .interstitial:
+                return .inter
+            case .off:
+                return .off
+            }
+        }()
+        let level: SoundSignalLevel = {
+            guard primary == .phoneChoir else { return .nominal }
+            if phonePoolCount == 0 {
+                return .critical
+            }
+            return phoneGateCommitted ? .nominal : .caution
+        }()
+        return (primary, detail, level)
+    }
+
+    nonisolated static func deriveSoundIOLevel(audioRouteCapability: AudioRouteCapability) -> SoundSignalLevel {
+        switch audioRouteCapability {
+        case .quad:
+            return .nominal
+        case .stereoFallback:
+            return .caution
+        case .unavailable:
+            return .critical
+        }
+    }
+
+    nonisolated static func resolveActiveSoundTarget(
+        selectedSampleID: String,
+        sampleEntries: [String: URL],
+        labels: [String: String],
+        choirContextActive: Bool,
+        activeSampleBank: Int,
+        activeChoirSampleBank: Int
+    ) -> ActiveSoundTarget {
+        let domain: ActiveSoundBankDomain = choirContextActive ? .choir : .main
+        let bank = domain == .choir ? activeChoirSampleBank : activeSampleBank
+
+        let resolvedID: String = {
+            if sampleEntries[selectedSampleID] != nil {
+                return selectedSampleID
+            }
+            return sampleEntries.keys.sorted().first ?? "none"
+        }()
+
+        guard let sampleURL = sampleEntries[resolvedID] else {
+            return ActiveSoundTarget(
+                sampleID: "none",
+                label: "none",
+                fileName: "none",
+                bankDomain: domain,
+                bank: bank
+            )
+        }
+
+        let label: String = {
+            if let curated = labels[resolvedID]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !curated.isEmpty {
+                return curated
+            }
+            return sampleURL.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "_", with: " ")
+        }()
+
+        return ActiveSoundTarget(
+            sampleID: resolvedID,
+            label: label,
+            fileName: sampleURL.lastPathComponent,
+            bankDomain: domain,
+            bank: bank
+        )
+    }
+
+    nonisolated static func isSoundManipulationStale(
+        _ focus: SoundManipulationFocus?,
+        nowMs: TimeInterval,
+        thresholdMs: TimeInterval = SoundSituationalSnapshot.manipulationStaleThresholdMs
+    ) -> Bool {
+        guard let focus else { return true }
+        return (nowMs - focus.updatedAt) > thresholdMs
+    }
+
+    static let coreMLSearchDirectoryDefaultsKey = "coreMLModelSearchDirectoryOverride"
+
+    static func loadCoreMLSearchDirectoryOverride() -> URL? {
+        guard let raw = UserDefaults.standard.string(forKey: coreMLSearchDirectoryDefaultsKey),
+              !raw.isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: raw, isDirectory: true)
+    }
+
+    static func buildCoreMLSearchDirectories(overrideURL: URL?) -> [URL] {
+        var extras: [URL] = []
+        if let overrideURL {
+            extras.append(overrideURL)
+        }
+        return CoreMLModelLocator.defaultSearchDirectories(additionalDirectories: extras)
+    }
+
     init() {
         let preferredModelName = ProcessInfo.processInfo.environment["CONDUCTOR_COREML_MODEL_NAME"]
-        let scoringModel = CoreMLScoringModelAdapter(preferredModelName: preferredModelName)
+        let overrideURL = Self.loadCoreMLSearchDirectoryOverride()
+        let searchDirectories = Self.buildCoreMLSearchDirectories(overrideURL: overrideURL)
+        let scoringModel = CoreMLScoringModelAdapter(
+            preferredModelName: preferredModelName,
+            searchDirectories: searchDirectories
+        )
         self.scoringModel = scoringModel
+        self.modelSearchOverridePath = overrideURL?.path
+        self.modelSearchPaths = searchDirectories.map { $0.path }
         self.textEngine = TextSelectionEngine(model: scoringModel)
         configurePreviewPlayerForPerformanceMode()
         let proceduralSeed = Int(Date().timeIntervalSince1970)
@@ -702,7 +1057,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
 
     private func startHUDTelemetryPump() {
         guard hudTelemetryPumpTimer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1.0 / 10.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, !self.hudTelemetrySnapshotTaskInFlight else { return }
                 self.hudTelemetrySnapshotTaskInFlight = true
@@ -710,7 +1065,9 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 defer {
                     self.hudTelemetrySnapshotTaskInFlight = false
                 }
-                self.hudTelemetryFrame = snapshot
+                if snapshot != self.hudTelemetryFrame {
+                    self.hudTelemetryFrame = snapshot
+                }
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -793,6 +1150,10 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         switch action {
         case .acceptActiveProposal:
             return "proposal_accept"
+        case .startEngine:
+            return "engine_start"
+        case .stopEngine:
+            return "engine_stop"
         case .patchVector:
             return "patch_vector"
         case .armOutputMode:
@@ -1552,17 +1913,19 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         }
 
         cancelSequenceWork()
-        engineRunning = true
         do {
             let route = try quadAudioEngine.start()
+            engineRunning = true
             applyRouteStatus(route, emitStatus: true)
         } catch {
+            engineRunning = false
             resetAudioRouteStatus()
             pushStatus(StatusLineEvent(
                 message: "Audio engine failed to start: \(error.localizedDescription)",
                 severity: .error,
                 timestamp: Date()
             ))
+            return
         }
 
         phoneAudioGateArmed = false
@@ -1575,6 +1938,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         effectsChainState = .idle
         hotasStaticVisualOverrideHeld = false
         staticAudioMacroState = .neutral
+        resetHOTASStaticSampleAuditionState()
         choirFieldState = .neutral
         updateEffectsPresetForActiveBank()
         quadAudioEngine.setChoirFieldState(choirFieldState)
@@ -1608,6 +1972,10 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         )
     }
 
+    func startEngineFromControl() {
+        startEngine()
+    }
+
     func stopEngine() {
         guard guardLinkHealthy(for: "ENGINE STOP") else {
             return
@@ -1638,6 +2006,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         effectsChainState = .idle
         hotasStaticVisualOverrideHeld = false
         staticAudioMacroState = .neutral
+        resetHOTASStaticSampleAuditionState()
         choirFieldState = .neutral
         updateEffectsPresetForActiveBank()
         stopMIDIInput(notify: false)
@@ -1660,6 +2029,10 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 "sequenceStep": "stop"
             ]
         )
+    }
+
+    func stopEngineFromControl() {
+        stopEngine()
     }
 
     func runPreshowTimelineStep() {
@@ -1765,6 +2138,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         phoneAudioGateCommitted = false
         hotasPhoneChoirContextActive = false
         effectsChainState = .idle
+        resetHOTASStaticSampleAuditionState()
         stopMIDIInput(notify: false)
         publishPhoneAudioPoolState()
         ingestAudioFeatures(.zero, forceUI: true)
@@ -1799,7 +2173,9 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             availableAudioRoutes = routes
         }
         if !routes.contains(where: { $0.id == selectedAudioRouteID }) {
-            selectedAudioRouteID = routes.first?.id ?? "default-output"
+            selectedAudioRouteID = routes.first(where: { $0.isSystemDefault })?.id
+                ?? routes.first?.id
+                ?? "default-output"
         }
 
         let midiInputs = CoreMIDIEventSource.availableInputs()
@@ -1815,14 +2191,78 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
 
     func applySetupConfiguration() {
         refreshSetupInventory()
+        if !selectedAudioRouteID.isEmpty {
+            do {
+                let applied = try audioRouter.setDefaultOutputRoute(routeID: selectedAudioRouteID)
+                if applied {
+                    pushStatus(StatusLineEvent(
+                        message: "Audio output set: \(selectedAudioRouteDisplayName)",
+                        severity: .success,
+                        timestamp: Date()
+                    ))
+                }
+            } catch {
+                pushStatus(StatusLineEvent(
+                    message: "Audio output selection failed: \(error.localizedDescription)",
+                    severity: .warn,
+                    timestamp: Date()
+                ))
+            }
+        }
+        refreshSetupInventory()
+        if engineRunning {
+            if ensureScoringEngineReady(operation: "Audio output apply") {
+                quadAudioEngine.stop()
+                if ensureScoringEngineReady(operation: "Audio output restart") {
+                    quadAudioEngine.setChoirFieldState(choirFieldState)
+                    quadAudioEngine.setEffectsChainState(chain: .a, active: effectsChainState.chainAActive, intensity: effectsChainState.chainAIntensity)
+                    quadAudioEngine.setEffectsChainState(chain: .b, active: effectsChainState.chainBActive, intensity: effectsChainState.chainBIntensity)
+                    applyStaticMacroAudioState()
+                }
+            }
+        }
         refreshQuadRouteStatus()
         refreshHOTASActivation()
-        if !selectedAudioRouteID.isEmpty, selectedAudioRouteID != "default-output" {
+    }
+
+    func testSelectedAudioOutput() {
+        guard let sampleURL = sampleURLForSelectedID() else {
             pushStatus(StatusLineEvent(
-                message: "Audio route selection is advisory; macOS output follows system default device",
-                severity: .info,
+                message: "AUDIO TEST blocked: load sample pack first",
+                severity: .warn,
                 timestamp: Date()
             ))
+            return
+        }
+
+        let startedTemporarily = !quadAudioEngine.isRunning
+        do {
+            if startedTemporarily {
+                _ = try quadAudioEngine.start()
+                applyRouteStatus(quadAudioEngine.routeStatus())
+            }
+
+            try quadAudioEngine.triggerSample(url: sampleURL, gain: 0.62)
+            pushStatus(StatusLineEvent(
+                message: "AUDIO TEST: \(sampleURL.lastPathComponent)",
+                severity: .success,
+                timestamp: Date()
+            ))
+        } catch {
+            pushStatus(StatusLineEvent(
+                message: "AUDIO TEST failed: \(error.localizedDescription)",
+                severity: .error,
+                timestamp: Date()
+            ))
+        }
+
+        if startedTemporarily && !engineRunning {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in
+                guard let self else { return }
+                guard !self.engineRunning else { return }
+                self.quadAudioEngine.stop()
+                self.refreshQuadRouteStatus()
+            }
         }
     }
 
@@ -2048,7 +2488,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     }
 
     func triggerSamplePlayback() {
-        guard engineRunning else {
+        guard ensureScoringEngineReady(operation: "SAMPLE") else {
             pushStatus(StatusLineEvent(
                 message: "SAMPLE blocked: engine is stopped",
                 severity: .warn,
@@ -2068,6 +2508,12 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
 
         do {
             try quadAudioEngine.triggerSample(url: sampleURL, gain: 0.34)
+            recordSoundManipulationFocus(
+                lane: "SAMPLE TRIGGER",
+                value: 0.34,
+                controlIDHint: "sample:manual",
+                sourceHint: "MANUAL"
+            )
             pushStatus(StatusLineEvent(
                 message: "SAMPLE triggered: \(sampleURL.lastPathComponent)",
                 severity: .info,
@@ -2090,6 +2536,12 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         guard guardPhoneAudioDispatchReady(label: "CHOIR NOTE ON") else { return }
         let clampedNote = min(127, max(0, note))
         let clampedVelocity = min(1, max(0, velocity))
+        recordSoundManipulationFocus(
+            lane: "CHOIR NOTE ON \(clampedNote)",
+            value: clampedVelocity,
+            controlIDHint: "phone:note_on",
+            sourceHint: "CHOIR"
+        )
         let command = makePhoneCommand(
             kind: .noteOn,
             note: clampedNote,
@@ -2127,6 +2579,12 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     func triggerPhoneSample() {
         guard guardPhoneAudioDispatchReady(label: "PHONE SAMPLE") else { return }
         let sampleID = selectedSampleID
+        recordSoundManipulationFocus(
+            lane: "PHONE SAMPLE",
+            value: 0.34,
+            controlIDHint: "phone:sample",
+            sourceHint: "MANUAL"
+        )
         let command = makePhoneCommand(
             kind: .sampleTrigger,
             sampleId: sampleID,
@@ -2456,6 +2914,65 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         return "\(samplePackEntries.count) entries"
     }
 
+    func selectedSampleDisplayLabel() -> String {
+        guard let sampleID = resolvedSelectedSampleID() else {
+            return "none"
+        }
+        return sampleDisplayLabel(for: sampleID)
+    }
+
+    func selectedSampleFileName() -> String {
+        guard let sampleID = resolvedSelectedSampleID(),
+              let sampleURL = samplePackEntries[sampleID] else {
+            return "none"
+        }
+        return sampleURL.lastPathComponent
+    }
+
+    private func resolvedSelectedSampleID() -> String? {
+        if samplePackEntries[selectedSampleID] != nil {
+            return selectedSampleID
+        }
+        return samplePackEntries.keys.sorted().first
+    }
+
+    private func sampleDisplayLabel(for sampleID: String) -> String {
+        if let curated = sampleLabelByID[sampleID]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !curated.isEmpty {
+            return curated
+        }
+        if let sampleURL = samplePackEntries[sampleID] {
+            return sampleURL
+                .deletingPathExtension()
+                .lastPathComponent
+                .replacingOccurrences(of: "_", with: " ")
+        }
+        return sampleID
+    }
+
+    private func resolvedActiveSoundTarget() -> ActiveSoundTarget {
+        let domain: ActiveSoundBankDomain = hotasPhoneChoirContextActive ? .choir : .main
+        let bank = domain == .choir ? activeChoirSampleBank : activeSampleBank
+        guard let sampleID = resolvedSelectedSampleID() else {
+            return ActiveSoundTarget(
+                sampleID: "none",
+                label: "none",
+                fileName: "none",
+                bankDomain: domain,
+                bank: bank
+            )
+        }
+        let label = sampleDisplayLabel(for: sampleID)
+        let fileName = samplePackEntries[sampleID]?.lastPathComponent ?? "none"
+        return ActiveSoundTarget(
+            sampleID: sampleID,
+            label: label,
+            fileName: fileName,
+            bankDomain: domain,
+            bank: bank
+        )
+    }
+
     func togglePhoneAudioSubsetTarget(_ hashedId: String) {
         if phoneAudioSubsetTargetIDs.contains(hashedId) {
             phoneAudioSubsetTargetIDs.remove(hashedId)
@@ -2544,6 +3061,12 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         if let manifest = try? decoder.decode(SamplePackManifest.self, from: data) {
             return resolveSampleEntries(manifest.samples, baseURL: selectedURL.deletingLastPathComponent())
         }
+        if let padMap = try? decoder.decode(PushCompanionPadMap.self, from: data) {
+            let resolved = resolvePushCompanionPadMapEntries(primaryMap: padMap, primaryMapURL: selectedURL)
+            if !resolved.entries.isEmpty {
+                return resolved
+            }
+        }
 
         if let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let samples = root["samples"] as? [String: String] {
@@ -2586,11 +3109,301 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             }
         }
 
+        let wavFallback = resolvePushCompanionWavEntriesByFolder(from: selectedURL)
+        if !wavFallback.entries.isEmpty {
+            return wavFallback
+        }
+
         throw NSError(
             domain: "ConductorHarness",
             code: 1902,
             userInfo: [NSLocalizedDescriptionKey: "Manifest format unsupported"]
         )
+    }
+
+    private func resolvePushCompanionPadMapEntries(
+        primaryMap: PushCompanionPadMap,
+        primaryMapURL: URL
+    ) -> (entries: [String: URL], metadata: [String: SampleMetadata], labels: [String: String]) {
+        let fm = FileManager.default
+        let primaryBankFolder = primaryMapURL.deletingLastPathComponent()
+        let sampleRoot = primaryBankFolder.deletingLastPathComponent()
+
+        var mapURLs: [URL] = [primaryMapURL]
+        let b1 = sampleRoot.appendingPathComponent("main_b1").appendingPathComponent("pad_map.json")
+        let b2 = sampleRoot.appendingPathComponent("main_b2").appendingPathComponent("pad_map.json")
+        if fm.fileExists(atPath: b1.path), b1.standardizedFileURL.path != primaryMapURL.standardizedFileURL.path {
+            mapURLs.append(b1)
+        }
+        if fm.fileExists(atPath: b2.path), b2.standardizedFileURL.path != primaryMapURL.standardizedFileURL.path {
+            mapURLs.append(b2)
+        }
+
+        var entries: [String: URL] = [:]
+        var metadata: [String: SampleMetadata] = [:]
+        var labels: [String: String] = [:]
+        let decoder = JSONDecoder()
+
+        for mapURL in mapURLs {
+            let map: PushCompanionPadMap
+            if mapURL.standardizedFileURL.path == primaryMapURL.standardizedFileURL.path {
+                map = primaryMap
+            } else {
+                guard let data = try? Data(contentsOf: mapURL),
+                      let decoded = try? decoder.decode(PushCompanionPadMap.self, from: data) else {
+                    continue
+                }
+                map = decoded
+            }
+
+            let bankFolder = mapURL.deletingLastPathComponent()
+            let folderName = bankFolder.lastPathComponent.lowercased()
+            let inferredBank: Int = {
+                if let bank = map.bank, (1...9).contains(bank) {
+                    return bank
+                }
+                if folderName.hasPrefix("main_b"),
+                   let parsed = Int(folderName.replacingOccurrences(of: "main_b", with: "")) {
+                    return parsed
+                }
+                return 1
+            }()
+
+            for slice in map.slices where (0..<64).contains(slice.slot) {
+                let rawFileName = slice.fileName?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let fileName = (rawFileName?.isEmpty == false)
+                    ? rawFileName!
+                    : String(format: "main_b%d_%02d.wav", inferredBank, slice.slot + 1)
+                let fileURL = bankFolder.appendingPathComponent(fileName)
+                guard fm.fileExists(atPath: fileURL.path) else { continue }
+                let sampleID = fileURL.deletingPathExtension().lastPathComponent
+                entries[sampleID] = fileURL
+                metadata[sampleID] = SampleMetadata(id: sampleID, renderClass: .misc)
+                if let label = slice.label?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !label.isEmpty {
+                    labels[sampleID] = label
+                } else {
+                    labels[sampleID] = fileURL.lastPathComponent
+                }
+            }
+
+            ingestAdditionalBankMedia(
+                bankFolder: bankFolder,
+                inferredBank: inferredBank,
+                entries: &entries,
+                metadata: &metadata,
+                labels: &labels
+            )
+        }
+
+        return (entries: entries, metadata: metadata, labels: labels)
+    }
+
+    private func resolvePushCompanionWavEntriesByFolder(
+        from selectedURL: URL
+    ) -> (entries: [String: URL], metadata: [String: SampleMetadata], labels: [String: String]) {
+        let fm = FileManager.default
+        let manifestFolder = selectedURL.deletingLastPathComponent()
+        let sampleRoot: URL = {
+            let folderName = manifestFolder.lastPathComponent.lowercased()
+            if folderName.hasPrefix("main_b") {
+                return manifestFolder.deletingLastPathComponent()
+            }
+            return manifestFolder
+        }()
+
+        var folders: [URL] = [
+            sampleRoot.appendingPathComponent("main_b1"),
+            sampleRoot.appendingPathComponent("main_b2")
+        ]
+        if !folders.contains(where: { $0.standardizedFileURL.path == manifestFolder.standardizedFileURL.path }) {
+            folders.append(manifestFolder)
+        }
+
+        var entries: [String: URL] = [:]
+        var metadata: [String: SampleMetadata] = [:]
+        var labels: [String: String] = [:]
+
+        for folder in folders where fm.fileExists(atPath: folder.path) {
+            guard let files = try? fm.contentsOfDirectory(
+                at: folder,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+
+            let wavFiles = files
+                .filter { $0.pathExtension.lowercased() == "wav" }
+                .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+
+            for fileURL in wavFiles {
+                let sampleID = fileURL.deletingPathExtension().lastPathComponent
+                entries[sampleID] = fileURL
+                metadata[sampleID] = SampleMetadata(id: sampleID, renderClass: .misc)
+                labels[sampleID] = sampleID.replacingOccurrences(of: "_", with: " ")
+            }
+
+            let inferredBank: Int = {
+                let folderName = folder.lastPathComponent.lowercased()
+                if folderName.hasPrefix("main_b"),
+                   let parsed = Int(folderName.replacingOccurrences(of: "main_b", with: "")) {
+                    return parsed
+                }
+                return 1
+            }()
+            ingestAdditionalBankMedia(
+                bankFolder: folder,
+                inferredBank: inferredBank,
+                entries: &entries,
+                metadata: &metadata,
+                labels: &labels
+            )
+        }
+
+        return (entries: entries, metadata: metadata, labels: labels)
+    }
+
+    private func ingestAdditionalBankMedia(
+        bankFolder: URL,
+        inferredBank: Int,
+        entries: inout [String: URL],
+        metadata: inout [String: SampleMetadata],
+        labels: inout [String: String]
+    ) {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(
+            at: bankFolder,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        let supportedExtensions = Set(["wav", "aif", "aiff", "m4a", "caf", "mp3"])
+        for fileURL in files {
+            let ext = fileURL.pathExtension.lowercased()
+            guard supportedExtensions.contains(ext) else { continue }
+            let baseName = fileURL.deletingPathExtension().lastPathComponent
+            let normalizedBase = baseName.lowercased()
+            let prefixedID: String = {
+                let bankPrefix = "main_b\(min(9, max(1, inferredBank)))_"
+                if normalizedBase.hasPrefix(bankPrefix) {
+                    return baseName
+                }
+                return "\(bankPrefix)\(baseName)"
+            }()
+            guard entries[prefixedID] == nil else { continue }
+
+            entries[prefixedID] = fileURL
+            let renderClass: SampleRenderClass = {
+                if normalizedBase.contains("long") || normalizedBase.contains("paul") {
+                    return .texture
+                }
+                return .misc
+            }()
+            metadata[prefixedID] = SampleMetadata(id: prefixedID, renderClass: renderClass)
+            labels[prefixedID] = baseName.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+
+    private func shouldAutoloadPushCompanionSamples() -> Bool {
+        if samplePackEntries.isEmpty {
+            return true
+        }
+        if samplePackEntries.count == 1, samplePackEntries["default"] != nil {
+            return true
+        }
+        return false
+    }
+
+    @discardableResult
+    private func autoloadPushCompanionSampleBanksIfNeeded() -> Bool {
+        guard shouldAutoloadPushCompanionSamples() else { return false }
+        let fm = FileManager.default
+
+        var candidateMapURLs: [URL] = []
+        if let explicit = ProcessInfo.processInfo.environment["CONDUCTOR_PUSH_PAD_MAP_PATH"],
+           !explicit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            candidateMapURLs.append(URL(fileURLWithPath: explicit))
+        }
+        if let explicitRoot = ProcessInfo.processInfo.environment["CONDUCTOR_PUSH_SAMPLES_DIR"],
+           !explicitRoot.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            candidateMapURLs.append(
+                URL(fileURLWithPath: explicitRoot)
+                    .appendingPathComponent("main_b1")
+                    .appendingPathComponent("pad_map.json")
+            )
+        }
+
+        let cwd = URL(fileURLWithPath: fm.currentDirectoryPath, isDirectory: true)
+        var probe = cwd
+        for _ in 0..<8 {
+            candidateMapURLs.append(
+                probe
+                    .appendingPathComponent("push-companion-ios")
+                    .appendingPathComponent("Sources")
+                    .appendingPathComponent("PushCompanionIOS")
+                    .appendingPathComponent("Resources")
+                    .appendingPathComponent("Samples")
+                    .appendingPathComponent("main_b1")
+                    .appendingPathComponent("pad_map.json")
+            )
+            candidateMapURLs.append(
+                probe
+                    .appendingPathComponent("Sources")
+                    .appendingPathComponent("PushCompanionIOS")
+                    .appendingPathComponent("Resources")
+                    .appendingPathComponent("Samples")
+                    .appendingPathComponent("main_b1")
+                    .appendingPathComponent("pad_map.json")
+            )
+            let parent = probe.deletingLastPathComponent()
+            if parent.path == probe.path { break }
+            probe = parent
+        }
+
+        let fallbackUserPath = URL(fileURLWithPath: "/Users/seb/letgo/push-companion-ios/Sources/PushCompanionIOS/Resources/Samples/main_b1/pad_map.json")
+        candidateMapURLs.append(fallbackUserPath)
+
+        var seen = Set<String>()
+        let uniqueCandidates = candidateMapURLs.filter { url in
+            let standardized = url.standardizedFileURL.path
+            guard !seen.contains(standardized) else { return false }
+            seen.insert(standardized)
+            return true
+        }
+
+        for candidate in uniqueCandidates where fm.fileExists(atPath: candidate.path) {
+            guard let resolved = try? resolveSamplePackEntries(from: candidate),
+                  !resolved.entries.isEmpty else {
+                continue
+            }
+
+            let hasB1 = resolved.entries.keys.contains { $0.hasPrefix("main_b1_") }
+            let hasB2 = resolved.entries.keys.contains { $0.hasPrefix("main_b2_") }
+            guard hasB1, hasB2 else { continue }
+
+            samplePackManifestURL = candidate
+            samplePackEntries = resolved.entries
+            sampleMetadataByID = resolved.metadata
+            sampleLabelByID = resolved.labels
+            if let firstID = resolved.entries.keys.sorted().first {
+                selectedSampleID = firstID
+            }
+            updateEffectsPresetForActiveBank()
+            applyStaticSampleMorphSelection()
+            publishPushPadLabelsForActiveMainBank(force: true)
+            saveMediaManifest()
+            pushStatus(StatusLineEvent(
+                message: "Auto-loaded Push sample banks (B1/B2): \(resolved.entries.count) slices",
+                severity: .success,
+                timestamp: Date()
+            ))
+            return true
+        }
+
+        return false
     }
 
     private func resolveSampleEntries(
@@ -2679,6 +3492,12 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     }
 
     func refreshModelCatalog() {
+        let overrideURL = Self.loadCoreMLSearchDirectoryOverride()
+        let rebuilt = Self.buildCoreMLSearchDirectories(overrideURL: overrideURL)
+        scoringModel.updateSearchDirectories(rebuilt)
+        modelSearchOverridePath = overrideURL?.path
+        modelSearchPaths = rebuilt.map { $0.path }
+
         let discovered = scoringModel.availableModelCandidates()
         var map: [String: CompiledModelCandidate] = [:]
 
@@ -2695,6 +3514,43 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         if selectedModelCandidateID.isEmpty || !merged.contains(where: { $0.id == selectedModelCandidateID }) {
             selectedModelCandidateID = merged.first?.id ?? ""
         }
+
+        pushStatus(StatusLineEvent(
+            message: "Model catalog refreshed — \(merged.count) bundle(s) across \(rebuilt.count) path(s)",
+            severity: merged.isEmpty ? .warn : .info,
+            timestamp: Date()
+        ))
+    }
+
+    func pickCoreMLSearchDirectory() {
+        let panel = NSOpenPanel()
+        panel.title = "Select CoreML Models Directory"
+        panel.prompt = "Use Directory"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+
+        guard panel.runModal() == .OK, let chosen = panel.url else { return }
+
+        UserDefaults.standard.set(chosen.path, forKey: Self.coreMLSearchDirectoryDefaultsKey)
+        pushStatus(StatusLineEvent(
+            message: "Models directory set: \(chosen.path)",
+            severity: .success,
+            timestamp: Date()
+        ))
+        refreshModelCatalog()
+        reloadPreferredModel()
+    }
+
+    func clearCoreMLSearchDirectoryOverride() {
+        UserDefaults.standard.removeObject(forKey: Self.coreMLSearchDirectoryDefaultsKey)
+        pushStatus(StatusLineEvent(
+            message: "Models directory override cleared",
+            severity: .info,
+            timestamp: Date()
+        ))
+        refreshModelCatalog()
     }
 
     func reloadPreferredModel() {
@@ -2874,14 +3730,21 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     }
 
     func setDynamicBinSelectionFromControl(_ value: Double) {
+        let normalized = Self.clamp01(value)
         updatePerformerProceduralState { state in
-            state.dynamicBinSelection = Self.clamp01(value)
+            state.dynamicBinSelection = normalized
         }
+        recordSoundManipulationFocus(lane: "SRC X", value: normalized, controlIDHint: "gd:x")
+        maybeTriggerHOTASDynamicSampleScoring(
+            lane: "SRC X",
+            axis: .x,
+            normalizedControlValue: normalized
+        )
     }
 
     func setCutCadenceFromControl(_ value: Double) {
+        let normalized = Self.clamp01(value)
         updatePerformerProceduralState { state in
-            let normalized = Self.clamp01(value)
             state.cutCadence = normalized
             switch normalized {
             case ..<0.28:
@@ -2894,11 +3757,17 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 state.transitionMode = .stutter
             }
         }
+        recordSoundManipulationFocus(lane: "CUT Y", value: normalized, controlIDHint: "gd:y")
+        maybeTriggerHOTASDynamicSampleScoring(
+            lane: "CUT Y",
+            axis: .y,
+            normalizedControlValue: normalized
+        )
     }
 
     func setCompositorBlendFromControl(_ value: Double) {
+        let normalized = Self.clamp01(value)
         updatePerformerProceduralState { state in
-            let normalized = Self.clamp01(value)
             state.fade = normalized
             switch normalized {
             case ..<0.17:
@@ -2915,6 +3784,41 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 state.compositorPreset = .stutter
             }
         }
+        recordSoundManipulationFocus(lane: "COMP Z", value: normalized, controlIDHint: "gd:rz")
+        maybeTriggerHOTASDynamicSampleScoring(
+            lane: "COMP Z",
+            axis: .z,
+            normalizedControlValue: normalized
+        )
+    }
+
+    private func recordSoundManipulationFocus(
+        lane: String,
+        value: Double,
+        controlIDHint: String? = nil,
+        sourceHint: String? = nil
+    ) {
+        let nowMs = ConductorHarnessViewModel.nowMilliseconds()
+        let normalizedValue = Self.clamp01(value)
+
+        var source = sourceHint ?? "CONTROL"
+        var controlID = controlIDHint ?? lane
+
+        if let signal = hotasLastSignal {
+            let signalMs = ConductorHarnessViewModel.normalizedMilliseconds(signal.timestamp)
+            if abs(nowMs - signalMs) < 420 {
+                source = signal.sourceKind.rawValue.uppercased()
+                controlID = signal.controlID
+            }
+        }
+
+        soundManipulationFocus = SoundManipulationFocus(
+            source: source,
+            controlID: controlID,
+            lane: lane,
+            normalizedValue: normalizedValue,
+            updatedAt: nowMs
+        )
     }
 
     func setStaticVisualOverrideHoldFromControl(_ isHeld: Bool) {
@@ -2939,8 +3843,14 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         let normalized = Self.clamp01(value)
         guard abs(staticAudioMacroState.sampleMorph - normalized) > 0.01 else { return }
         staticAudioMacroState.sampleMorph = normalized
+        recordSoundManipulationFocus(lane: "SAMPLE MORPH", value: normalized, controlIDHint: "gd:x")
         applyStaticSampleMorphSelection()
         applyStaticMacroAudioState()
+        maybeTriggerHOTASStaticSampleAudition(
+            lane: "SAMPLE MORPH",
+            axis: .x,
+            normalizedControlValue: normalized
+        )
     }
 
     func setStaticArticulationFromControl(_ value: Double) {
@@ -2948,7 +3858,13 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         let normalized = Self.clamp01(value)
         guard abs(staticAudioMacroState.articulation - normalized) > 0.01 else { return }
         staticAudioMacroState.articulation = normalized
+        recordSoundManipulationFocus(lane: "ARTICULATION", value: normalized, controlIDHint: "gd:y")
         applyStaticMacroAudioState()
+        maybeTriggerHOTASStaticSampleAudition(
+            lane: "ARTICULATION",
+            axis: .y,
+            normalizedControlValue: normalized
+        )
     }
 
     func setStaticTimbreFromControl(_ value: Double) {
@@ -2956,7 +3872,13 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         let normalized = Self.clamp01(value)
         guard abs(staticAudioMacroState.timbre - normalized) > 0.01 else { return }
         staticAudioMacroState.timbre = normalized
+        recordSoundManipulationFocus(lane: "TIMBRE", value: normalized, controlIDHint: "gd:rz")
         applyStaticMacroAudioState()
+        maybeTriggerHOTASStaticSampleAudition(
+            lane: "TIMBRE",
+            axis: .z,
+            normalizedControlValue: normalized
+        )
     }
 
     func setStaticTextureSendFromControl(_ value: Double) {
@@ -2964,6 +3886,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         let normalized = Self.clamp01(value)
         guard abs(staticAudioMacroState.textureSend - normalized) > 0.01 else { return }
         staticAudioMacroState.textureSend = normalized
+        recordSoundManipulationFocus(lane: "TEXTURE SEND", value: normalized, controlIDHint: "gd:slider")
         applyStaticMacroAudioState()
     }
 
@@ -2971,6 +3894,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         let normalized = Self.clamp01(value)
         guard abs(choirFieldState.spread - normalized) > 0.01 else { return }
         choirFieldState.spread = normalized
+        recordSoundManipulationFocus(lane: "CHOIR SPREAD", value: normalized, controlIDHint: "gd:x")
         quadAudioEngine.setChoirFieldState(choirFieldState)
         refreshProgramAudioState(nowMs: ConductorHarnessViewModel.nowMilliseconds())
     }
@@ -2979,6 +3903,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         let normalized = Self.clamp01(value)
         guard abs(choirFieldState.depth - normalized) > 0.01 else { return }
         choirFieldState.depth = normalized
+        recordSoundManipulationFocus(lane: "CHOIR DEPTH", value: normalized, controlIDHint: "gd:y")
         quadAudioEngine.setChoirFieldState(choirFieldState)
         refreshProgramAudioState(nowMs: ConductorHarnessViewModel.nowMilliseconds())
     }
@@ -2987,6 +3912,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         let normalized = Self.clamp01(value)
         guard abs(choirFieldState.detune - normalized) > 0.01 else { return }
         choirFieldState.detune = normalized
+        recordSoundManipulationFocus(lane: "CHOIR DETUNE", value: normalized, controlIDHint: "gd:rz")
         quadAudioEngine.setChoirFieldState(choirFieldState)
         refreshProgramAudioState(nowMs: ConductorHarnessViewModel.nowMilliseconds())
     }
@@ -3023,6 +3949,11 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     func setPhoneChoirContextActiveFromControl(_ active: Bool) {
         guard hotasPhoneChoirContextActive != active else { return }
         hotasPhoneChoirContextActive = active
+        recordSoundManipulationFocus(
+            lane: active ? "MODE -> PHONE CHOIR" : "MODE -> NORMAL",
+            value: active ? 1 : 0,
+            controlIDHint: "ctx:choir"
+        )
 
         if active {
             applySampleBankSelection(
@@ -3033,6 +3964,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             )
         } else {
             activeChoirMIDINotes.removeAll()
+            resetHOTASStaticSampleAuditionState()
             applySampleBankSelection(
                 activeSampleBank,
                 domain: .main,
@@ -3048,6 +3980,11 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         next.set(chain: chain, active: active, intensity: intensity)
         guard next != effectsChainState else { return }
         effectsChainState = next
+        recordSoundManipulationFocus(
+            lane: chain == .a ? "FX RHYTHM" : "FX SPACE",
+            value: intensity,
+            controlIDHint: chain == .a ? "btn:10" : "btn:11"
+        )
         quadAudioEngine.setEffectsChainState(chain: chain, active: active, intensity: intensity)
         applyStaticMacroAudioState()
         refreshProgramAudioState(nowMs: ConductorHarnessViewModel.nowMilliseconds())
@@ -3065,7 +4002,8 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     }
 
     private func applyStaticSampleMorphSelection() {
-        guard currentHOTASOutputModeID() == .static else { return }
+        guard currentHOTASOutputModeID() != .dynamic else { return }
+        guard !hotasPhoneChoirContextActive else { return }
         guard !hotasStaticVisualOverrideHeld else { return }
 
         let candidateIDs = mainBankSampleIDs(for: activeSampleBank)
@@ -3079,6 +4017,335 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
 
         if selectedSampleID != resolved {
             selectedSampleID = resolved
+        }
+    }
+
+    private func selectMainBankSampleForDynamicSelection(_ normalized: Double) {
+        guard !hotasPhoneChoirContextActive else { return }
+        let candidateIDs = mainBankSampleIDs(for: activeSampleBank)
+        guard !candidateIDs.isEmpty else { return }
+        let clamped = Self.clamp01(normalized)
+        let index = Int(round(clamped * Double(max(1, candidateIDs.count - 1))))
+        let safeIndex = min(max(0, index), candidateIDs.count - 1)
+        let selectedID = candidateIDs[safeIndex]
+        if selectedSampleID != selectedID {
+            selectedSampleID = selectedID
+        }
+    }
+
+    private func maybeTriggerHOTASDynamicSampleScoring(
+        lane: String,
+        axis: HOTASSampleSpaceAxis,
+        normalizedControlValue: Double
+    ) {
+        guard !hotasPhoneChoirContextActive else { return }
+        guard currentHOTASOutputModeID() == .dynamic else { return }
+        maybeTriggerHOTASSampleSpaceAudition(
+            lane: lane,
+            axis: axis,
+            normalizedControlValue: normalizedControlValue,
+            dynamicMode: true
+        )
+    }
+
+    private func maybeTriggerHOTASStaticSampleAudition(
+        lane: String,
+        axis: HOTASSampleSpaceAxis,
+        normalizedControlValue: Double
+    ) {
+        guard !hotasPhoneChoirContextActive else { return }
+        guard currentHOTASOutputModeID() != .dynamic else { return }
+        guard !hotasStaticVisualOverrideHeld else { return }
+        maybeTriggerHOTASSampleSpaceAudition(
+            lane: lane,
+            axis: axis,
+            normalizedControlValue: normalizedControlValue,
+            dynamicMode: false
+        )
+    }
+
+    private func maybeTriggerHOTASSampleSpaceAudition(
+        lane: String,
+        axis: HOTASSampleSpaceAxis,
+        normalizedControlValue: Double,
+        dynamicMode: Bool
+    ) {
+        guard ensureScoringEngineReady(operation: dynamicMode ? "HOTAS dynamic scoring" : "HOTAS sample audition") else {
+            maybeEmitHOTASStaticAuditionStatus(
+                dynamicMode
+                    ? "HOTAS scoring blocked: engine is stopped"
+                    : "HOTAS sample audition blocked: engine is stopped",
+                severity: .warn
+            )
+            return
+        }
+
+        let signedAxisDelta = updateHOTASSampleSpace(axis: axis, normalizedControlValue: normalizedControlValue)
+        let axisDelta = abs(signedAxisDelta)
+        // Ignore tiny center jitter; only movement should fire sound.
+        guard axisDelta >= 0.018 else { return }
+
+        let candidateIDs = mainBankSampleIDs(for: activeSampleBank)
+        guard !candidateIDs.isEmpty else {
+            maybeEmitHOTASStaticAuditionStatus(
+                dynamicMode
+                    ? "HOTAS scoring blocked: load sample pack first"
+                    : "HOTAS sample audition blocked: load sample pack first",
+                severity: .warn
+            )
+            return
+        }
+
+        let driftScale: Double = switch axis {
+        case .x: 1.20
+        case .y: 0.70
+        case .z: 0.55
+        }
+        hotasSampleSpaceDrift += signedAxisDelta * Double(candidateIDs.count) * driftScale
+        hotasSampleSpaceDrift = min(
+            Double(candidateIDs.count),
+            max(-Double(candidateIDs.count), hotasSampleSpaceDrift)
+        )
+
+        guard var resolvedIndex = resolveHOTASSampleSpaceIndex(sampleCount: candidateIDs.count) else { return }
+        if effectsChainState.chainBActive, candidateIDs.count > 1 {
+            let spread = max(1, Int((effectsChainState.chainBIntensity * Double(candidateIDs.count)) * 0.06))
+            let wobble = Int(((hotasSampleSpaceZ - 0.5) * 2.0 * Double(spread)).rounded())
+            resolvedIndex = min(max(0, resolvedIndex + wobble), candidateIDs.count - 1)
+        }
+        let selectedID = candidateIDs[resolvedIndex]
+        selectedSampleID = selectedID
+        guard let sampleURL = samplePackEntries[selectedID] else { return }
+
+        let nowMs = ConductorHarnessViewModel.nowMilliseconds()
+        let sameSample = selectedID == hotasStaticSampleAuditionLastSampleID
+        let rhythmRateMultiplier: Double = effectsChainState.chainAActive
+            ? max(0.45, 1.0 - (effectsChainState.chainAIntensity * 0.55))
+            : 1.0
+        let baseIntervalMs: TimeInterval = sameSample ? 260 : 70
+        let minIntervalMs = baseIntervalMs * rhythmRateMultiplier
+        guard nowMs - hotasStaticSampleAuditionLastAtMs >= minIntervalMs else { return }
+
+        // If sample selection did not change, require stronger motion before re-fire.
+        if sameSample, axisDelta < 0.11 {
+            return
+        }
+
+        let fxBoost = (effectsChainState.chainAActive ? effectsChainState.chainAIntensity * 0.24 : 0)
+            + (effectsChainState.chainBActive ? effectsChainState.chainBIntensity * 0.18 : 0)
+        let movementBoost = min(0.30, axisDelta * 0.95)
+        let gainBase: Double = dynamicMode
+            ? (0.18 + performerProceduralState.cutCadence * 0.22 + performerProceduralState.fade * 0.14)
+            : (0.18 + staticAudioMacroState.articulation * 0.24 + staticAudioMacroState.timbre * 0.18)
+        let gain = min(0.96, max(0.14, gainBase + movementBoost + fxBoost))
+
+        do {
+            try quadAudioEngine.triggerSample(url: sampleURL, gain: gain)
+            let previousSampleID = hotasStaticSampleAuditionLastSampleID
+            hotasStaticSampleAuditionLastAtMs = nowMs
+            hotasStaticSampleAuditionLastValueByLane[lane] = normalizedControlValue
+            hotasStaticSampleAuditionLastSampleID = selectedID
+            triggerHOTASEffectsAccentsIfNeeded(
+                selectedID: selectedID,
+                candidateIDs: candidateIDs,
+                baseGain: gain,
+                nowMs: nowMs
+            )
+            triggerHOTASPaulstretchIfNeeded(
+                sampleURL: sampleURL,
+                axisDelta: axisDelta,
+                nowMs: nowMs
+            )
+
+            if selectedID != previousSampleID || nowMs - hotasStaticSampleAuditionLastStatusAtMs >= 1_200 {
+                hotasStaticSampleAuditionLastStatusAtMs = nowMs
+                pushStatus(StatusLineEvent(
+                    message: dynamicMode
+                        ? "HOTAS scoring sample: \(sampleURL.lastPathComponent)"
+                        : "HOTAS sample audition: \(sampleURL.lastPathComponent)",
+                    severity: .info,
+                    timestamp: Date()
+                ))
+            }
+        } catch {
+            if nowMs - hotasStaticSampleAuditionLastStatusAtMs >= 900 {
+                hotasStaticSampleAuditionLastStatusAtMs = nowMs
+                pushStatus(StatusLineEvent(
+                    message: dynamicMode
+                        ? "HOTAS scoring failed: \(error.localizedDescription)"
+                        : "HOTAS sample audition failed: \(error.localizedDescription)",
+                    severity: .error,
+                    timestamp: Date()
+                ))
+            }
+        }
+    }
+
+    private func updateHOTASSampleSpace(
+        axis: HOTASSampleSpaceAxis,
+        normalizedControlValue: Double
+    ) -> Double {
+        let clamped = Self.clamp01(normalizedControlValue)
+        switch axis {
+        case .x:
+            let delta = clamped - hotasSampleSpaceX
+            hotasSampleSpaceX = clamped
+            return delta
+        case .y:
+            let delta = clamped - hotasSampleSpaceY
+            hotasSampleSpaceY = clamped
+            return delta
+        case .z:
+            let delta = clamped - hotasSampleSpaceZ
+            hotasSampleSpaceZ = clamped
+            return delta
+        }
+    }
+
+    private func resolveHOTASSampleSpaceIndex(sampleCount: Int) -> Int? {
+        guard sampleCount > 0 else { return nil }
+        let maxIndex = sampleCount - 1
+        let primary = hotasSampleSpaceX * Double(maxIndex)
+        let yOffset = (hotasSampleSpaceY - 0.5) * Double(sampleCount) * 0.18
+        let zOrbit = sin(hotasSampleSpaceZ * (.pi * 2.0)) * Double(sampleCount) * 0.10
+        let resolvedContinuous = primary + yOffset + zOrbit + hotasSampleSpaceDrift
+        hotasSampleSpaceDrift *= 0.68
+        let wrapped = resolvedContinuous.truncatingRemainder(dividingBy: Double(sampleCount))
+        let wrappedPositive = wrapped < 0 ? wrapped + Double(sampleCount) : wrapped
+        let resolved = Int(wrappedPositive.rounded())
+        return min(max(0, resolved), maxIndex)
+    }
+
+    private func resetHOTASStaticSampleAuditionState() {
+        hotasStaticSampleAuditionLastAtMs = 0
+        hotasStaticSampleAuditionLastValueByLane.removeAll()
+        hotasStaticSampleAuditionLastSampleID = nil
+        hotasStaticSampleAuditionLastStatusAtMs = 0
+        hotasSampleSpaceX = 0.5
+        hotasSampleSpaceY = 0.5
+        hotasSampleSpaceZ = 0.5
+        hotasSampleSpaceDrift = 0
+        hotasLastRhythmAccentAtMs = 0
+        hotasLastSpaceAccentAtMs = 0
+        hotasLastPaulstretchAtMs = 0
+    }
+
+    private func triggerHOTASEffectsAccentsIfNeeded(
+        selectedID: String,
+        candidateIDs: [String],
+        baseGain: Double,
+        nowMs: TimeInterval
+    ) {
+        if effectsChainState.chainAActive, effectsChainState.chainAIntensity > 0.08 {
+            if nowMs - hotasLastRhythmAccentAtMs >= 140,
+               let sampleURL = samplePackEntries[selectedID] {
+                hotasLastRhythmAccentAtMs = nowMs
+                let intensity = effectsChainState.chainAIntensity
+                let accents = max(1, Int((intensity * 2.2).rounded()))
+                let spacingSeconds = max(0.035, 0.08 - (intensity * 0.045))
+                for step in 1...accents {
+                    let accentGain = min(0.82, max(0.10, baseGain * (0.65 - (0.12 * Double(step - 1)))))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + (spacingSeconds * Double(step))) { [weak self] in
+                        guard let self else { return }
+                        try? self.quadAudioEngine.triggerSample(url: sampleURL, gain: accentGain)
+                    }
+                }
+            }
+        }
+
+        if effectsChainState.chainBActive,
+           effectsChainState.chainBIntensity > 0.08,
+           nowMs - hotasLastSpaceAccentAtMs >= 220,
+           let sourceIndex = candidateIDs.firstIndex(of: selectedID) {
+            hotasLastSpaceAccentAtMs = nowMs
+            let intensity = effectsChainState.chainBIntensity
+            let spread = max(1, Int((Double(candidateIDs.count) * (0.04 + intensity * 0.12)).rounded()))
+            let direction = hotasSampleSpaceZ >= 0.5 ? 1 : -1
+            let neighborIndex = min(max(0, sourceIndex + (direction * spread)), candidateIDs.count - 1)
+            let neighborID = candidateIDs[neighborIndex]
+            if neighborID != selectedID,
+               let neighborURL = samplePackEntries[neighborID] {
+                let accentGain = min(0.78, max(0.10, baseGain * (0.48 + intensity * 0.30)))
+                let delay = max(0.04, 0.12 - (intensity * 0.05))
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self else { return }
+                    try? self.quadAudioEngine.triggerSample(url: neighborURL, gain: accentGain)
+                }
+            }
+        }
+    }
+
+    private func triggerHOTASPaulstretchIfNeeded(
+        sampleURL: URL,
+        axisDelta: Double,
+        nowMs: TimeInterval
+    ) {
+        let spaceInfluence = effectsChainState.chainBActive ? effectsChainState.chainBIntensity : 0
+        let textureInfluence = currentHOTASOutputModeID() == .dynamic
+            ? performerProceduralState.fade
+            : staticAudioMacroState.textureSend
+        let movementInfluence = min(1, axisDelta * 3.4)
+        let impetus = max(spaceInfluence, max(textureInfluence, movementInfluence))
+        guard impetus >= 0.26 else { return }
+
+        let cooldownMs = max(180, 520 - (impetus * 300))
+        guard nowMs - hotasLastPaulstretchAtMs >= cooldownMs else { return }
+        hotasLastPaulstretchAtMs = nowMs
+
+        let rate = max(0.06, min(0.34, 0.32 - (impetus * 0.24)))
+        let gain = max(0.08, min(0.38, 0.09 + (impetus * 0.21)))
+
+        do {
+            try quadAudioEngine.triggerPaulstretchedSample(
+                url: sampleURL,
+                gain: gain,
+                rate: rate
+            )
+        } catch {
+            // Stretch layer is additive. Base sample trigger already succeeded.
+        }
+    }
+
+    private func maybeEmitHOTASStaticAuditionStatus(
+        _ message: String,
+        severity: StatusLineSeverity,
+        minIntervalMs: TimeInterval = 900
+    ) {
+        let nowMs = ConductorHarnessViewModel.nowMilliseconds()
+        guard nowMs - hotasStaticSampleAuditionLastStatusAtMs >= minIntervalMs else { return }
+        hotasStaticSampleAuditionLastStatusAtMs = nowMs
+        pushStatus(StatusLineEvent(
+            message: message,
+            severity: severity,
+            timestamp: Date()
+        ))
+    }
+
+    @discardableResult
+    private func ensureScoringEngineReady(operation: String) -> Bool {
+        guard engineRunning else { return false }
+        if quadAudioEngine.isRunning {
+            return true
+        }
+
+        do {
+            let route = try quadAudioEngine.start()
+            applyRouteStatus(route, emitStatus: true)
+            pushStatus(StatusLineEvent(
+                message: "\(operation): audio engine recovered",
+                severity: .info,
+                timestamp: Date()
+            ))
+            return true
+        } catch {
+            engineRunning = false
+            resetAudioRouteStatus()
+            pushStatus(StatusLineEvent(
+                message: "\(operation) failed: \(error.localizedDescription)",
+                severity: .error,
+                timestamp: Date()
+            ))
+            return false
         }
     }
 
@@ -3281,6 +4548,12 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             publishPushPadLabelsForActiveMainBank()
         }
 
+        recordSoundManipulationFocus(
+            lane: domain == .choir ? "BANK SELECT CHOIR" : "BANK SELECT MAIN",
+            value: Double(clampedBank) / 3.0,
+            controlIDHint: domain == .choir ? "bank:choir" : "bank:main"
+        )
+
         refreshProgramAudioState(nowMs: ConductorHarnessViewModel.nowMilliseconds())
         guard emitStatus else { return }
         let domainLabel = domain == .choir ? "Choir" : "Main"
@@ -3430,6 +4703,8 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         let profile = outputProfile ?? resolveOutputProfile(for: cue.showState)
         effectiveOutputMode = profile.mode
         previewScene = cue.showState
+        previewPlayer.isMuted = true
+        previewPlayer.volume = 0
 
         guard profile.showFixed else {
             configurePreviewLoop(shouldLoop: false)
@@ -3643,6 +4918,8 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         previewPlayer.automaticallyWaitsToMinimizeStalling = false
         previewPlayer.allowsExternalPlayback = false
         previewPlayer.preventsDisplaySleepDuringVideoPlayback = false
+        previewPlayer.isMuted = true
+        previewPlayer.volume = 0
     }
 
     private func makeLowLatencyPreviewItem(url: URL) -> AVPlayerItem {
@@ -3923,6 +5200,14 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         hotasProfile.firstBinding(for: role)
     }
 
+    func hotasBindings(for role: ControlRole) -> [ControlBinding] {
+        hotasProfile.bindings
+            .filter { $0.role == role }
+            .sorted { lhs, rhs in
+                lhs.controlID.localizedCaseInsensitiveCompare(rhs.controlID) == .orderedAscending
+            }
+    }
+
     func updateHOTASInputMode(_ mode: ControlInputMode) {
         hotasInputMode = mode
         hotasProfile.inputMode = mode
@@ -3936,25 +5221,163 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         persistControlProfileDocument()
     }
 
+    private func resetHOTASCaptureState() {
+        hotasCaptureRole = nil
+        hotasCaptureExpectedKinds = Set(ControlSignalKind.allCases)
+        hotasPendingCaptureRole = nil
+        hotasCaptureAxisCandidateControlID = nil
+        hotasCaptureAxisCandidateSamples = 0
+        hotasCaptureAxisCandidateStrength = 0
+        hotasCaptureAxisCandidateUpdatedAtMs = 0
+        hotasCaptureArmedAtMs = 0
+        hotasCaptureBaselineByControlKey.removeAll()
+    }
+
     func beginHOTASTraining() {
         hotasTrainingBackupProfile = hotasProfile
         hotasTrainingActive = true
-        hotasCaptureRole = nil
-        hotasPendingCaptureRole = nil
+        resetHOTASCaptureState()
+        hotasObservedByControlKey.removeAll()
+        hotasObservedSignals = []
+        hotasLastSignal = nil
         hotasLastSignalSummary = "Training active. Move a control to begin capture."
         refreshHOTASActivation()
+    }
+
+    func ensureHOTASTrainingSession() {
+        if !hotasTrainingActive {
+            beginHOTASTraining()
+        }
     }
 
     func captureHOTASBinding(for role: ControlRole) {
         guard hotasTrainingActive else { return }
         hotasCaptureRole = role
+        hotasCaptureExpectedKinds = expectedCaptureKinds(for: role)
         hotasPendingCaptureRole = role
-        hotasLastSignalSummary = "Capturing \(role.rawValue)... actuate control now"
+        hotasCaptureAxisCandidateControlID = nil
+        hotasCaptureAxisCandidateSamples = 0
+        hotasCaptureAxisCandidateStrength = 0
+        hotasCaptureAxisCandidateUpdatedAtMs = 0
+        hotasCaptureArmedAtMs = ConductorHarnessViewModel.nowMilliseconds()
+        hotasCaptureBaselineByControlKey = hotasObservedByControlKey
+        let expected = hotasCaptureExpectedKinds
+            .map(\.rawValue)
+            .sorted()
+            .joined(separator: "/")
+        hotasLastSignalSummary = "Capturing \(role.rawValue) (\(expected))... actuate control now"
     }
 
     func clearHOTASBinding(for role: ControlRole) {
         hotasProfile.bindings.removeAll { $0.role == role }
         publishHOTASProfileValidation()
+    }
+
+    func clearAllHOTASBindings() {
+        hotasProfile.bindings.removeAll()
+        resetHOTASCaptureState()
+        hotasLastSignalSummary = "Cleared all HOTAS bindings"
+        publishHOTASProfileValidation()
+    }
+
+    func assignHOTASBinding(
+        role: ControlRole,
+        controlID: String,
+        kind: ControlSignalKind,
+        sourceKind: ControlSourceKind = .hotas,
+        sourceDeviceID: String? = nil,
+        logicalDevice: HOTASLogicalDevice? = nil
+    ) {
+        var calibration = hotasProfile.firstBinding(for: role)?.calibration ?? .default
+        if role == .rightStickY, hotasProfile.firstBinding(for: role) == nil {
+            calibration = CalibrationSpec(
+                minimum: 0,
+                maximum: 1,
+                center: 0.5,
+                deadzone: 0.03,
+                hysteresis: 0.05,
+                inverted: true
+            )
+        }
+
+        let resolvedLogical: HOTASLogicalDevice? = {
+            if sourceKind == .hotas {
+                return logicalDevice ?? role.preferredHOTASLogicalDevice ?? .unspecified
+            }
+            return logicalDevice
+        }()
+
+        let resolvedSourceDeviceID: String? = sourceDeviceID
+
+        let binding = ControlBinding(
+            role: role,
+            controlID: controlID,
+            sourceKind: sourceKind,
+            sourceDeviceID: resolvedSourceDeviceID,
+            logicalDevice: resolvedLogical,
+            kind: kind,
+            calibration: calibration
+        )
+        hotasProfile.setBinding(binding)
+        publishHOTASProfileValidation()
+        hotasLastSignalSummary = "Mapped \(role.rawValue) -> \(controlID)"
+    }
+
+    func assignHOTASBinding(role: ControlRole, from signal: ControlSignal) {
+        let logical: HOTASLogicalDevice? = {
+            guard signal.sourceKind == .hotas else { return nil }
+            return role.preferredHOTASLogicalDevice
+                ?? HOTASLogicalDeviceMatcher.classify(sourceDeviceID: signal.sourceDeviceID, controlID: signal.controlID)
+        }()
+        assignHOTASBinding(
+            role: role,
+            controlID: signal.controlID,
+            kind: signal.kind,
+            sourceKind: signal.sourceKind,
+            sourceDeviceID: signal.sourceDeviceID,
+            logicalDevice: logical
+        )
+    }
+
+    func updateHOTASCalibration(for role: ControlRole, calibration: CalibrationSpec) {
+        guard let existing = hotasProfile.firstBinding(for: role) else { return }
+        let updated = ControlBinding(
+            role: existing.role,
+            controlID: existing.controlID,
+            sourceKind: existing.sourceKind,
+            sourceDeviceID: existing.sourceDeviceID,
+            logicalDevice: existing.logicalDevice,
+            kind: existing.kind,
+            calibration: calibration,
+            required: existing.required
+        )
+        hotasProfile.setBinding(updated)
+        publishHOTASProfileValidation()
+    }
+
+    func applyHOTASStrictLiveDefaults() {
+        hotasProfile = .defaultX56StrictLive
+        hotasProfile.enabled = false
+        hotasControlsEnabled = false
+        hotasInputMode = hotasProfile.inputMode
+        hotasLastSignalSummary = "Applied X56 Strict Live defaults"
+        persistControlProfileDocument()
+        publishHOTASProfileValidation()
+        refreshHOTASActivation()
+    }
+
+    func saveHOTASDraft() {
+        hotasProfile.inputMode = hotasInputMode
+        hotasProfile.enabled = false
+        hotasControlsEnabled = false
+        persistControlProfileDocument()
+        publishHOTASProfileValidation()
+        refreshHOTASActivation()
+        pushStatus(StatusLineEvent(
+            message: "HOTAS draft saved",
+            severity: .info,
+            timestamp: Date()
+        ))
     }
 
     func cancelHOTASTraining() {
@@ -3964,9 +5387,20 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         }
         hotasTrainingBackupProfile = nil
         hotasTrainingActive = false
-        hotasCaptureRole = nil
-        hotasPendingCaptureRole = nil
+        resetHOTASCaptureState()
         hotasLastSignalSummary = "HOTAS training cancelled"
+        publishHOTASProfileValidation()
+        refreshHOTASActivation()
+    }
+
+    func finishHOTASTrainingForLiveControl() {
+        guard hotasTrainingActive else { return }
+        hotasTrainingBackupProfile = nil
+        hotasTrainingActive = false
+        resetHOTASCaptureState()
+        hotasLastSignalSummary = hotasControlsEnabled
+            ? "HOTAS training ended. Live routing active."
+            : "HOTAS training ended."
         publishHOTASProfileValidation()
         refreshHOTASActivation()
     }
@@ -3976,8 +5410,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         hotasProfile.enabled = true
         hotasControlsEnabled = true
         hotasTrainingActive = false
-        hotasCaptureRole = nil
-        hotasPendingCaptureRole = nil
+        resetHOTASCaptureState()
         hotasTrainingBackupProfile = nil
 
         let missing = hotasProfile.missingRequiredRoles()
@@ -4008,8 +5441,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         hotasControlsEnabled = false
         hotasProfile.enabled = false
         hotasTrainingActive = false
-        hotasCaptureRole = nil
-        hotasPendingCaptureRole = nil
+        resetHOTASCaptureState()
         persistControlProfileDocument()
         refreshHOTASActivation()
         pushStatus(StatusLineEvent(
@@ -4032,8 +5464,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         hotasInputMode = hotasLastKnownGoodProfile.inputMode
         hotasControlsEnabled = hotasLastKnownGoodProfile.enabled
         hotasTrainingActive = false
-        hotasCaptureRole = nil
-        hotasPendingCaptureRole = nil
+        resetHOTASCaptureState()
         persistControlProfileDocument()
         publishHOTASProfileValidation()
         refreshHOTASActivation()
@@ -4049,22 +5480,39 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     }
 
     private func hotasConflicts(for profile: ControlProfile) -> [String] {
+        hotasConflictSummary(for: profile).messages
+    }
+
+    private func hotasConflictSummary(for profile: ControlProfile) -> (messages: [String], roles: Set<ControlRole>) {
         var grouped: [String: [ControlRole]] = [:]
         for binding in profile.bindings {
-            let key = "\(binding.sourceKind?.rawValue ?? "any"):\(binding.sourceDeviceID ?? "any-device"):\(binding.controlID)"
+            let key = "\(binding.sourceKind?.rawValue ?? "any"):\(binding.sourceDeviceID ?? binding.logicalDevice?.rawValue ?? "any-device"):\(binding.controlID)"
             grouped[key, default: []].append(binding.role)
         }
 
-        return grouped.compactMap { key, roles in
+        var conflictRoles = Set<ControlRole>()
+        let messages = grouped.compactMap { entry -> String? in
+            let (key, roles) = entry
             guard roles.count > 1 else { return nil }
+            roles.forEach { conflictRoles.insert($0) }
             let labels = roles.map(\.rawValue).sorted().joined(separator: ", ")
             return "\(key) -> \(labels)"
         }
         .sorted()
+        return (messages, conflictRoles)
     }
 
     private func migrateControlProfileForProposalSupport(_ profile: inout ControlProfile) -> Bool {
         var changed = false
+
+        let cueRoles: Set<ControlRole> = [.leftCueToggleUp, .leftCueToggleDown, .leftCueToggleCenter]
+        let beforeCueCount = profile.bindings.count
+        profile.bindings.removeAll { binding in
+            binding.sourceKind == .hotas && cueRoles.contains(binding.role)
+        }
+        if profile.bindings.count != beforeCueCount {
+            changed = true
+        }
 
         if profile.firstBinding(for: .rightAcceptButton) == nil {
             profile.setBinding(ControlBinding(
@@ -4083,6 +5531,28 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 sourceKind: .hotas,
                 kind: .button
             ))
+            changed = true
+        }
+
+        let modeRotaryBindings = profile.bindings.filter {
+            $0.role == .leftModeRotary && $0.sourceKind == .hotas
+        }
+        let hasDiscreteModeRotary = modeRotaryBindings.contains { $0.kind == .button }
+        let usesLegacyDialModeRotary = modeRotaryBindings.contains {
+            HOTASLogicalDeviceMatcher.normalizedControlID($0.controlID) == "gd:dial"
+        }
+        if usesLegacyDialModeRotary, !hasDiscreteModeRotary {
+            profile.bindings.removeAll { $0.role == .leftModeRotary && $0.sourceKind == .hotas }
+            profile.setBinding(ControlBinding(role: .leftModeRotary, controlID: "btn:34", sourceKind: .hotas, kind: .button))
+            profile.setBinding(ControlBinding(role: .leftModeRotary, controlID: "btn:35", sourceKind: .hotas, kind: .button))
+            profile.setBinding(ControlBinding(role: .leftModeRotary, controlID: "btn:36", sourceKind: .hotas, kind: .button))
+            changed = true
+        }
+
+        if let legacyRotaryIncreaseIndex = profile.bindings.firstIndex(where: {
+            $0.role == .leftRotary1Increase && $0.sourceKind == .hotas
+        }) {
+            profile.bindings.remove(at: legacyRotaryIncreaseIndex)
             changed = true
         }
 
@@ -4148,13 +5618,38 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             changed = true
         }
 
+        for index in profile.bindings.indices {
+            guard profile.bindings[index].sourceKind == .hotas else {
+                continue
+            }
+
+            if profile.bindings[index].logicalDevice == nil {
+                if let preferred = profile.bindings[index].role.preferredHOTASLogicalDevice {
+                    profile.bindings[index].logicalDevice = preferred
+                    changed = true
+                } else {
+                    let classified = HOTASLogicalDeviceMatcher.classify(
+                        sourceDeviceID: profile.bindings[index].sourceDeviceID ?? "",
+                        controlID: profile.bindings[index].controlID
+                    )
+                    if classified != .unspecified {
+                        profile.bindings[index].logicalDevice = classified
+                        changed = true
+                    }
+                }
+            }
+
+        }
+
         return changed
     }
 
     private func publishHOTASProfileValidation() {
         hotasProfileName = hotasProfile.name
         hotasMissingRequiredRoles = hotasProfile.missingRequiredRoles()
-        hotasBindingConflicts = hotasConflicts(for: hotasProfile)
+        let conflictSummary = hotasConflictSummary(for: hotasProfile)
+        hotasBindingConflicts = conflictSummary.messages
+        hotasConflictRoles = conflictSummary.roles
         hotasControlsEnabled = hotasProfile.enabled
         hotasInputMode = hotasProfile.inputMode
     }
@@ -4210,27 +5705,102 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         hotasInputStatus = hotasTrainingActive ? "HOTAS TRAINING PAUSED" : "HOTAS OFF"
     }
 
+    private func recordHOTASSignalObservation(_ signal: ControlSignal) {
+        let key = "\(signal.sourceDeviceID):\(signal.controlID)"
+        hotasObservedByControlKey[key] = signal
+
+        let nowMs = ConductorHarnessViewModel.nowMilliseconds()
+        hotasObservedByControlKey = hotasObservedByControlKey.filter { _, observed in
+            let observedMs = ConductorHarnessViewModel.normalizedMilliseconds(observed.timestamp)
+            return (nowMs - observedMs) <= 7_500
+        }
+
+        guard shouldPublishHOTASMapperObservation(signal: signal, nowMs: nowMs) else {
+            return
+        }
+        hotasLastObservationPublishAtMs = nowMs
+        hotasLastSignal = signal
+        hotasObservedSignals = hotasObservedByControlKey.values
+            .sorted { lhs, rhs in
+                ConductorHarnessViewModel.normalizedMilliseconds(lhs.timestamp)
+                    > ConductorHarnessViewModel.normalizedMilliseconds(rhs.timestamp)
+            }
+            .prefix(24)
+            .map { $0 }
+    }
+
     private func handleHOTASSignal(_ signal: ControlSignal) {
-        hotasLastSignalSummary = "\(signal.sourceKind.rawValue.uppercased()) \(signal.sourceDeviceID) \(signal.controlID) \(String(format: "%.2f", signal.normalizedValue)) \(signal.phase.rawValue.uppercased())"
-        Task { [hudTelemetryStore] in
-            await hudTelemetryStore.ingestRaw(signal: signal)
+        recordHOTASSignalObservation(signal)
+        let nowMs = ConductorHarnessViewModel.nowMilliseconds()
+        if shouldPublishHOTASSummary(signal: signal, nowMs: nowMs) {
+            hotasLastSummaryPublishAtMs = nowMs
+            hotasLastSignalSummary = "\(signal.sourceKind.rawValue.uppercased()) \(signal.sourceDeviceID) \(signal.controlID) \(String(format: "%.2f", signal.normalizedValue)) \(signal.phase.rawValue.uppercased())"
+        }
+        if !hotasTrainingActive {
+            Task { [hudTelemetryStore] in
+                await hudTelemetryStore.ingestRaw(signal: signal)
+            }
         }
 
         if let role = hotasCaptureRole, hotasTrainingActive {
             guard signal.kind != .note else { return }
-            let binding = ControlBinding(
+            let signalMs = ConductorHarnessViewModel.normalizedMilliseconds(signal.timestamp)
+            guard signalMs >= hotasCaptureArmedAtMs + 24 else { return }
+
+            let expectedKinds = hotasCaptureExpectedKinds
+            let resolvedKind = inferredCaptureKind(for: role, signal: signal, expectedKinds: expectedKinds)
+            let expectsDiscrete = expectedKinds.contains(.button) || expectedKinds.contains(.hat)
+            let axisDiscreteMagnitude = abs(signal.normalizedValue - 0.5)
+            let axisLooksDiscrete = signal.normalizedValue <= 0.2 || signal.normalizedValue >= 0.8
+            let axisCanRepresentDiscrete = resolvedKind == .axis
+                && expectsDiscrete
+                && (axisDiscreteMagnitude >= 0.35 || axisLooksDiscrete)
+            let captureKind: ControlSignalKind = {
+                if expectedKinds.contains(resolvedKind) {
+                    return resolvedKind
+                }
+                if axisCanRepresentDiscrete {
+                    return expectedKinds.contains(.button) ? .button : .hat
+                }
+                return resolvedKind
+            }()
+
+            guard expectedKinds.contains(captureKind) else { return }
+
+            let captureKey = "\(signal.sourceDeviceID):\(signal.controlID)"
+            let baseline = hotasCaptureBaselineByControlKey[captureKey]
+
+            if captureKind == .axis {
+                guard signal.phase == .changed else { return }
+                let baselineValue = baseline?.normalizedValue ?? 0.5
+                let movement = abs(signal.normalizedValue - baselineValue)
+                let strength = max(movement, abs(signal.normalizedValue - 0.5))
+                guard strength >= 0.12 else { return }
+            } else {
+                let baselineActive: Bool = {
+                    guard let baseline else { return false }
+                    if signal.kind == .axis || resolvedKind == .axis {
+                        let baselineMagnitude = abs(baseline.normalizedValue - 0.5)
+                        return baselineMagnitude >= 0.35 || baseline.normalizedValue <= 0.2 || baseline.normalizedValue >= 0.8
+                    }
+                    return baseline.rawValue > 0
+                }()
+                let discreteActuated = signal.phase == .began
+                    || ((signal.phase == .changed && signal.rawValue > 0) && !baselineActive)
+                    || (axisCanRepresentDiscrete && !baselineActive)
+                guard discreteActuated else { return }
+            }
+            assignHOTASBinding(
                 role: role,
                 controlID: signal.controlID,
+                kind: captureKind,
                 sourceKind: signal.sourceKind,
                 sourceDeviceID: signal.sourceDeviceID,
-                kind: signal.kind,
-                calibration: role == .rightStickY ? CalibrationSpec(minimum: 0, maximum: 1, center: 0.5, deadzone: 0.03, hysteresis: 0.05, inverted: true) : .default
+                logicalDevice: role.preferredHOTASLogicalDevice
             )
-            hotasProfile.setBinding(binding)
-            hotasCaptureRole = nil
-            hotasPendingCaptureRole = nil
-            publishHOTASProfileValidation()
-            hotasLastSignalSummary = "Captured \(role.rawValue) -> \(signal.sourceDeviceID):\(signal.controlID)"
+            resetHOTASCaptureState()
+            let logical = hotasProfile.firstBinding(for: role)?.logicalDevice?.rawValue ?? "device"
+            hotasLastSignalSummary = "Captured \(role.rawValue) -> \(logical):\(signal.controlID)"
             return
         }
 
@@ -4252,9 +5822,127 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             laneIDs: hotasLaneIDs(),
             context: hotasRuntimeContext()
         )
+        if actions.isEmpty {
+            maybeRouteFallbackHOTASStickAxis(signal)
+        }
         for action in actions {
             routeHOTASControlAction(action, signal: signal)
         }
+    }
+
+    private func maybeRouteFallbackHOTASStickAxis(_ signal: ControlSignal) {
+        guard signal.sourceKind == .hotas else { return }
+        guard signal.kind == .axis, signal.phase == .changed else { return }
+        let logical = HOTASLogicalDeviceMatcher.classify(
+            sourceDeviceID: signal.sourceDeviceID,
+            controlID: signal.controlID
+        )
+        guard logical == .x56Stick else { return }
+
+        let normalizedID = HOTASLogicalDeviceMatcher.normalizedControlID(signal.controlID)
+        let axis: HOTASSampleSpaceAxis
+        let lane: String
+
+        switch normalizedID {
+        case "gd:x":
+            axis = .x
+            lane = "SRC X (fallback)"
+        case "gd:y":
+            axis = .y
+            lane = "CUT Y (fallback)"
+        case "gd:rz", "gd:slider", "gd:rx", "gd:ry":
+            axis = .z
+            lane = "COMP Z (fallback)"
+        default:
+            return
+        }
+
+        if hotasPhoneChoirContextActive {
+            switch axis {
+            case .x:
+                setChoirFieldSpreadFromControl(signal.normalizedValue)
+            case .y:
+                setChoirFieldDepthFromControl(signal.normalizedValue)
+            case .z:
+                setChoirFieldDetuneFromControl(signal.normalizedValue)
+            }
+            return
+        }
+
+        if currentHOTASOutputModeID() == .dynamic {
+            maybeTriggerHOTASDynamicSampleScoring(
+                lane: lane,
+                axis: axis,
+                normalizedControlValue: signal.normalizedValue
+            )
+        } else {
+            maybeTriggerHOTASStaticSampleAudition(
+                lane: lane,
+                axis: axis,
+                normalizedControlValue: signal.normalizedValue
+            )
+        }
+
+        recordSoundManipulationFocus(
+            lane: lane,
+            value: signal.normalizedValue,
+            controlIDHint: normalizedID,
+            sourceHint: "HOTAS"
+        )
+    }
+
+    private func shouldPublishHOTASMapperObservation(signal: ControlSignal, nowMs: TimeInterval) -> Bool {
+        if signal.kind != .axis || signal.phase != .changed {
+            return true
+        }
+        if let last = hotasLastSignal,
+           last.controlID == signal.controlID,
+           last.sourceDeviceID == signal.sourceDeviceID,
+           abs(last.normalizedValue - signal.normalizedValue) >= 0.08 {
+            return true
+        }
+        return (nowMs - hotasLastObservationPublishAtMs) >= 180
+    }
+
+    private func shouldPublishHOTASSummary(signal: ControlSignal, nowMs: TimeInterval) -> Bool {
+        if signal.kind != .axis || signal.phase != .changed {
+            return true
+        }
+        if abs(signal.normalizedValue - 0.5) >= 0.2 {
+            return (nowMs - hotasLastSummaryPublishAtMs) >= 140
+        }
+        return (nowMs - hotasLastSummaryPublishAtMs) >= 320
+    }
+
+    private func expectedCaptureKinds(for role: ControlRole) -> Set<ControlSignalKind> {
+        role.captureKinds
+    }
+
+    private func inferredCaptureKind(
+        for role: ControlRole,
+        signal: ControlSignal,
+        expectedKinds: Set<ControlSignalKind>
+    ) -> ControlSignalKind {
+        _ = role
+        if signal.kind != .unknown {
+            return signal.kind
+        }
+        if expectedKinds.contains(.axis), signal.phase == .changed {
+            return .axis
+        }
+        if expectedKinds.contains(.button), signal.phase == .began || signal.phase == .ended {
+            return .button
+        }
+        if expectedKinds.contains(.hat) {
+            return .hat
+        }
+        if expectedKinds.contains(.button) {
+            return .button
+        }
+        if expectedKinds.contains(.axis) {
+            return .axis
+        }
+        return signal.kind
     }
 
     private func routeHOTASControlAction(_ action: ControlAction, signal: ControlSignal) {
@@ -4554,18 +6242,9 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     }
 
     private func triggerPushBankedSample(slot: Int, velocity: Double, mode: PushDeckModeContext, sourceID: String) {
-        guard engineRunning else {
+        guard ensureScoringEngineReady(operation: "Push sample") else {
             pushStatus(StatusLineEvent(
                 message: "Push sample blocked: engine is stopped",
-                severity: .warn,
-                timestamp: Date()
-            ))
-            return
-        }
-
-        guard outputRouteReady else {
-            pushStatus(StatusLineEvent(
-                message: "Push sample blocked: route not ready",
                 severity: .warn,
                 timestamp: Date()
             ))
@@ -4591,6 +6270,12 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         let gain = min(0.9, max(0.18, 0.18 + (max(0.05, velocity) * 0.55)))
         do {
             try quadAudioEngine.triggerSample(url: sampleURL, gain: gain)
+            recordSoundManipulationFocus(
+                lane: "PUSH PAD SLOT \(slot)",
+                value: gain,
+                controlIDHint: "push:pad:\(slot)",
+                sourceHint: "PUSH"
+            )
             if mode == .dynamic {
                 let normalized = Double(safeIndex) / Double(max(1, candidateIDs.count - 1))
                 setDynamicBinSelectionFromControl(normalized)
@@ -4702,6 +6387,8 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private func isPushCommitClassAction(_ action: ControlAction) -> Bool {
         switch action {
         case .contextualTake,
+             .startEngine,
+             .stopEngine,
              .setMasterArm,
              .phoneGateTake,
              .phoneGateGo,
@@ -4761,18 +6448,9 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     }
 
     private func triggerDynamicSamplePad(note: Int, velocity: Double) {
-        guard engineRunning else {
+        guard ensureScoringEngineReady(operation: "PAD sample") else {
             pushStatus(StatusLineEvent(
                 message: "PAD sample blocked: engine is stopped",
-                severity: .warn,
-                timestamp: Date()
-            ))
-            return
-        }
-
-        guard outputRouteReady else {
-            pushStatus(StatusLineEvent(
-                message: "PAD sample blocked: audio route not ready",
                 severity: .warn,
                 timestamp: Date()
             ))
@@ -4792,11 +6470,18 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
 
         let safeIndex = ((note % candidateIDs.count) + candidateIDs.count) % candidateIDs.count
         let selectedID = candidateIDs[safeIndex]
+        selectedSampleID = selectedID
         guard let sampleURL = samplePackEntries[selectedID] else { return }
 
         let gain = min(0.9, max(0.18, 0.18 + (velocity * 0.55)))
         do {
             try quadAudioEngine.triggerSample(url: sampleURL, gain: gain)
+            recordSoundManipulationFocus(
+                lane: "MIDI PAD NOTE \(note)",
+                value: gain,
+                controlIDHint: "midi:note:\(note)",
+                sourceHint: "MIDI"
+            )
         } catch {
             pushStatus(StatusLineEvent(
                 message: "PAD sample failed: \(error.localizedDescription)",
@@ -4992,6 +6677,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                     timestamp: Date()
                 ))
             }
+            _ = autoloadPushCompanionSampleBanksIfNeeded()
             return
         }
 
@@ -5066,12 +6752,16 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                     timestamp: Date()
                 ))
             }
+            if samplePackEntries.isEmpty {
+                _ = autoloadPushCompanionSampleBanksIfNeeded()
+            }
         } catch {
             pushStatus(StatusLineEvent(
                 message: "Media manifest load failed: \(error.localizedDescription)",
                 severity: .warn,
                 timestamp: Date()
             ))
+            _ = autoloadPushCompanionSampleBanksIfNeeded()
         }
     }
 

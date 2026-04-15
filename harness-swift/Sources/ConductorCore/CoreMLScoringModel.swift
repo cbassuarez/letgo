@@ -84,9 +84,16 @@ public struct ModelHealthReport: Codable, Sendable {
 }
 
 public enum CoreMLModelLocator {
+    /// Maximum number of directory levels to walk up from `Bundle.main.bundleURL`
+    /// when trying to find a sibling `Models/` folder. Enough to escape typical
+    /// build-product layouts (`.build/.../debug/App.app/Contents/MacOS/` or
+    /// DerivedData paths) and land on the repo root.
+    private static let bundleWalkUpDepth = 8
+
     public static func defaultSearchDirectories(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        additionalDirectories: [URL] = []
     ) -> [URL] {
         var urls: [URL] = []
 
@@ -104,9 +111,31 @@ public enum CoreMLModelLocator {
             urls.append(URL(fileURLWithPath: explicitDir))
         }
 
+        urls.append(contentsOf: additionalDirectories)
+
         let workingDirectory = URL(fileURLWithPath: fileManager.currentDirectoryPath)
         urls.append(workingDirectory.appendingPathComponent("Models", isDirectory: true))
-        urls.append(workingDirectory)
+        if environment["CONDUCTOR_COREML_INCLUDE_WORKDIR_SCAN"] == "1" {
+            // Broad recursive scans of the full workdir can freeze app launch
+            // in large repos. Keep this opt-in for debugging only.
+            urls.append(workingDirectory)
+        }
+
+        // Walk up from the bundle URL looking for a `Models/` sibling. This
+        // lets a .app launched from `.build/.../debug/` or DerivedData find the
+        // repo-root Models directory without any environment configuration.
+        var probe = Bundle.main.bundleURL.deletingLastPathComponent()
+        for _ in 0..<bundleWalkUpDepth {
+            let candidate = probe.appendingPathComponent("Models", isDirectory: true)
+            var isDir: ObjCBool = false
+            if fileManager.fileExists(atPath: candidate.path, isDirectory: &isDir), isDir.boolValue {
+                urls.append(candidate)
+                break
+            }
+            let parent = probe.deletingLastPathComponent()
+            if parent.path == probe.path { break }
+            probe = parent
+        }
 
         if let resourceURL = Bundle.main.resourceURL {
             urls.append(resourceURL.appendingPathComponent("Models", isDirectory: true))
@@ -225,6 +254,14 @@ public final class CoreMLScoringModelAdapter: TextScoringModel {
 
     public func availableModelCandidates() -> [CompiledModelCandidate] {
         CoreMLModelLocator.discoverCompiledModels(in: lock.withLock { searchDirectories })
+    }
+
+    public func currentSearchDirectories() -> [URL] {
+        lock.withLock { searchDirectories }
+    }
+
+    public func updateSearchDirectories(_ directories: [URL]) {
+        lock.withLock { searchDirectories = directories }
     }
 
     @discardableResult

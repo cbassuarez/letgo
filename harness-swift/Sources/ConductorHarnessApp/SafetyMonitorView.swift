@@ -10,6 +10,16 @@ struct SafetyMonitorView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
 
+    @State private var pendingSoundImport: SoundImportKind?
+
+    private enum SoundImportKind: String, Identifiable {
+        case samplePack = "Sample Pack"
+        case choirProfile = "Choir Profile"
+        case synthPreset = "Synth Preset"
+
+        var id: String { rawValue }
+    }
+
     private var inspectorBinding: Binding<Bool> {
         Binding(
             get: {
@@ -33,6 +43,8 @@ struct SafetyMonitorView: View {
                 .font(.system(size: 15, weight: .black, design: .monospaced))
                 .tracking(1.0)
                 .foregroundStyle(Color.white.opacity(0.88))
+
+            SoundSpineCompactView(snapshot: model.soundSituationalSnapshot)
 
             Group {
                 statusLine("Vufine", displayCoordinator.route.summary)
@@ -93,10 +105,29 @@ struct SafetyMonitorView: View {
                 }
                 .buttonStyle(.bordered)
 
+                Menu("IMPORT SOUND") {
+                    Button("Sample Pack…") {
+                        pendingSoundImport = .samplePack
+                    }
+                    Button("Choir Profile…") {
+                        pendingSoundImport = .choirProfile
+                    }
+                    Button("Synth Preset…") {
+                        pendingSoundImport = .synthPreset
+                    }
+                }
+                .menuStyle(.borderlessButton)
+
                 Spacer(minLength: 0)
 
                 Button("INSPECTOR") {
                     inspectorPresentation.present(from: .safety)
+                }
+                .buttonStyle(.bordered)
+
+                Button("HOTAS MAPPER") {
+                    openWindow(id: AppWindowID.hotasMapper.rawValue)
+                    NSApp.activate(ignoringOtherApps: true)
                 }
                 .buttonStyle(.bordered)
 
@@ -128,6 +159,32 @@ struct SafetyMonitorView: View {
         }
         .sheet(isPresented: inspectorBinding) {
             InspectorModalView(model: model, presentation: inspectorPresentation)
+        }
+        .confirmationDialog(
+            "Confirm Sound Import",
+            isPresented: Binding(
+                get: { pendingSoundImport != nil },
+                set: { presented in
+                    if !presented {
+                        pendingSoundImport = nil
+                    }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let pendingSoundImport {
+                Button("Import \(pendingSoundImport.rawValue)") {
+                    runSoundImport(pendingSoundImport)
+                    self.pendingSoundImport = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingSoundImport = nil
+            }
+        } message: {
+            if let pendingSoundImport {
+                Text("Load \(pendingSoundImport.rawValue) from disk now?")
+            }
         }
     }
 
@@ -164,6 +221,12 @@ struct SafetyMonitorView: View {
             }
             .buttonStyle(.bordered)
 
+            Button("HOTAS MAPPER") {
+                openWindow(id: AppWindowID.hotasMapper.rawValue)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            .buttonStyle(.bordered)
+
             Button("VUFINE VIEW") {
                 apply(performanceMode.transitionToLayout(.safetyAndVufine))
             }
@@ -183,6 +246,9 @@ struct SafetyMonitorView: View {
                 }
                 Button("Open Full Console") {
                     openWindow(id: AppWindowID.fullConsole.rawValue)
+                }
+                Button("Open HOTAS Mapper Studio") {
+                    openWindow(id: AppWindowID.hotasMapper.rawValue)
                 }
                 Button("Open Vufine Realtime") {
                     openWindow(id: AppWindowID.vufineRealtime.rawValue)
@@ -215,5 +281,16 @@ struct SafetyMonitorView: View {
             openWindow(id: id.rawValue)
         }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func runSoundImport(_ kind: SoundImportKind) {
+        switch kind {
+        case .samplePack:
+            model.importSamplePackManifestFromDisk()
+        case .choirProfile:
+            model.importChoirProfileFromDisk()
+        case .synthPreset:
+            model.importSynthPresetPackFromDisk()
+        }
     }
 }

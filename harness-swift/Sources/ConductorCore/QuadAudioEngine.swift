@@ -64,6 +64,17 @@ public struct QuadAudioFeatures: Codable, Equatable, Sendable {
 }
 
 public final class QuadAudioEngine {
+    public enum EngineError: LocalizedError {
+        case engineNotRunning
+
+        public var errorDescription: String? {
+            switch self {
+            case .engineNotRunning:
+                return "audio engine is not running"
+            }
+        }
+    }
+
     public var onFeatures: ((QuadAudioFeatures) -> Void)?
 
     private let engine = AVAudioEngine()
@@ -73,6 +84,10 @@ public final class QuadAudioEngine {
 
     private var synthPlayers: [Int: AVAudioPlayerNode] = [:]
     private var samplePlayers: [UUID: AVAudioPlayerNode] = [:]
+    private var sampleFiles: [UUID: AVAudioFile] = [:]
+    private var paulstretchPlayers: [UUID: AVAudioPlayerNode] = [:]
+    private var paulstretchTimePitchUnits: [UUID: AVAudioUnitTimePitch] = [:]
+    private var paulstretchFiles: [UUID: AVAudioFile] = [:]
     private var ambientNoiseBuffer: AVAudioPCMBuffer?
     private var lastFeatureEmitAt: CFAbsoluteTime = 0
     private let baseSynthVolume: Float = 0.9
@@ -192,7 +207,7 @@ public final class QuadAudioEngine {
     }
 
     public func triggerSample(url: URL, gain: Double = 0.32) throws {
-        guard engine.isRunning else { return }
+        guard engine.isRunning else { throw EngineError.engineNotRunning }
         let file = try AVAudioFile(forReading: url)
         let player = AVAudioPlayerNode()
         let playerID = UUID()
@@ -200,12 +215,15 @@ public final class QuadAudioEngine {
         engine.attach(player)
         engine.connect(player, to: sampleMixer, format: file.processingFormat)
         samplePlayers[playerID] = player
+        // Keep the file alive for the full scheduled playback window.
+        sampleFiles[playerID] = file
         player.scheduleFile(file, at: nil) { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
                 guard let finishedPlayer = self.samplePlayers.removeValue(forKey: playerID) else { return }
                 finishedPlayer.stop()
                 self.engine.detach(finishedPlayer)
+                self.sampleFiles.removeValue(forKey: playerID)
             }
         }
         player.play()
@@ -217,6 +235,18 @@ public final class QuadAudioEngine {
             engine.detach(player)
         }
         samplePlayers.removeAll()
+        sampleFiles.removeAll()
+
+        for (_, player) in paulstretchPlayers {
+            player.stop()
+            engine.detach(player)
+        }
+        for (_, timePitch) in paulstretchTimePitchUnits {
+            engine.detach(timePitch)
+        }
+        paulstretchPlayers.removeAll()
+        paulstretchTimePitchUnits.removeAll()
+        paulstretchFiles.removeAll()
     }
 
     public func startAmbientNoise(gain: Double = 0.08, seed: UInt64 = 0xC1A0_0A11) {
@@ -254,6 +284,46 @@ public final class QuadAudioEngine {
 
     public func currentEffectsChainState() -> EffectsChainState {
         effectsChainState
+    }
+
+    public func triggerPaulstretchedSample(
+        url: URL,
+        gain: Double = 0.16,
+        rate: Double = 0.14
+    ) throws {
+        guard engine.isRunning else { throw EngineError.engineNotRunning }
+        let file = try AVAudioFile(forReading: url)
+        let player = AVAudioPlayerNode()
+        let timePitch = AVAudioUnitTimePitch()
+        let playerID = UUID()
+
+        player.volume = Float(max(0, min(1, gain)))
+        timePitch.rate = Float(max(0.03, min(0.38, rate)))
+        timePitch.overlap = 8
+
+        engine.attach(player)
+        engine.attach(timePitch)
+        engine.connect(player, to: timePitch, format: file.processingFormat)
+        engine.connect(timePitch, to: sampleMixer, format: file.processingFormat)
+
+        paulstretchPlayers[playerID] = player
+        paulstretchTimePitchUnits[playerID] = timePitch
+        paulstretchFiles[playerID] = file
+
+        player.scheduleFile(file, at: nil) { [weak self] in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let finished = self.paulstretchPlayers.removeValue(forKey: playerID) {
+                    finished.stop()
+                    self.engine.detach(finished)
+                }
+                if let finishedPitch = self.paulstretchTimePitchUnits.removeValue(forKey: playerID) {
+                    self.engine.detach(finishedPitch)
+                }
+                self.paulstretchFiles.removeValue(forKey: playerID)
+            }
+        }
+        player.play()
     }
 
     private func applyEffectsState() {

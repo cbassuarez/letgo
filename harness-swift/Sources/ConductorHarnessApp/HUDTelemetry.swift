@@ -286,6 +286,10 @@ private extension ControlAction {
         switch self {
         case .acceptActiveProposal:
             return "proposal_accept"
+        case .startEngine:
+            return "engine_start"
+        case .stopEngine:
+            return "engine_stop"
         case .patchVector:
             return "patch_vector"
         case .armOutputMode(let mode):
@@ -351,6 +355,8 @@ private extension ControlAction {
 
     var hudPrimaryValue: Double? {
         switch self {
+        case .startEngine, .stopEngine:
+            return nil
         case .setDynamicBinSelection(let value),
              .setCutCadence(let value),
              .setCompositorBlend(let value),

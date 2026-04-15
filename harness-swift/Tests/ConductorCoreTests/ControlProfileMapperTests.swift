@@ -2,7 +2,7 @@ import ConductorCore
 import XCTest
 
 final class ControlProfileMapperTests: XCTestCase {
-    func testMapsVectorAxisToPatch() {
+    func testRightStickXMapsToStaticSampleMorphOutsideDynamicMode() {
         let profile = ControlProfile.defaultX56StrictLive
         let mapper = ControlProfileMapper(profile: profile)
 
@@ -18,7 +18,7 @@ final class ControlProfileMapperTests: XCTestCase {
         )
 
         let actions = mapper.map(signal: signal, laneIDs: [])
-        XCTAssertEqual(actions, [.patchVector(ParamVectorPatch(spatialX: 0.75))])
+        XCTAssertEqual(actions, [.setStaticSampleMorph(0.75)])
     }
 
     func testOutputModeBucketsWithHysteresis() {
@@ -189,6 +189,34 @@ final class ControlProfileMapperTests: XCTestCase {
         XCTAssertEqual(actions, [.setSampleBank(3, domain: .choir)])
     }
 
+    func testModeRotaryThreeButtonLayoutMapsToBanks() {
+        var profile = ControlProfile.defaultX56StrictLive
+        profile.bindings = [
+            ControlBinding(
+                role: .leftModeRotary,
+                controlID: "btn:34",
+                sourceKind: .hotas,
+                kind: .button
+            ),
+            ControlBinding(
+                role: .leftModeRotary,
+                controlID: "btn:35",
+                sourceKind: .hotas,
+                kind: .button
+            ),
+            ControlBinding(
+                role: .leftModeRotary,
+                controlID: "btn:36",
+                sourceKind: .hotas,
+                kind: .button
+            )
+        ]
+
+        let mapper = ControlProfileMapper(profile: profile)
+        let actions = mapper.map(signal: button("btn:35"), laneIDs: [])
+        XCTAssertEqual(actions, [.setSampleBank(2, domain: .main)])
+    }
+
     func testStaticModeRoutesRightStickToAudioMacroWithoutClutch() {
         var profile = ControlProfile.defaultX56StrictLive
         profile.bindings = [ControlBinding(
@@ -252,8 +280,59 @@ final class ControlProfileMapperTests: XCTestCase {
         let down = mapper.map(signal: axis("gd:slider2", value: 0.0), laneIDs: [])
 
         XCTAssertEqual(up, [.setPhoneChoirContextActive(true), .triggerPhoneChoirNoteOn])
-        XCTAssertEqual(neutral, [.triggerPhoneChoirNoteOff, .setPhoneChoirContextActive(false)])
+        XCTAssertTrue(neutral.isEmpty)
         XCTAssertEqual(down, [.setPhoneChoirContextActive(false), .triggerPhoneChoirNoteOff, .stopAllPhoneAudio])
+    }
+
+    func testToggleDirectionalDiscreteBindingsAreLatched() {
+        var profile = ControlProfile.defaultX56StrictLive
+        profile.bindings = [
+            ControlBinding(
+                role: .leftToggle1Up,
+                controlID: "btn:30",
+                sourceKind: .hotas,
+                kind: .button
+            ),
+            ControlBinding(
+                role: .leftToggle1Down,
+                controlID: "btn:31",
+                sourceKind: .hotas,
+                kind: .button
+            )
+        ]
+
+        let mapper = ControlProfileMapper(profile: profile)
+        let up = mapper.map(signal: button("btn:30"), laneIDs: [])
+        let down = mapper.map(signal: button("btn:31"), laneIDs: [])
+
+        XCTAssertEqual(up, [.setPhoneChoirContextActive(true), .triggerPhoneChoirNoteOn])
+        XCTAssertEqual(down, [.setPhoneChoirContextActive(false), .triggerPhoneChoirNoteOff, .stopAllPhoneAudio])
+    }
+
+    func testRotaryOneAxisSetsStrictLooseBlendContinuously() {
+        var profile = ControlProfile.defaultX56StrictLive
+        profile.bindings = [ControlBinding(
+            role: .leftRotary1Decrease,
+            controlID: "gd:dial",
+            sourceKind: .hotas,
+            kind: .axis
+        )]
+
+        let mapper = ControlProfileMapper(profile: profile)
+        let actions = mapper.map(
+            signal: ControlSignal(
+                controlID: "gd:dial#91@r2p13",
+                kind: .axis,
+                phase: .changed,
+                normalizedValue: 0.73,
+                rawValue: 93,
+                timestamp: 2_320,
+                sourceDeviceID: "hotas:throttle",
+                sourceKind: .hotas
+            ),
+            laneIDs: []
+        )
+        XCTAssertEqual(actions, [.setStrictLooseBlend(0.73)])
     }
 
     func testDeviceAwareBindingSelectsMatchingSourceDeviceID() {
@@ -290,7 +369,7 @@ final class ControlProfileMapperTests: XCTestCase {
             ),
             laneIDs: []
         )
-        XCTAssertEqual(rightActions, [.patchVector(ParamVectorPatch(spatialX: 0.68))])
+        XCTAssertEqual(rightActions, [.setStaticSampleMorph(0.68)])
 
         let leftActions = mapper.map(
             signal: ControlSignal(
@@ -306,6 +385,38 @@ final class ControlProfileMapperTests: XCTestCase {
             laneIDs: []
         )
         XCTAssertEqual(leftActions, [.setStaticVisualOverrideHold(true)])
+    }
+
+    func testDeviceAwareBindingFallsBackToLogicalDeviceAfterReplug() {
+        var profile = ControlProfile.defaultX56StrictLive
+        profile.bindings = [
+            ControlBinding(
+                role: .rightStickX,
+                controlID: "gd:x",
+                sourceKind: .hotas,
+                sourceDeviceID: "hotas:1133:49695:1111",
+                logicalDevice: .x56Stick,
+                kind: .axis
+            )
+        ]
+
+        let mapper = ControlProfileMapper(profile: profile)
+
+        let actions = mapper.map(
+            signal: ControlSignal(
+                controlID: "gd:x#47@r1p9",
+                kind: .axis,
+                phase: .changed,
+                normalizedValue: 0.63,
+                rawValue: 81,
+                timestamp: 2_300,
+                sourceDeviceID: "hotas:1133:49695:9999",
+                sourceKind: .hotas
+            ),
+            laneIDs: []
+        )
+
+        XCTAssertEqual(actions, [.setStaticSampleMorph(0.63)])
     }
 
     func testProfileValidationDetectsMissingRequiredRoles() {

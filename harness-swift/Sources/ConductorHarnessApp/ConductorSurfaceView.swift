@@ -50,6 +50,482 @@ private enum ImportModuleKind: Identifiable {
     }
 }
 
+struct SoundPerformanceSpineView: View {
+    let snapshot: SoundSituationalSnapshot
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            SoundSpineDomainCard(
+                title: "BANKS / IMPORT",
+                level: snapshot.banksImport.level,
+                lines: [
+                    "MAIN B\(snapshot.banksImport.mainBank) · CHOIR B\(snapshot.banksImport.choirBank)",
+                    "PACK \(snapshot.banksImport.sampleEntryCount) · \(snapshot.banksImport.samplePackFile)",
+                    "SYN \(snapshot.banksImport.synthPresetFile) · CHOIR \(snapshot.banksImport.choirProfileFile)"
+                ]
+            )
+
+            SoundSpineDomainCard(
+                title: "SOUND MODE",
+                level: snapshot.modeLevel,
+                lines: [
+                    "\(snapshot.modePrimary.rawValue) · \(snapshot.modeDetail.rawValue)",
+                    snapshot.modePrimary == .phoneChoir ? "PHONE CHOIR PIPELINE ACTIVE" : "MAIN SAMPLE PIPELINE ACTIVE",
+                    snapshot.modePrimary == .phoneChoir
+                        ? "USE CUE/GATE FOR PHONE DISPATCH"
+                        : "PHONE CHOIR CONTEXT OFF"
+                ]
+            )
+
+            SoundSpineDomainCard(
+                title: "CONNECTED I/O",
+                level: snapshot.io.level,
+                lines: [
+                    "OUT \(snapshot.io.outputRouteName)",
+                    snapshot.io.outputRouteSummary,
+                    "MIDI \(snapshot.io.midiStatus) · HOTAS \(snapshot.io.hotasStatus) · PUSH \(snapshot.io.pushStatus)"
+                ]
+            )
+
+            SoundSpineDomainCard(
+                title: "ACTIVE SOUND",
+                level: snapshot.manipulationIsStale ? .caution : .nominal,
+                lines: [
+                    "\(snapshot.activeTarget.label) · \(snapshot.activeTarget.bankDomain.rawValue) B\(snapshot.activeTarget.bank)",
+                    "\(snapshot.activeTarget.fileName) · id \(snapshot.activeTarget.sampleID)",
+                    focusLine(snapshot)
+                ]
+            )
+        }
+    }
+
+    private func focusLine(_ snapshot: SoundSituationalSnapshot) -> String {
+        guard let focus = snapshot.manipulation else {
+            return "NO RECENT MANIPULATION"
+        }
+        let percent = Int((focus.normalizedValue * 100).rounded())
+        let stale = snapshot.manipulationIsStale ? " · STALE" : ""
+        return "\(focus.source) \(focus.controlID) · \(focus.lane) \(percent)%\(stale)"
+    }
+}
+
+struct SoundSpineCompactView: View {
+    let snapshot: SoundSituationalSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                compactDomain(
+                    "BANKS / IMPORT",
+                    level: snapshot.banksImport.level,
+                    line: "M\(snapshot.banksImport.mainBank)/C\(snapshot.banksImport.choirBank) · pack \(snapshot.banksImport.sampleEntryCount)"
+                )
+                compactDomain(
+                    "SOUND MODE",
+                    level: snapshot.modeLevel,
+                    line: "\(snapshot.modePrimary.rawValue) · \(snapshot.modeDetail.rawValue)"
+                )
+            }
+            HStack(alignment: .top, spacing: 8) {
+                compactDomain(
+                    "CONNECTED I/O",
+                    level: snapshot.io.level,
+                    line: "OUT \(snapshot.io.outputRouteSummary) · M \(snapshot.io.midiStatus) · H \(snapshot.io.hotasStatus) · P \(snapshot.io.pushStatus)"
+                )
+                compactDomain(
+                    "ACTIVE SOUND",
+                    level: snapshot.manipulationIsStale ? .caution : .nominal,
+                    line: compactActiveLine
+                )
+            }
+        }
+        .padding(8)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.white.opacity(0.11), lineWidth: 0.8)
+        )
+    }
+
+    private var compactActiveLine: String {
+        if let focus = snapshot.manipulation {
+            let percent = Int((focus.normalizedValue * 100).rounded())
+            let stale = snapshot.manipulationIsStale ? " · STALE" : ""
+            return "\(snapshot.activeTarget.label) · \(focus.lane) \(percent)%\(stale)"
+        }
+        return "\(snapshot.activeTarget.label) · WAITING FOR INPUT"
+    }
+
+    private func compactDomain(_ title: String, level: SoundSignalLevel, line: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 9, weight: .black, design: .monospaced))
+                .tracking(0.8)
+                .foregroundStyle(SoundSpineTheme.textColor(level).opacity(0.95))
+            Text(line)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color.white.opacity(0.82))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(SoundSpineTheme.background(level))
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(SoundSpineTheme.stroke(level), lineWidth: 0.8)
+        )
+    }
+}
+
+struct SoundSpineHUDView: View {
+    let snapshot: SoundSituationalSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            hudLine("BANKS / IMPORT", level: snapshot.banksImport.level, value: "M\(snapshot.banksImport.mainBank) C\(snapshot.banksImport.choirBank) · pack \(snapshot.banksImport.sampleEntryCount) · \(snapshot.banksImport.samplePackFile)")
+            hudLine("SOUND MODE", level: snapshot.modeLevel, value: "\(snapshot.modePrimary.rawValue) · \(snapshot.modeDetail.rawValue)")
+            hudLine("CONNECTED I/O", level: snapshot.io.level, value: "OUT \(snapshot.io.outputRouteSummary) · MIDI \(snapshot.io.midiStatus) · HOTAS \(snapshot.io.hotasStatus) · PUSH \(snapshot.io.pushStatus)")
+            hudLine("ACTIVE SOUND", level: snapshot.manipulationIsStale ? .caution : .nominal, value: hudActiveValue)
+            Text("READ-ONLY HERE · OPEN SAFETY/FULL FOR IMPORT")
+                .foregroundStyle(Color.white.opacity(0.58))
+                .lineLimit(1)
+        }
+        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.black.opacity(0.28))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(Color.white.opacity(0.16), lineWidth: 0.8)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    private var hudActiveValue: String {
+        guard let focus = snapshot.manipulation else {
+            return "\(snapshot.activeTarget.label) · \(snapshot.activeTarget.fileName) · WAITING"
+        }
+        let percent = Int((focus.normalizedValue * 100).rounded())
+        let stale = snapshot.manipulationIsStale ? " · STALE" : ""
+        return "\(snapshot.activeTarget.label) · \(focus.lane) \(percent)%\(stale)"
+    }
+
+    private func hudLine(_ title: String, level: SoundSignalLevel, value: String) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .foregroundStyle(SoundSpineTheme.textColor(level).opacity(0.9))
+                .frame(width: 108, alignment: .leading)
+            Text(value)
+                .foregroundStyle(Color.white.opacity(0.86))
+                .lineLimit(1)
+        }
+    }
+}
+
+private struct SoundSpineDomainCard: View {
+    let title: String
+    let level: SoundSignalLevel
+    let lines: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(ConsoleTheme.smallTagFont(size: 9))
+                .tracking(1.1)
+                .foregroundStyle(SoundSpineTheme.textColor(level))
+            ForEach(lines, id: \.self) { line in
+                Text(line)
+                    .font(ConsoleTheme.telemetryFont(size: 9))
+                    .foregroundStyle(Color.white.opacity(0.82))
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(SoundSpineTheme.background(level))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(SoundSpineTheme.stroke(level), lineWidth: 0.7)
+        )
+    }
+}
+
+private enum SoundSpineTheme {
+    static func background(_ level: SoundSignalLevel) -> Color {
+        switch level {
+        case .nominal:
+            return Color.white.opacity(0.05)
+        case .caution:
+            return Color(red: 0.34, green: 0.24, blue: 0.08).opacity(0.42)
+        case .critical:
+            return Color(red: 0.4, green: 0.12, blue: 0.12).opacity(0.45)
+        }
+    }
+
+    static func stroke(_ level: SoundSignalLevel) -> Color {
+        switch level {
+        case .nominal:
+            return Color.white.opacity(0.18)
+        case .caution:
+            return ConsoleTheme.lampAmber.opacity(0.72)
+        case .critical:
+            return ConsoleTheme.lampRed.opacity(0.78)
+        }
+    }
+
+    static func textColor(_ level: SoundSignalLevel) -> Color {
+        switch level {
+        case .nominal:
+            return ConsoleTheme.lampBlue
+        case .caution:
+            return ConsoleTheme.lampAmber
+        case .critical:
+            return ConsoleTheme.lampRed
+        }
+    }
+}
+
+// MARK: - Perf-isolated subviews
+//
+// These structs are marked Equatable so SwiftUI can skip re-running their
+// body when their minimal snapshot hasn't changed. The parent view still
+// rebuilds view values on every model publish, but heavy children (bargraph
+// cluster, action stream, device list, flight log) are diffed by value and
+// only rerender when their inputs actually shift.
+
+private struct ControlPlaneBargraphCluster: View, Equatable {
+    struct Values: Equatable {
+        var spatialX: Double
+        var cutCadence: Double
+        var fade: Double
+        var sampleMorph: Double
+        var articulation: Double
+        var timbre: Double
+        var choirSpread: Double
+        var choirDepth: Double
+        var choirDetune: Double
+        var fxAIntensity: Double
+        var fxBIntensity: Double
+        var textProbability: Double
+    }
+
+    let values: Values
+    let onSpatialX: (Double) -> Void
+    let onCutCadence: (Double) -> Void
+    let onFade: (Double) -> Void
+    let onSampleMorph: (Double) -> Void
+    let onArticulation: (Double) -> Void
+    let onTimbre: (Double) -> Void
+    let onChoirSpread: (Double) -> Void
+    let onChoirDepth: (Double) -> Void
+    let onChoirDetune: (Double) -> Void
+    let onFxA: (Double) -> Void
+    let onFxB: (Double) -> Void
+    let onTextProbability: (Double) -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.values == rhs.values }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(alignment: .bottom, spacing: 4) {
+                Bargraph(label: "SRC X", value: values.spatialX, onChange: onSpatialX)
+                Bargraph(label: "CAD Y", value: values.cutCadence, onChange: onCutCadence)
+                Bargraph(label: "CMP Z", value: values.fade, onChange: onFade)
+            }
+            HStack(alignment: .bottom, spacing: 4) {
+                Bargraph(label: "MORPH", value: values.sampleMorph, onChange: onSampleMorph)
+                Bargraph(label: "ARTIC", value: values.articulation, onChange: onArticulation)
+                Bargraph(label: "TIMBRE", value: values.timbre, onChange: onTimbre)
+            }
+            HStack(alignment: .bottom, spacing: 4) {
+                Bargraph(label: "CHOIR S", value: values.choirSpread, onChange: onChoirSpread)
+                Bargraph(label: "CHOIR D", value: values.choirDepth, onChange: onChoirDepth)
+                Bargraph(label: "CHOIR T", value: values.choirDetune, onChange: onChoirDetune)
+            }
+            HStack(alignment: .bottom, spacing: 4) {
+                Bargraph(label: "A RHY", value: values.fxAIntensity, onChange: onFxA)
+                Bargraph(label: "B SPC", value: values.fxBIntensity, onChange: onFxB)
+                Bargraph(label: "TXT P", value: values.textProbability, onChange: onTextProbability)
+            }
+        }
+    }
+}
+
+private struct MLActionStreamPanel: View, Equatable {
+    struct Snapshot: Equatable {
+        var proposal: MLProposal?
+        var countdownSeconds: Double?
+        var events: [HUDActionEvent]
+    }
+
+    let snapshot: Snapshot
+    let onAccept: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.snapshot == rhs.snapshot }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let proposal = snapshot.proposal {
+                let countdown = snapshot.countdownSeconds ?? 0
+                Text("ACTIVE \(proposal.lane.rawValue.uppercased()) · CONF \(decimalString(proposal.confidence)) · T-\(decimalString(countdown))s")
+                    .font(ConsoleTheme.smallTagFont(size: 8))
+                    .foregroundStyle(ConsoleTheme.lampAmber)
+                Text(proposal.rationale)
+                    .font(ConsoleTheme.telemetryFont(size: 9))
+                    .foregroundStyle(Color.white.opacity(0.75))
+                    .lineLimit(2)
+                Text(proposal.expectedEffect)
+                    .font(ConsoleTheme.telemetryFont(size: 9))
+                    .foregroundStyle(Color.white.opacity(0.55))
+                    .lineLimit(1)
+                Button("ACCEPT PROPOSAL (JOY_1)", action: onAccept)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            } else {
+                Text("NO ACTIVE PROPOSAL · JOY_1 ARMED")
+                    .font(ConsoleTheme.smallTagFont(size: 8))
+                    .foregroundStyle(Color.white.opacity(0.45))
+            }
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            ForEach(Array(snapshot.events.prefix(8))) { event in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(event.severity.rawValue)
+                        .font(ConsoleTheme.smallTagFont(size: 8))
+                        .foregroundStyle(eventColor(event.severity))
+                        .frame(width: 42, alignment: .leading)
+                    Text(event.stage.rawValue.uppercased())
+                        .font(ConsoleTheme.telemetryFont(size: 9))
+                        .foregroundStyle(Color.white.opacity(0.58))
+                        .frame(width: 48, alignment: .leading)
+                    Text(event.semanticAction ?? event.controlID)
+                        .font(ConsoleTheme.telemetryFont(size: 9))
+                        .foregroundStyle(Color.white.opacity(0.76))
+                        .lineLimit(1)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func decimalString(_ value: Double) -> String {
+        String(format: "%.2f", value)
+    }
+
+    private func eventColor(_ severity: HUDEventSeverity) -> Color {
+        switch severity {
+        case .info: return Color.white.opacity(0.7)
+        case .act: return ConsoleTheme.lampBlue
+        case .apply: return ConsoleTheme.lampGreen
+        case .block: return ConsoleTheme.lampAmber
+        case .error: return ConsoleTheme.lampRed
+        }
+    }
+}
+
+private struct TelemetryDevicePanel: View, Equatable {
+    struct Snapshot: Equatable {
+        var deviceCount: Int
+        var poolSize: Int
+        var voiceCount: Int
+        var failoverCount: Int
+        var zoneCount: Int
+        var dominantZone: String
+        var unhealthyCount: Int
+        var devices: [DeviceTelemetry]
+    }
+
+    let snapshot: Snapshot
+    let onPing: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.snapshot == rhs.snapshot }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("\(snapshot.deviceCount) DEVICES")
+                    .font(ConsoleTheme.smallTagFont(size: 9))
+                    .tracking(1.2)
+                    .foregroundStyle(Color.white.opacity(0.55))
+                Spacer()
+                Button(action: onPing) {
+                    Text("PING")
+                        .font(ConsoleTheme.smallTagFont(size: 8))
+                        .tracking(1.0)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .foregroundStyle(Color.white.opacity(0.7))
+                        .background(ConsoleTheme.panelInnerFill)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 3)
+                                .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack {
+                Text("POOL \(snapshot.poolSize) · VOICES \(snapshot.voiceCount)")
+                Spacer()
+                Text("FAILOVER \(snapshot.failoverCount)")
+            }
+            .font(ConsoleTheme.telemetryFont(size: 9))
+            .foregroundStyle(Color.white.opacity(0.58))
+
+            HStack {
+                Text("ZONES \(snapshot.zoneCount) · TOP \(snapshot.dominantZone)")
+                Spacer()
+                Text("UNHEALTHY \(snapshot.unhealthyCount)")
+            }
+            .font(ConsoleTheme.telemetryFont(size: 9))
+            .foregroundStyle(Color.white.opacity(0.58))
+
+            if snapshot.devices.isEmpty {
+                Text("// no devices acquired")
+                    .font(ConsoleTheme.telemetryFont(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.3))
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(snapshot.devices) { device in
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(device.id)
+                                    .font(ConsoleTheme.telemetryFont(size: 10))
+                                    .foregroundStyle(Color.white.opacity(0.75))
+                                Text("ZONE \(device.zoneName ?? "—") · A:\(device.permissions.audio ? "Y" : "N") G:\(device.permissions.geolocation ? "Y" : "N") M:\(device.permissions.motion ? "Y" : "N")")
+                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(Color.white.opacity(0.4))
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 140)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct FlightLogPanelSection: View, Equatable {
+    let entries: [StatusLineEvent]
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.entries == rhs.entries }
+
+    var body: some View {
+        ConsolePanel("FLIGHT LOG · TELEMETRY TAPE", accent: ConsoleTheme.lampGreen) {
+            FlightLogTape(entries: entries)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
 struct ConductorSurfaceView: View {
     @ObservedObject var model: ConductorHarnessViewModel
     @ObservedObject var inspectorPresentation: InspectorPresentationState
@@ -64,21 +540,31 @@ struct ConductorSurfaceView: View {
     var body: some View {
         VStack(spacing: 12) {
             topStatusBar
+            SoundPerformanceSpineView(snapshot: model.soundSituationalSnapshot)
 
             HStack(alignment: .top, spacing: 12) {
-                leftColumn
-                    .frame(width: 230)
-                centerColumn
-                    .frame(maxWidth: .infinity)
-                rightColumn
-                    .frame(width: 280)
+                ScrollView(.vertical, showsIndicators: false) {
+                    leftColumn.padding(.trailing, 2)
+                }
+                .frame(width: 240)
+
+                ScrollView(.vertical, showsIndicators: false) {
+                    centerColumn.padding(.trailing, 2)
+                }
+                .frame(maxWidth: .infinity)
+
+                ScrollView(.vertical, showsIndicators: false) {
+                    rightColumn.padding(.trailing, 2)
+                }
+                .frame(width: 320)
             }
+            .frame(maxHeight: .infinity)
 
             flightLogPanel
-                .frame(height: 150)
+                .frame(height: 160)
         }
         .padding(14)
-        .frame(minWidth: 1280, minHeight: 860)
+        .frame(minWidth: 1340, minHeight: 720)
         .background(ConsoleTheme.consoleBackground)
         .preferredColorScheme(.dark)
         .overlay {
@@ -801,175 +1287,67 @@ struct ConductorSurfaceView: View {
                     .font(ConsoleTheme.telemetryFont(size: 9))
                     .foregroundStyle(Color.white.opacity(0.58))
 
-                    HStack(alignment: .bottom, spacing: 4) {
-                        Bargraph(label: "SRC X", value: model.vector.spatialX) {
-                            model.patchVector(ParamVectorPatch(spatialX: $0))
-                        }
-                        Bargraph(label: "CAD Y", value: model.programProceduralState.cutCadence) {
-                            model.setCutCadenceFromControl($0)
-                        }
-                        Bargraph(label: "CMP Z", value: model.programProceduralState.fade) {
-                            model.setCompositorBlendFromControl($0)
-                        }
-                    }
-
-                    HStack(alignment: .bottom, spacing: 4) {
-                        Bargraph(label: "MORPH", value: model.staticAudioMacroState.sampleMorph) {
-                            model.setStaticSampleMorphFromControl($0)
-                        }
-                        Bargraph(label: "ARTIC", value: model.staticAudioMacroState.articulation) {
-                            model.setStaticArticulationFromControl($0)
-                        }
-                        Bargraph(label: "TIMBRE", value: model.staticAudioMacroState.timbre) {
-                            model.setStaticTimbreFromControl($0)
-                        }
-                    }
-
-                    HStack(alignment: .bottom, spacing: 4) {
-                        Bargraph(label: "CHOIR S", value: model.choirFieldState.spread) {
-                            model.setChoirFieldSpreadFromControl($0)
-                        }
-                        Bargraph(label: "CHOIR D", value: model.choirFieldState.depth) {
-                            model.setChoirFieldDepthFromControl($0)
-                        }
-                        Bargraph(label: "CHOIR T", value: model.choirFieldState.detune) {
-                            model.setChoirFieldDetuneFromControl($0)
-                        }
-                    }
-
-                    HStack(alignment: .bottom, spacing: 4) {
-                        Bargraph(label: "A RHY", value: model.effectsChainState.chainAIntensity) {
-                            model.setEffectsChainFromControl(chain: .a, active: $0 > 0.05, intensity: $0)
-                        }
-                        Bargraph(label: "B SPC", value: model.effectsChainState.chainBIntensity) {
-                            model.setEffectsChainFromControl(chain: .b, active: $0 > 0.05, intensity: $0)
-                        }
-                        Bargraph(label: "TXT P", value: model.programProceduralState.textProbability) {
-                            model.setTextProbabilityFromControl($0)
-                        }
-                    }
+                    ControlPlaneBargraphCluster(
+                        values: ControlPlaneBargraphCluster.Values(
+                            spatialX: model.vector.spatialX,
+                            cutCadence: model.programProceduralState.cutCadence,
+                            fade: model.programProceduralState.fade,
+                            sampleMorph: model.staticAudioMacroState.sampleMorph,
+                            articulation: model.staticAudioMacroState.articulation,
+                            timbre: model.staticAudioMacroState.timbre,
+                            choirSpread: model.choirFieldState.spread,
+                            choirDepth: model.choirFieldState.depth,
+                            choirDetune: model.choirFieldState.detune,
+                            fxAIntensity: model.effectsChainState.chainAIntensity,
+                            fxBIntensity: model.effectsChainState.chainBIntensity,
+                            textProbability: model.programProceduralState.textProbability
+                        ),
+                        onSpatialX: { model.patchVector(ParamVectorPatch(spatialX: $0)) },
+                        onCutCadence: { model.setCutCadenceFromControl($0) },
+                        onFade: { model.setCompositorBlendFromControl($0) },
+                        onSampleMorph: { model.setStaticSampleMorphFromControl($0) },
+                        onArticulation: { model.setStaticArticulationFromControl($0) },
+                        onTimbre: { model.setStaticTimbreFromControl($0) },
+                        onChoirSpread: { model.setChoirFieldSpreadFromControl($0) },
+                        onChoirDepth: { model.setChoirFieldDepthFromControl($0) },
+                        onChoirDetune: { model.setChoirFieldDetuneFromControl($0) },
+                        onFxA: { model.setEffectsChainFromControl(chain: .a, active: $0 > 0.05, intensity: $0) },
+                        onFxB: { model.setEffectsChainFromControl(chain: .b, active: $0 > 0.05, intensity: $0) },
+                        onTextProbability: { model.setTextProbabilityFromControl($0) }
+                    )
+                    .equatable()
                 }
                 .frame(maxWidth: .infinity)
             }
 
             ConsolePanel("ML COPILOT · ACTION STREAM", accent: ConsoleTheme.lampAmber) {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let proposal = model.activeMLProposal {
-                        Text("ACTIVE \(proposal.lane.rawValue.uppercased()) · CONF \(decimal(proposal.confidence)) · T-\(decimal(model.activeMLProposalCountdownSeconds ?? 0))s")
-                            .font(ConsoleTheme.smallTagFont(size: 8))
-                            .foregroundStyle(ConsoleTheme.lampAmber)
-                        Text(proposal.rationale)
-                            .font(ConsoleTheme.telemetryFont(size: 9))
-                            .foregroundStyle(Color.white.opacity(0.75))
-                            .lineLimit(2)
-                        Text(proposal.expectedEffect)
-                            .font(ConsoleTheme.telemetryFont(size: 9))
-                            .foregroundStyle(Color.white.opacity(0.55))
-                            .lineLimit(1)
-                        Button("ACCEPT PROPOSAL (JOY_1)") {
-                            _ = model.acceptActiveProposalFromControl()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    } else {
-                        Text("NO ACTIVE PROPOSAL · JOY_1 ARMED")
-                            .font(ConsoleTheme.smallTagFont(size: 8))
-                            .foregroundStyle(Color.white.opacity(0.45))
-                    }
-
-                    Divider().overlay(Color.white.opacity(0.08))
-
-                    ForEach(model.hudTelemetryFrame.events.prefix(8)) { event in
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(event.severity.rawValue)
-                                .font(ConsoleTheme.smallTagFont(size: 8))
-                                .foregroundStyle(color(for: event.severity))
-                                .frame(width: 42, alignment: .leading)
-                            Text(event.stage.rawValue.uppercased())
-                                .font(ConsoleTheme.telemetryFont(size: 9))
-                                .foregroundStyle(Color.white.opacity(0.58))
-                                .frame(width: 48, alignment: .leading)
-                            Text(event.semanticAction ?? event.controlID)
-                                .font(ConsoleTheme.telemetryFont(size: 9))
-                                .foregroundStyle(Color.white.opacity(0.76))
-                                .lineLimit(1)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                MLActionStreamPanel(
+                    snapshot: MLActionStreamPanel.Snapshot(
+                        proposal: model.activeMLProposal,
+                        countdownSeconds: model.activeMLProposalCountdownSeconds,
+                        events: Array(model.hudTelemetryFrame.events.prefix(8))
+                    ),
+                    onAccept: { _ = model.acceptActiveProposalFromControl() }
+                )
+                .equatable()
             }
 
             ConsolePanel("CHOIR / AUDIENCE TELEMETRY", accent: ConsoleTheme.lampBlue) {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("\(model.devices.count) DEVICES")
-                            .font(ConsoleTheme.smallTagFont(size: 9))
-                            .tracking(1.2)
-                            .foregroundStyle(Color.white.opacity(0.55))
-                        Spacer()
-                        Button {
-                            model.refreshTelemetry()
-                        } label: {
-                            Text("PING")
-                                .font(ConsoleTheme.smallTagFont(size: 8))
-                                .tracking(1.0)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .foregroundStyle(Color.white.opacity(0.7))
-                                .background(ConsoleTheme.panelInnerFill)
-                                .clipShape(RoundedRectangle(cornerRadius: 3))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 3)
-                                        .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    HStack {
-                        Text("POOL \(model.phoneAudioAvailableDevices.count) · VOICES \(model.phoneAudioActiveVoices.count)")
-                        Spacer()
-                        Text("FAILOVER \(model.phoneAudioFailoverCount)")
-                    }
-                    .font(ConsoleTheme.telemetryFont(size: 9))
-                    .foregroundStyle(Color.white.opacity(0.58))
-
-                    HStack {
-                        Text("ZONES \(model.phoneAudioZoneOccupancy.count) · TOP \(dominantZoneLabel)")
-                        Spacer()
-                        Text("UNHEALTHY \(unhealthyChoirDeviceCount)")
-                    }
-                    .font(ConsoleTheme.telemetryFont(size: 9))
-                    .foregroundStyle(Color.white.opacity(0.58))
-
-                    if model.devices.isEmpty {
-                        Text("// no devices acquired")
-                            .font(ConsoleTheme.telemetryFont(size: 10))
-                            .foregroundStyle(Color.white.opacity(0.3))
-                    } else {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 4) {
-                                ForEach(model.devices) { device in
-                                    deviceRow(device)
-                                }
-                            }
-                        }
-                        .frame(maxHeight: 110)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                TelemetryDevicePanel(
+                    snapshot: TelemetryDevicePanel.Snapshot(
+                        deviceCount: model.devices.count,
+                        poolSize: model.phoneAudioAvailableDevices.count,
+                        voiceCount: model.phoneAudioActiveVoices.count,
+                        failoverCount: model.phoneAudioFailoverCount,
+                        zoneCount: model.phoneAudioZoneOccupancy.count,
+                        dominantZone: dominantZoneLabel,
+                        unhealthyCount: unhealthyChoirDeviceCount,
+                        devices: model.devices
+                    ),
+                    onPing: { model.refreshTelemetry() }
+                )
+                .equatable()
             }
-        }
-    }
-
-    private func deviceRow(_ device: DeviceTelemetry) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(device.id)
-                .font(ConsoleTheme.telemetryFont(size: 10))
-                .foregroundStyle(Color.white.opacity(0.75))
-            Text("ZONE \(device.zoneName ?? "—") · A:\(device.permissions.audio ? "Y" : "N") G:\(device.permissions.geolocation ? "Y" : "N") M:\(device.permissions.motion ? "Y" : "N")")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(Color.white.opacity(0.4))
         }
     }
 
@@ -1040,10 +1418,8 @@ struct ConductorSurfaceView: View {
     // MARK: - Flight log
 
     private var flightLogPanel: some View {
-        ConsolePanel("FLIGHT LOG · TELEMETRY TAPE", accent: ConsoleTheme.lampGreen) {
-            FlightLogTape(entries: model.statusLineHistory)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+        FlightLogPanelSection(entries: model.statusLineHistory)
+            .equatable()
     }
 
     // MARK: - Inspector drawer (preview / media / coreml / connection)
@@ -1223,6 +1599,29 @@ struct ConductorSurfaceView: View {
                         Button("AUTO RELOAD") { model.reloadPreferredModel() }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
+                    }
+                    HStack(spacing: 6) {
+                        Button("MODELS DIR…") { model.pickCoreMLSearchDirectory() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        if model.modelSearchOverridePath != nil {
+                            Button("CLEAR DIR") { model.clearCoreMLSearchDirectoryOverride() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                    }
+                    if let overridePath = model.modelSearchOverridePath {
+                        Text("OVERRIDE: \(overridePath)")
+                            .font(ConsoleTheme.telemetryFont(size: 8))
+                            .foregroundStyle(Color.white.opacity(0.55))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    if !model.modelSearchPaths.isEmpty {
+                        Text("SEARCH \(model.modelSearchPaths.count) PATHS · \(model.modelCandidates.count) FOUND")
+                            .font(ConsoleTheme.telemetryFont(size: 8))
+                            .foregroundStyle(Color.white.opacity(0.35))
+                            .lineLimit(1)
                     }
                     if !model.modelCandidates.isEmpty {
                         HStack {
@@ -1497,7 +1896,7 @@ private struct ImportModuleSheet: View {
 private struct SetupSheet: View {
     @ObservedObject var model: ConductorHarnessViewModel
     @Environment(\.dismiss) private var dismiss
-    @State private var hotasTrainingOpen = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let hotasModeBinding = Binding<ControlInputMode>(
@@ -1523,8 +1922,21 @@ private struct SetupSheet: View {
                             .disabled(true)
                     } else {
                         ForEach(model.availableAudioRoutes) { route in
-                            Button("\(route.name) (\(route.channelCount)ch)") {
+                            Button {
                                 model.selectedAudioRouteID = route.id
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Text(model.audioRouteMenuLabel(route))
+                                    if route.isSystemDefault {
+                                        Text("SYSTEM")
+                                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                            .foregroundStyle(ConsoleTheme.lampGreen)
+                                    }
+                                    if route.id == model.selectedAudioRouteID {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 10, weight: .bold))
+                                    }
+                                }
                             }
                         }
                     }
@@ -1538,6 +1950,16 @@ private struct SetupSheet: View {
                 Text(model.audioRouteStatusSummary)
                     .font(ConsoleTheme.telemetryFont(size: 10))
                     .foregroundStyle(Color.white.opacity(0.62))
+
+                HStack(spacing: 8) {
+                    setupActionButton("REFRESH AUDIO DEVICES") {
+                        model.refreshSetupInventory()
+                        model.refreshQuadRouteStatus()
+                    }
+                    setupActionButton("TEST OUTPUT", variant: .primary) {
+                        model.testSelectedAudioOutput()
+                    }
+                }
             }
             .padding(10)
             .background(ConsoleTheme.panelInnerFill)
@@ -1635,8 +2057,7 @@ private struct SetupSheet: View {
 
                 HStack(spacing: 8) {
                     setupActionButton("TRAIN / MAP", variant: .primary) {
-                        model.beginHOTASTraining()
-                        hotasTrainingOpen = true
+                        openWindow(id: AppWindowID.hotasMapper.rawValue)
                     }
 
                     setupActionButton("DISABLE HOTAS") {
@@ -1743,10 +2164,6 @@ private struct SetupSheet: View {
         .padding(18)
         .frame(minWidth: 760, minHeight: 520)
         .background(ConsoleTheme.consoleBackground)
-        .sheet(isPresented: $hotasTrainingOpen) {
-            HOTASTrainingSheet(model: model, isPresented: $hotasTrainingOpen)
-                .preferredColorScheme(.dark)
-        }
         .onAppear {
             model.refreshSetupInventory()
             model.refreshQuadRouteStatus()
@@ -1754,23 +2171,11 @@ private struct SetupSheet: View {
     }
 
     private var selectedAudioRouteName: String {
-        if let selected = model.availableAudioRoutes.first(where: { $0.id == model.selectedAudioRouteID }) {
-            return "\(selected.name) (\(selected.channelCount)ch)"
-        }
-        if let first = model.availableAudioRoutes.first {
-            return "\(first.name) (\(first.channelCount)ch)"
-        }
-        return "NO OUTPUT ROUTES"
+        model.selectedAudioRouteDisplayName
     }
 
     private var selectedMIDIInputName: String {
-        if let selected = model.availableMIDIInputs.first(where: { $0.id == model.selectedMIDIInputID }) {
-            return selected.name
-        }
-        if let first = model.availableMIDIInputs.first {
-            return first.name
-        }
-        return "NO MIDI INPUTS"
+        model.selectedMIDIInputDisplayName
     }
 
     @ViewBuilder
@@ -1895,233 +2300,5 @@ private struct SetupSheet: View {
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
-    }
-}
-
-private struct HOTASTrainingSheet: View {
-    @ObservedObject var model: ConductorHarnessViewModel
-    @Binding var isPresented: Bool
-    @State private var stepIndex = 0
-
-    private let steps = [
-        "Source",
-        "Live Detect",
-        "Required",
-        "Optional",
-        "Validate"
-    ]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("HOTAS TRAINING WIZARD")
-                .font(.system(size: 18, weight: .black, design: .monospaced))
-                .tracking(1.4)
-                .foregroundStyle(Color.white.opacity(0.9))
-
-            HStack(spacing: 6) {
-                ForEach(Array(steps.enumerated()), id: \.offset) { index, label in
-                    Text("\(index + 1). \(label)")
-                        .font(ConsoleTheme.smallTagFont(size: 8))
-                        .tracking(1.0)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 4)
-                        .background(index == stepIndex ? ConsoleTheme.lampBlue.opacity(0.35) : Color.white.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                }
-            }
-
-            Group {
-                switch stepIndex {
-                case 0:
-                    sourceStep
-                case 1:
-                    liveStep
-                case 2:
-                    roleCaptureStep(roles: ControlRole.requiredWizardRoles)
-                case 3:
-                    roleCaptureStep(roles: ControlRole.optionalWizardRoles)
-                default:
-                    validateStep
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-            HStack {
-                Button("Disable HOTAS") {
-                    model.disableHOTASControls()
-                }
-                .buttonStyle(.bordered)
-
-                Button("Revert Last Good") {
-                    model.revertHOTASToLastKnownGood()
-                }
-                .buttonStyle(.bordered)
-
-                Spacer()
-
-                Button("Cancel") {
-                    model.cancelHOTASTraining()
-                    isPresented = false
-                }
-                .buttonStyle(.bordered)
-
-                Button(stepIndex == steps.count - 1 ? "Save + Arm" : "Next") {
-                    if stepIndex == steps.count - 1 {
-                        model.saveAndArmHOTASProfile()
-                        isPresented = false
-                    } else {
-                        stepIndex = min(steps.count - 1, stepIndex + 1)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding(16)
-        .frame(minWidth: 860, minHeight: 620)
-        .background(ConsoleTheme.consoleBackground)
-    }
-
-    private var sourceStep: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Choose source mode and confirm devices.")
-                .font(ConsoleTheme.telemetryFont(size: 10))
-                .foregroundStyle(Color.white.opacity(0.62))
-
-            Picker("Input Mode", selection: Binding(
-                get: { model.hotasInputMode },
-                set: { model.updateHOTASInputMode($0) }
-            )) {
-                ForEach(ControlInputMode.allCases, id: \.self) { mode in
-                    Text(mode.rawValue.uppercased()).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            Text("Detected HOTAS devices")
-                .font(ConsoleTheme.smallTagFont(size: 8))
-                .foregroundStyle(Color.white.opacity(0.55))
-
-            let devices = model.availableHOTASDevices()
-            if devices.isEmpty {
-                Text("No HOTAS HID devices detected. Connect X56 and keep this wizard open.")
-                    .font(ConsoleTheme.telemetryFont(size: 10))
-                    .foregroundStyle(ConsoleTheme.lampAmber)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(devices) { device in
-                            Text("• \(device.name)")
-                                .font(ConsoleTheme.telemetryFont(size: 10))
-                                .foregroundStyle(Color.white.opacity(0.72))
-                        }
-                    }
-                }
-                .frame(maxHeight: 120)
-            }
-        }
-    }
-
-    private var liveStep: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Move controls to verify live signal flow before binding.")
-                .font(ConsoleTheme.telemetryFont(size: 10))
-                .foregroundStyle(Color.white.opacity(0.62))
-
-            statusRow(label: "Input", value: model.hotasInputStatus)
-            statusRow(label: "Last Signal", value: model.hotasLastSignalSummary)
-            statusRow(label: "Missing Required", value: "\(model.hotasMissingRequiredRoles.count)")
-
-            Text("Capture is armed in steps 3-4. Each capture listens for the next incoming signal.")
-                .font(ConsoleTheme.telemetryFont(size: 10))
-                .foregroundStyle(Color.white.opacity(0.5))
-        }
-    }
-
-    private func roleCaptureStep(roles: [ControlRole]) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(roles, id: \.self) { role in
-                    HStack(alignment: .top, spacing: 8) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(role.rawValue.uppercased())
-                                .font(ConsoleTheme.smallTagFont(size: 8))
-                                .foregroundStyle(Color.white.opacity(0.68))
-                            Text(model.hotasBinding(for: role)?.controlID ?? "UNBOUND")
-                                .font(ConsoleTheme.telemetryFont(size: 10))
-                                .foregroundStyle(Color.white.opacity(0.5))
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                        Button(model.hotasPendingCaptureRole == role ? "LISTENING..." : "CAPTURE") {
-                            model.captureHOTASBinding(for: role)
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Button("CLEAR") {
-                            model.clearHOTASBinding(for: role)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    .padding(8)
-                    .background(ConsoleTheme.panelInnerFill)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(ConsoleTheme.panelStroke, lineWidth: 0.6)
-                    )
-                }
-            }
-        }
-    }
-
-    private var validateStep: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Validation + dry run")
-                .font(ConsoleTheme.smallTagFont(size: 9))
-                .foregroundStyle(Color.white.opacity(0.72))
-            statusRow(label: "Profile", value: model.hotasProfileName)
-            statusRow(label: "Input", value: model.hotasInputStatus)
-            statusRow(label: "Missing Required", value: "\(model.hotasMissingRequiredRoles.count)")
-            statusRow(label: "Conflicts", value: "\(model.hotasBindingConflicts.count)")
-            statusRow(label: "Last Signal", value: model.hotasLastSignalSummary)
-
-            if model.hotasMissingRequiredRoles.isEmpty, model.hotasBindingConflicts.isEmpty {
-                Text("All required controls are bound. Save + Arm will persist profile and enable HOTAS routing.")
-                    .font(ConsoleTheme.telemetryFont(size: 10))
-                    .foregroundStyle(ConsoleTheme.lampGreen)
-            } else {
-                if !model.hotasMissingRequiredRoles.isEmpty {
-                    let missing = model.hotasMissingRequiredRoles.map { $0.rawValue }.joined(separator: ", ")
-                    Text("Required bindings still missing: \(missing)")
-                        .font(ConsoleTheme.telemetryFont(size: 10))
-                        .foregroundStyle(ConsoleTheme.lampAmber)
-                }
-                if !model.hotasBindingConflicts.isEmpty {
-                    Text("Conflicts: \(model.hotasBindingConflicts.joined(separator: " | "))")
-                        .font(ConsoleTheme.telemetryFont(size: 10))
-                        .foregroundStyle(ConsoleTheme.lampAmber)
-                }
-            }
-        }
-    }
-
-    private func statusRow(label: String, value: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text(label.uppercased())
-                .font(ConsoleTheme.smallTagFont(size: 8))
-                .foregroundStyle(Color.white.opacity(0.55))
-                .frame(width: 120, alignment: .leading)
-            Text(value)
-                .font(ConsoleTheme.telemetryFont(size: 10))
-                .foregroundStyle(Color.white.opacity(0.72))
-                .lineLimit(2)
-        }
-        .padding(8)
-        .background(ConsoleTheme.panelInnerFill)
-        .clipShape(RoundedRectangle(cornerRadius: 4))
-        .overlay(
-            RoundedRectangle(cornerRadius: 4)
-                .stroke(ConsoleTheme.panelStroke, lineWidth: 0.6)
-        )
     }
 }

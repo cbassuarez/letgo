@@ -6,6 +6,7 @@ struct InspectorModalView: View {
     @ObservedObject var presentation: InspectorPresentationState
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 12) {
@@ -184,6 +185,37 @@ struct InspectorModalView: View {
                     }
                 }
 
+                inspectorSection("MODELS DIRECTORY") {
+                    inspectorRow("Override", model.modelSearchOverridePath ?? "(none)")
+                    HStack(spacing: 8) {
+                        Button("Choose Directory…") {
+                            model.pickCoreMLSearchDirectory()
+                        }
+                        .buttonStyle(.bordered)
+
+                        if model.modelSearchOverridePath != nil {
+                            Button("Clear Override") {
+                                model.clearCoreMLSearchDirectoryOverride()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    if !model.modelSearchPaths.isEmpty {
+                        Text("SEARCH PATHS (\(model.modelSearchPaths.count))")
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Color.white.opacity(0.5))
+                            .padding(.top, 4)
+                        ForEach(Array(model.modelSearchPaths.enumerated()), id: \.offset) { _, path in
+                            Text(path)
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundStyle(Color.white.opacity(0.58))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+
                 inspectorSection("CANDIDATES") {
                     if model.modelCandidates.isEmpty {
                         Text("No compiled models detected.")
@@ -279,7 +311,9 @@ struct InspectorModalView: View {
                 inspectorSection("HOTAS PROFILE") {
                     HStack(spacing: 8) {
                         Button("Train / Map") {
-                            model.beginHOTASTraining()
+                            openWindow(id: AppWindowID.hotasMapper.rawValue)
+                            presentation.dismiss()
+                            dismiss()
                         }
                         .buttonStyle(.borderedProminent)
 

@@ -94,6 +94,9 @@ public final class IOHIDHOTASControlSignalSource: ControlSignalSource {
     private var onEvent: ((ControlSignal) -> Void)?
     private var lastDiscreteValues: [String: Int] = [:]
     private var hatDirections: [String: Set<String>] = [:]
+    private var lastRawValues: [String: Int] = [:]
+    private var lastAxisNormalizedValues: [String: Double] = [:]
+    private var lastDiscreteBeganAtMs: [String: TimeInterval] = [:]
 
     public init() {}
 
@@ -178,6 +181,9 @@ public final class IOHIDHOTASControlSignalSource: ControlSignalSource {
         onEvent = nil
         lastDiscreteValues.removeAll()
         hatDirections.removeAll()
+        lastRawValues.removeAll()
+        lastAxisNormalizedValues.removeAll()
+        lastDiscreteBeganAtMs.removeAll()
     }
 
     private func handle(value: IOHIDValue) {
@@ -195,6 +201,11 @@ public final class IOHIDHOTASControlSignalSource: ControlSignalSource {
         let deviceID = Self.deviceID(for: device)
 
         if page == Int(kHIDPage_GenericDesktop), usage == Int(kHIDUsage_GD_Hatswitch) {
+            let hatKey = "\(deviceID):gd:hat"
+            if let previousRaw = lastRawValues[hatKey], previousRaw == rawValue {
+                return
+            }
+            lastRawValues[hatKey] = rawValue
             emitHatDirections(
                 rawValue: rawValue,
                 timestamp: timestamp,
@@ -214,12 +225,38 @@ public final class IOHIDHOTASControlSignalSource: ControlSignalSource {
             return
         }
 
-        let controlID = controlIdentifier(page: page, usage: usage)
+        let baseControlID = controlIdentifier(page: page, usage: usage)
+        let controlID = resolvedControlIdentifier(
+            baseControlID: baseControlID,
+            kind: kind,
+            element: element
+        )
         let phase = resolvePhase(
             controlID: "\(deviceID):\(controlID)",
             kind: kind,
             rawValue: rawValue
         )
+        let controlKey = "\(deviceID):\(controlID)"
+        if kind == .axis {
+            if let previous = lastAxisNormalizedValues[controlKey],
+               abs(previous - normalized) < 0.004 {
+                return
+            }
+            lastAxisNormalizedValues[controlKey] = normalized
+        } else if kind == .button || kind == .hat {
+            if let previousRaw = lastRawValues[controlKey], previousRaw == rawValue {
+                return
+            }
+            if phase == .began {
+                if let previousBeganAt = lastDiscreteBeganAtMs[controlKey],
+                   (timestamp - previousBeganAt) < 28 {
+                    return
+                }
+                lastDiscreteBeganAtMs[controlKey] = timestamp
+            }
+        }
+        lastRawValues[controlKey] = rawValue
+
         onEvent(ControlSignal(
             controlID: controlID,
             kind: kind,
@@ -318,6 +355,24 @@ public final class IOHIDHOTASControlSignalSource: ControlSignalSource {
         }
 
         return "hid:\(page):\(usage)"
+    }
+
+    private func resolvedControlIdentifier(
+        baseControlID: String,
+        kind: ControlSignalKind,
+        element: IOHIDElement
+    ) -> String {
+        guard kind == .axis else {
+            return baseControlID
+        }
+        let cookie = Int(IOHIDElementGetCookie(element))
+        let reportID = Int(IOHIDElementGetReportID(element))
+        let parentCookie: Int = {
+            guard let parent = IOHIDElementGetParent(element) else { return -1 }
+            return Int(IOHIDElementGetCookie(parent))
+        }()
+        // Preserve physical axis identity across cookies/report channels/parent collections.
+        return "\(baseControlID)#\(cookie)@r\(reportID)p\(parentCookie)"
     }
 
     private func signalKind(page: Int, usage: Int) -> ControlSignalKind {

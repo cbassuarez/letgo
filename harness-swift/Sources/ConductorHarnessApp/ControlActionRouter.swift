@@ -9,6 +9,8 @@ protocol ControlActionRouting: AnyObject {
 
     @discardableResult
     func acceptActiveProposalFromControl() -> MLProposalDecision
+    func startEngineFromControl()
+    func stopEngineFromControl()
     func canTakeArmedTimelineStep() -> Bool
     func takeArmedTimelineStep()
     func fireOutputGO()
@@ -78,6 +80,14 @@ final class ControlActionRouter {
             case .blocked:
                 return .blocked(reason: "no active proposal")
             }
+
+        case .startEngine:
+            delegate.startEngineFromControl()
+            return .applied
+
+        case .stopEngine:
+            delegate.stopEngineFromControl()
+            return .applied
 
         case .patchVector(let patch):
             delegate.patchVector(patch)

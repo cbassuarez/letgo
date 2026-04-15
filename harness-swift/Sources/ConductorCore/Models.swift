@@ -123,7 +123,7 @@ public struct PresentationDirective: Codable, Equatable {
     }
 }
 
-public struct DeviceTelemetry: Identifiable, Codable {
+public struct DeviceTelemetry: Identifiable, Codable, Equatable {
     public let id: String
     public var lastSeen: Date
     public var zoneName: String?
@@ -137,7 +137,7 @@ public struct DeviceTelemetry: Identifiable, Codable {
     }
 }
 
-public struct DevicePermissions: Codable {
+public struct DevicePermissions: Codable, Equatable {
     public var audio: Bool
     public var geolocation: Bool
     public var motion: Bool

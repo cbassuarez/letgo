@@ -17,6 +17,9 @@ final class PushDeckViewModel: ObservableObject {
     @Published private(set) var longSoundsVariantIndex: Int = 0
     @Published private(set) var longSoundsVariantCount: Int = 1
     @Published private(set) var longSoundsLatched: Bool = false
+    @Published private(set) var longSoundsSubWetness: Double = 0
+    @Published private(set) var longSoundsLatchFadeInSeconds: Double = 0.12
+    @Published private(set) var longSoundsLatchFadeOutSeconds: Double = 0.18
     @Published private(set) var actionRail: [DeckActionRailEntry] = []
     @Published private(set) var activePadSlots: Set<Int> = []
     @Published private(set) var padFileNameOverrides: [Int: String] = [:]
@@ -46,10 +49,14 @@ final class PushDeckViewModel: ObservableObject {
     private let prefersHighContrastKey = "push_companion.prefers_high_contrast"
     private let padHighlightsKey = "push_companion.pad_highlights.v1"
     private let phonePadEchoProbabilityKey = "push_companion.phone_pad_echo_probability"
+    private let longSoundsSubWetnessKey = "push_companion.long_sounds_sub_wetness"
+    private let longSoundsLatchFadeInKey = "push_companion.long_sounds_latch_fade_in_seconds"
+    private let longSoundsLatchFadeOutKey = "push_companion.long_sounds_latch_fade_out_seconds"
     private let railLimit = 180
     private var activeTouchToPad: [Int: Int] = [:]
     private var throttledMacroAtByLane: [Int: TimeInterval] = [:]
     private var throttledLongStripAt: TimeInterval = 0
+    private var throttledLongStripWetnessAt: TimeInterval = 0
     private var flashClearTask: Task<Void, Never>?
     private var proposalExpiryTask: Task<Void, Never>?
     private let padAuditionEngine = PushPadAuditionEngine()
@@ -80,6 +87,16 @@ final class PushDeckViewModel: ObservableObject {
         self.phonePadEchoProbability = Self.clampPhonePadEchoProbability(
             defaults.object(forKey: phonePadEchoProbabilityKey) as? Double ?? 0
         )
+        self.longSoundsSubWetness = min(
+            1,
+            max(0, defaults.object(forKey: longSoundsSubWetnessKey) as? Double ?? 0)
+        )
+        self.longSoundsLatchFadeInSeconds = Self.clampLongLatchFade(
+            defaults.object(forKey: longSoundsLatchFadeInKey) as? Double ?? 0.12
+        )
+        self.longSoundsLatchFadeOutSeconds = Self.clampLongLatchFade(
+            defaults.object(forKey: longSoundsLatchFadeOutKey) as? Double ?? 0.18
+        )
 
         let handednessRaw = defaults.string(forKey: handednessKey)
         let handedness = DeckHandedness(rawValue: handednessRaw ?? "") ?? .right
@@ -92,6 +109,15 @@ final class PushDeckViewModel: ObservableObject {
         if let savedData = defaults.data(forKey: padHighlightsKey),
            let decoded = try? JSONDecoder().decode([String: [Int: Int]].self, from: savedData) {
             self.highlightedPadsByBank = decoded
+        }
+        if let snapshot = longStripAuditionEngine.setLatchFadeDurations(
+            fadeIn: longSoundsLatchFadeInSeconds,
+            fadeOut: longSoundsLatchFadeOutSeconds
+        ) {
+            applyLongStripSnapshot(snapshot)
+        }
+        if let snapshot = longStripAuditionEngine.setWetness(longSoundsSubWetness) {
+            applyLongStripSnapshot(snapshot)
         }
 
         self.socketClient.onEnvelope = { [weak self] envelope in
@@ -302,6 +328,64 @@ final class PushDeckViewModel: ObservableObject {
         }
         appendRail("LONG LATCH \(longSoundsLatched ? "ON" : "OFF")", severity: .act, coalescingKey: "long_latch")
         emitFlash(longSoundsLatched ? "LONG LATCH ON" : "LONG LATCH OFF", severity: .act)
+    }
+
+    func setLongSoundsSubWetness(_ value: Double) {
+        let clamped = min(1, max(0, value))
+        guard abs(longSoundsSubWetness - clamped) > 0.000_5 else { return }
+        defaults.set(clamped, forKey: longSoundsSubWetnessKey)
+        if let snapshot = longStripAuditionEngine.setWetness(clamped) {
+            applyLongStripSnapshot(snapshot)
+        } else {
+            longSoundsSubWetness = clamped
+        }
+
+        let now = Date().timeIntervalSince1970
+        let throttleWindow: TimeInterval = 1.0 / 24.0
+        guard now - throttledLongStripWetnessAt >= throttleWindow else { return }
+        throttledLongStripWetnessAt = now
+        let percent = Int(round(clamped * 100))
+        appendRail(
+            "LONG SUB WET \(percent)%",
+            severity: .act,
+            coalescingKey: "long_sub_wet"
+        )
+    }
+
+    func setLongSoundsLatchFadeInSeconds(_ value: Double) {
+        let clamped = Self.clampLongLatchFade(value)
+        guard abs(longSoundsLatchFadeInSeconds - clamped) > 0.000_5 else { return }
+        longSoundsLatchFadeInSeconds = clamped
+        defaults.set(clamped, forKey: longSoundsLatchFadeInKey)
+        if let snapshot = longStripAuditionEngine.setLatchFadeDurations(
+            fadeIn: longSoundsLatchFadeInSeconds,
+            fadeOut: longSoundsLatchFadeOutSeconds
+        ) {
+            applyLongStripSnapshot(snapshot)
+        }
+        appendRail(
+            "LONG LATCH FADE IN \(String(format: "%.2fs", clamped))",
+            severity: .act,
+            coalescingKey: "long_latch_fade_in"
+        )
+    }
+
+    func setLongSoundsLatchFadeOutSeconds(_ value: Double) {
+        let clamped = Self.clampLongLatchFade(value)
+        guard abs(longSoundsLatchFadeOutSeconds - clamped) > 0.000_5 else { return }
+        longSoundsLatchFadeOutSeconds = clamped
+        defaults.set(clamped, forKey: longSoundsLatchFadeOutKey)
+        if let snapshot = longStripAuditionEngine.setLatchFadeDurations(
+            fadeIn: longSoundsLatchFadeInSeconds,
+            fadeOut: longSoundsLatchFadeOutSeconds
+        ) {
+            applyLongStripSnapshot(snapshot)
+        }
+        appendRail(
+            "LONG LATCH FADE OUT \(String(format: "%.2fs", clamped))",
+            severity: .act,
+            coalescingKey: "long_latch_fade_out"
+        )
     }
 
     func setPhonePadEchoProbability(_ value: Double) {
@@ -1016,6 +1100,10 @@ final class PushDeckViewModel: ObservableObject {
         min(0.2, max(0, value))
     }
 
+    private static func clampLongLatchFade(_ value: Double) -> Double {
+        min(4.0, max(0.02, value))
+    }
+
     private func applyLongStripSnapshot(_ snapshot: PushLongStripSnapshot) {
         longSoundsStripValue = min(1, max(0, snapshot.valueX))
         longSoundsStripY = min(1, max(0, snapshot.valueY))
@@ -1023,6 +1111,7 @@ final class PushDeckViewModel: ObservableObject {
         longSoundsVariantCount = max(1, snapshot.variantCount)
         longSoundsVariantLabel = snapshot.variantLabel
         longSoundsLatched = snapshot.isLatched
+        longSoundsSubWetness = min(1, max(0, snapshot.subWetness))
     }
 
     private func curatedMainBankLabel(from candidate: String) -> String? {

@@ -125,6 +125,8 @@ private final class RouterDelegateMock: ControlActionRouting {
     var timelineTakeCount = 0
     var outputGoCount = 0
     var phoneGateGoCount = 0
+    var startEngineCount = 0
+    var stopEngineCount = 0
     var masterArmState = false
     var sampleBank = 1
     var sampleBankDomain: SampleBankDomain = .main
@@ -151,6 +153,8 @@ private final class RouterDelegateMock: ControlActionRouting {
 
     @discardableResult
     func acceptActiveProposalFromControl() -> MLProposalDecision { proposalDecision }
+    func startEngineFromControl() { startEngineCount += 1 }
+    func stopEngineFromControl() { stopEngineCount += 1 }
     func canTakeArmedTimelineStep() -> Bool { canTakeArmedTimeline }
     func takeArmedTimelineStep() { timelineTakeCount += 1 }
     func fireOutputGO() { outputGoCount += 1 }

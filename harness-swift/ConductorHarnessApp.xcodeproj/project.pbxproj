@@ -8,6 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		076536A1895933293FAF03AD /* IBMPlexMono-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 5805F38E6A2108591D11869E /* IBMPlexMono-Bold.ttf */; };
+		0A11F0011111111111111111 /* HOTASMapperModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A11F1011111111111111111 /* HOTASMapperModels.swift */; };
+		0A11F0022222222222222222 /* HOTASMapperStudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A11F1022222222222222222 /* HOTASMapperStudioView.swift */; };
+		0A11F0033333333333333333 /* HOTASLogicalDeviceMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A11F1033333333333333333 /* HOTASLogicalDeviceMatcher.swift */; };
 		0B099340F33CC06BF5499DEB /* VufineRealtimeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 104BCAA5060AD3B9079D6929 /* VufineRealtimeView.swift */; };
 		0F6A56BBA437A766CC9271F4 /* ControlActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 267DC8734AE2C64EC462EEEF /* ControlActions.swift */; };
 		127A26FBB2247C65608DA4D5 /* HUDTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1912142967A7B120FC153A6 /* HUDTelemetry.swift */; };
@@ -95,6 +98,9 @@
 
 /* Begin PBXFileReference section */
 		0DD0F6310510B2A41E8BB47A /* StaticAudioMacros.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StaticAudioMacros.swift; sourceTree = "<group>"; };
+		0A11F1011111111111111111 /* HOTASMapperModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HOTASMapperModels.swift; sourceTree = "<group>"; };
+		0A11F1022222222222222222 /* HOTASMapperStudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HOTASMapperStudioView.swift; sourceTree = "<group>"; };
+		0A11F1033333333333333333 /* HOTASLogicalDeviceMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HOTASLogicalDeviceMatcher.swift; sourceTree = "<group>"; };
 		0FF5F7677A55DC7E1BFE49DB /* AudioOpsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOpsModels.swift; sourceTree = "<group>"; };
 		104BCAA5060AD3B9079D6929 /* VufineRealtimeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VufineRealtimeView.swift; sourceTree = "<group>"; };
 		1AF90FF2883048ADD4EFA6BB /* ShowStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowStateMachine.swift; sourceTree = "<group>"; };
@@ -178,6 +184,7 @@
 				333F4E6DF516A146C08DBAC1 /* ControlProfile.swift */,
 				98960F0ED17027E839BF3C74 /* ControlProfileMapper.swift */,
 				78E19F30A3E68CB5127326F8 /* ControlSignals.swift */,
+				0A11F1033333333333333333 /* HOTASLogicalDeviceMatcher.swift */,
 				56C926477647D701DA7EFC75 /* ControlSources.swift */,
 				D5BD3063CA875F5C8322E287 /* CoreMIDIEventSource.swift */,
 				BBE2A39A0D2F92E2E487ACB9 /* CoreMLScoringModel.swift */,
@@ -211,6 +218,8 @@
 				9A9A0633AA0F280514570416 /* ControlActionRouter.swift */,
 				2FDB18B39387F5821E579F25 /* HUDGaugeView.swift */,
 				F1912142967A7B120FC153A6 /* HUDTelemetry.swift */,
+				0A11F1011111111111111111 /* HOTASMapperModels.swift */,
+				0A11F1022222222222222222 /* HOTASMapperStudioView.swift */,
 				9CE963C52E05BC5C6C14DCA5 /* InspectorModalView.swift */,
 				BB1F7B2C3AC4A4E4886D324C /* InspectorPresentationState.swift */,
 				9DFCC67BDEEA1B8E010D21FC /* LowLatencyPlayerLayerView.swift */,
@@ -397,6 +406,8 @@
 				8F8CDC84F0139DCDB55F7784 /* FlightLogTape.swift in Sources */,
 				1F73149A6DDF2C8833231B0E /* HUDGaugeView.swift in Sources */,
 				127A26FBB2247C65608DA4D5 /* HUDTelemetry.swift in Sources */,
+				0A11F0011111111111111111 /* HOTASMapperModels.swift in Sources */,
+				0A11F0022222222222222222 /* HOTASMapperStudioView.swift in Sources */,
 				30EB6D3990835901B7FFA826 /* IlluminatedButton.swift in Sources */,
 				A9CC32A26B054FB2D5DFC7D6 /* InspectorModalView.swift in Sources */,
 				F88902E99A54A8371B37BB46 /* InspectorPresentationState.swift in Sources */,
@@ -428,6 +439,7 @@
 				8ED3D37D6D7518F84853876C /* ControlProfile.swift in Sources */,
 				535FAB3B49A95FDEA8E727DF /* ControlProfileMapper.swift in Sources */,
 				CCA22ADA021B7ADAEB2BE2EA /* ControlSignals.swift in Sources */,
+				0A11F0033333333333333333 /* HOTASLogicalDeviceMatcher.swift in Sources */,
 				19FDD46C14A51F3E01A08F32 /* ControlSources.swift in Sources */,
 				B984C64FD717EA561DC20253 /* CoreMIDIEventSource.swift in Sources */,
 				A8E43468729B251A23AF6C99 /* CoreMLScoringModel.swift in Sources */,

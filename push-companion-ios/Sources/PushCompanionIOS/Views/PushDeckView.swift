@@ -89,6 +89,7 @@ private enum DeckSheet: String, Identifiable {
     case settings
     case notes
     case quant
+    case latchFade
 
     var id: String { rawValue }
 }
@@ -101,6 +102,7 @@ struct PushDeckView: View {
     @State private var settingsSheetDetent: PresentationDetent = .large
     @State private var notesSheetDetent: PresentationDetent = .large
     @State private var quantSheetDetent: PresentationDetent = .large
+    @State private var latchFadeSheetDetent: PresentationDetent = .large
     @State private var railGestureStartProbability: Double = 0
     @State private var railGestureFeedbackVisible = false
     @State private var railGestureFeedbackTask: Task<Void, Never>?
@@ -192,6 +194,17 @@ struct PushDeckView: View {
                 .presentationCornerRadius(0)
                 .onAppear {
                     quantSheetDetent = .large
+                }
+            case .latchFade:
+                PushLongLatchFadeModal(
+                    model: model,
+                    onClose: { activeSheet = nil }
+                )
+                .presentationDetents([.medium, .large], selection: $latchFadeSheetDetent)
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(0)
+                .onAppear {
+                    latchFadeSheetDetent = .large
                 }
             }
         }
@@ -772,11 +785,11 @@ struct PushDeckView: View {
     private func longSoundsSurfaceHeight(for profile: DeckLayoutProfile) -> CGFloat {
         switch profile {
         case .expanded:
-            return 164
+            return 206
         case .standard:
-            return 148
+            return 188
         case .compact:
-            return 130
+            return 170
         }
     }
 
@@ -800,8 +813,9 @@ struct PushDeckView: View {
     private func longSoundsControlSurface(profile: DeckLayoutProfile, width: CGFloat) -> some View {
         let valueX = model.longSoundsStripValue
         let valueY = model.longSoundsStripY
+        let wetness = model.longSoundsSubWetness
         let height = longSoundsSurfaceHeight(for: profile)
-        let fieldHeight = max(88, height - 34)
+        let fieldHeight = max(88, height - 76)
         let knobX = max(0, min(1, valueX)) * width
         let knobY = (1 - max(0, min(1, valueY))) * fieldHeight
         let latchOn = model.longSoundsLatched
@@ -820,12 +834,23 @@ struct PushDeckView: View {
                 Button {
                     model.toggleLongSoundsLatch()
                 } label: {
-                    Text(latchOn ? "LATCH ON" : "LATCH")
+                    Text(latchOn ? "FADE OUT" : "LATCH")
                         .font(DeckThemeTokens.monoFont(size: 9, weight: .bold))
                         .foregroundStyle(latchOn ? Color.black : Color.white.opacity(0.88))
                         .frame(minWidth: 62, minHeight: 24)
                         .background(latchOn ? DeckThemeTokens.accentApply : Color.white.opacity(0.14))
                         .overlay(Rectangle().stroke(latchOn ? DeckThemeTokens.accentApply.opacity(0.95) : DeckThemeTokens.panelStroke.opacity(0.9), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                Button {
+                    activeSheet = .latchFade
+                } label: {
+                    Text("FADE SETTINGS")
+                        .font(DeckThemeTokens.monoFont(size: 9, weight: .bold))
+                        .foregroundStyle(Color.white.opacity(0.9))
+                        .frame(minWidth: 52, minHeight: 24)
+                        .background(Color.white.opacity(0.14))
+                        .overlay(Rectangle().stroke(DeckThemeTokens.panelStroke.opacity(0.9), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
             }
@@ -902,6 +927,32 @@ struct PushDeckView: View {
                         }
                     }
             )
+
+            HStack(spacing: 10) {
+                Text("SUB WET -12st")
+                    .font(DeckThemeTokens.monoFont(size: 9, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .blendMode(.overlay)
+
+                Slider(
+                    value: Binding(
+                        get: { wetness },
+                        set: { model.setLongSoundsSubWetness($0) }
+                    ),
+                    in: 0...1
+                )
+                .tint(DeckThemeTokens.accentApply)
+                .frame(minHeight: 28)
+
+                Text("\(Int((wetness * 100).rounded()))%")
+                    .font(DeckThemeTokens.monoFont(size: 9, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .blendMode(.overlay)
+                    .frame(width: 36, alignment: .trailing)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+            .padding(.bottom, 8)
         }
         .frame(width: width, height: height)
         .clipShape(Rectangle())

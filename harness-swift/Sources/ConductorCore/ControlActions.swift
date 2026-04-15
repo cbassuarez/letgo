@@ -56,6 +56,8 @@ public struct EffectsChainState: Equatable, Codable, Sendable {
 
 public enum ControlAction: Equatable, Sendable {
     case acceptActiveProposal
+    case startEngine
+    case stopEngine
     case patchVector(ParamVectorPatch)
     case armOutputMode(FlightOutputModeID)
     case armTransportLane(String)

@@ -1,5 +1,19 @@
 import Foundation
 
+public enum HOTASLogicalDevice: String, Codable, CaseIterable, Sendable {
+    case x56Stick
+    case x56Throttle
+    case unspecified
+}
+
+public enum ControlRoleGroup: String, Codable, CaseIterable, Sendable {
+    case criticalSafety
+    case transport
+    case videoAudioMacro
+    case effects
+    case choir
+}
+
 public enum ControlRole: String, Codable, CaseIterable, Sendable {
     case rightAcceptButton
     case rightStickX
@@ -10,6 +24,8 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
     case rightTopSlider
 
     case rightTakeButton
+    case engineStartHold
+    case engineStopHold
     case rightTrigger1
     case rightTrigger2
 
@@ -38,6 +54,8 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
     case leftCueToggleDown
     case leftCueToggleCenter
 
+    case leftToggle1Up
+    case leftToggle1Down
     case leftToggle1Directional
     case leftStaticVisualClutch
 
@@ -51,7 +69,6 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
         .leftSecondThrottle,
         .leftModeRotary,
         .leftRotary1Decrease,
-        .leftRotary1Increase,
         .leftRotary2Axis,
         .leftBottomToggle1,
         .leftBottomToggle2,
@@ -61,10 +78,6 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
         .leftBottomToggle6,
         .leftArmToggleUp,
         .leftArmToggleDown,
-        .leftCueToggleUp,
-        .leftCueToggleDown,
-        .leftCueToggleCenter,
-        .leftToggle1Directional,
         .leftStaticVisualClutch
     ]
 
@@ -74,15 +87,271 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
         .rightTopSlider,
         .rightTrigger1,
         .rightTrigger2,
+        .engineStartHold,
+        .engineStopHold,
         .leftPlaybackButton,
         .leftHatUp,
         .leftHatRight,
         .leftHatDown,
-        .leftAuxThrottle
+        .leftAuxThrottle,
+        .leftToggle1Up,
+        .leftToggle1Down
     ]
+
+    public static let mapperRoles: [ControlRole] = {
+        var ordered: [ControlRole] = []
+        for role in requiredWizardRoles + optionalWizardRoles {
+            if !ordered.contains(role) {
+                ordered.append(role)
+            }
+        }
+        return ordered
+    }()
 
     public var isRequiredByDefault: Bool {
         Self.requiredWizardRoles.contains(self)
+    }
+
+    public var group: ControlRoleGroup {
+        switch self {
+        case .rightTakeButton,
+             .engineStartHold,
+             .engineStopHold,
+             .rightAcceptButton,
+             .leftArmToggleUp,
+             .leftArmToggleDown,
+             .leftCueToggleUp,
+             .leftCueToggleDown,
+             .leftCueToggleCenter,
+             .leftStaticVisualClutch:
+            return .criticalSafety
+        case .leftHatUp,
+             .leftHatRight,
+             .leftHatDown,
+             .leftPlaybackButton,
+             .leftModeRotary,
+             .leftBottomToggle1,
+             .leftBottomToggle2,
+             .leftBottomToggle3,
+             .leftBottomToggle4,
+             .leftBottomToggle5,
+             .leftBottomToggle6:
+            return .transport
+        case .rightTrigger1, .rightTrigger2:
+            return .effects
+        case .leftToggle1Up,
+             .leftToggle1Down,
+             .leftToggle1Directional:
+            return .choir
+        default:
+            return .videoAudioMacro
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case .rightAcceptButton: return "Proposal Accept"
+        case .rightStickX: return "Right Stick X"
+        case .rightStickY: return "Right Stick Y"
+        case .rightStickTwist: return "Right Stick Twist"
+        case .rightThumbX: return "Right Thumb X"
+        case .rightThumbY: return "Right Thumb Y"
+        case .rightTopSlider: return "Right Top Slider"
+        case .rightTakeButton: return "Take Button"
+        case .engineStartHold: return "Engine Start (Hold 5s)"
+        case .engineStopHold: return "Engine Stop (Hold 5s)"
+        case .rightTrigger1: return "Trigger A (Rhythm)"
+        case .rightTrigger2: return "Trigger B (Space)"
+        case .leftMainThrottle: return "Left Main Throttle"
+        case .leftAuxThrottle: return "Left Aux Throttle"
+        case .leftSecondThrottle: return "Left Second Throttle"
+        case .leftHatUp: return "Throttle Hat Up"
+        case .leftHatRight: return "Throttle Hat Right"
+        case .leftHatDown: return "Throttle Hat Down"
+        case .leftPlaybackButton: return "Playback Button"
+        case .leftModeRotary: return "Mode Rotary"
+        case .leftRotary1Decrease: return "Rotary 1 Axis"
+        case .leftRotary1Increase: return "Rotary 1 Increase"
+        case .leftRotary2Axis: return "Rotary 2 Axis"
+        case .leftBottomToggle1: return "Bottom Toggle 1"
+        case .leftBottomToggle2: return "Bottom Toggle 2"
+        case .leftBottomToggle3: return "Bottom Toggle 3"
+        case .leftBottomToggle4: return "Bottom Toggle 4"
+        case .leftBottomToggle5: return "Bottom Toggle 5"
+        case .leftBottomToggle6: return "Bottom Toggle 6"
+        case .leftArmToggleUp: return "Arm Toggle Up"
+        case .leftArmToggleDown: return "Arm Toggle Down"
+        case .leftCueToggleUp: return "Cue Toggle Up"
+        case .leftCueToggleDown: return "Cue Toggle Down"
+        case .leftCueToggleCenter: return "Cue Toggle Center"
+        case .leftToggle1Up: return "Toggle 1 Up (Choir On)"
+        case .leftToggle1Down: return "Toggle 1 Down (Choir Off)"
+        case .leftToggle1Directional: return "Toggle 1 Directional"
+        case .leftStaticVisualClutch: return "Static Visual Clutch"
+        }
+    }
+
+    public var shortLabel: String {
+        switch self {
+        case .rightStickX: return "R STK X"
+        case .rightStickY: return "R STK Y"
+        case .rightStickTwist: return "R TWIST"
+        case .rightThumbX: return "R THUMB X"
+        case .rightThumbY: return "R THUMB Y"
+        case .rightTakeButton: return "TAKE"
+        case .engineStartHold: return "ENG START"
+        case .engineStopHold: return "ENG STOP"
+        case .rightAcceptButton: return "ACCEPT"
+        case .rightTrigger1: return "TRIG A"
+        case .rightTrigger2: return "TRIG B"
+        case .leftMainThrottle: return "MAIN THR"
+        case .leftAuxThrottle: return "AUX THR"
+        case .leftSecondThrottle: return "2ND THR"
+        case .leftModeRotary: return "MODE ROT"
+        case .leftRotary1Decrease: return "ROTARY 1"
+        case .leftToggle1Up: return "CHOIR ON"
+        case .leftToggle1Down: return "CHOIR OFF"
+        case .leftStaticVisualClutch: return "CLUTCH"
+        default: return title.uppercased()
+        }
+    }
+
+    public var hint: String {
+        switch group {
+        case .criticalSafety:
+            return "Critical safety/commit control. Keep unambiguous and easy to reach."
+        case .transport:
+            return "Timeline, transport, and sample bank navigation."
+        case .videoAudioMacro:
+            return "Continuous macro/vector shaping control."
+        case .effects:
+            return "Hold or pressure-driven effects chain trigger."
+        case .choir:
+            return "Phone choir directional or contextual control."
+        }
+    }
+
+    public var operationalDescription: String {
+        switch self {
+        case .rightThumbX:
+            return "Secondary lateral macro lane. Default: vector spatial Y."
+        case .rightThumbY:
+            return "Secondary depth macro lane. Default: vector spatial Z."
+        case .rightTopSlider:
+            return "Continuous top slider macro. Default: text/texture amount."
+        case .leftAuxThrottle:
+            return "Aux continuous throttle lane. Default: text appearance probability."
+        case .leftArmToggleUp:
+            return "Master arm ON. Enables commit path when all other guards are valid."
+        case .leftArmToggleDown:
+            return "Master arm SAFE. Immediately disarms commit path."
+        case .leftCueToggleUp:
+            return "Phone gate TAKE (arm/prep)."
+        case .leftCueToggleDown:
+            return "Phone gate GO (commit) subject to safety guards."
+        case .leftCueToggleCenter:
+            return "Phone gate SAFE (clear/hold safe)."
+        case .leftToggle1Up:
+            return "Choir latched ON trigger (up position)."
+        case .leftToggle1Down:
+            return "Choir latched OFF trigger (down position)."
+        case .leftToggle1Directional:
+            return "Legacy choir directional axis. Prefer explicit Up/Down binds."
+        case .leftRotary1Decrease:
+            return "Continuous strict/loose blend axis (Rotary 1)."
+        case .leftStaticVisualClutch:
+            return "Hold to temporarily repurpose right stick for static visual override."
+        case .engineStartHold:
+            return "Hold for 5 seconds to start engine."
+        case .engineStopHold:
+            return "Hold for 5 seconds to stop engine."
+        default:
+            return hint
+        }
+    }
+
+    public var preferredHOTASLogicalDevice: HOTASLogicalDevice? {
+        switch self {
+        case .rightAcceptButton,
+             .rightStickX,
+             .rightStickY,
+             .rightStickTwist,
+             .rightThumbX,
+             .rightThumbY,
+             .rightTopSlider,
+             .rightTakeButton,
+             .engineStartHold,
+             .engineStopHold,
+             .rightTrigger1,
+             .rightTrigger2:
+            return .x56Stick
+        case .leftMainThrottle,
+             .leftAuxThrottle,
+             .leftSecondThrottle,
+             .leftHatUp,
+             .leftHatRight,
+             .leftHatDown,
+             .leftPlaybackButton,
+             .leftModeRotary,
+             .leftRotary1Decrease,
+             .leftRotary1Increase,
+             .leftRotary2Axis,
+             .leftBottomToggle1,
+             .leftBottomToggle2,
+             .leftBottomToggle3,
+             .leftBottomToggle4,
+             .leftBottomToggle5,
+             .leftBottomToggle6,
+             .leftArmToggleUp,
+             .leftArmToggleDown,
+             .leftCueToggleUp,
+             .leftCueToggleDown,
+             .leftCueToggleCenter,
+             .leftToggle1Up,
+             .leftToggle1Down,
+             .leftToggle1Directional,
+             .leftStaticVisualClutch:
+            return .x56Throttle
+        }
+    }
+
+    public var captureKinds: Set<ControlSignalKind> {
+        switch self {
+        case .rightStickX,
+             .rightStickY,
+             .rightStickTwist,
+             .rightThumbX,
+             .rightThumbY,
+             .rightTopSlider,
+             .leftMainThrottle,
+             .leftAuxThrottle,
+             .leftSecondThrottle,
+             .leftRotary1Decrease,
+             .leftRotary2Axis,
+             .leftToggle1Directional:
+            return [.axis]
+        case .leftModeRotary:
+            // Some X56 profiles expose this as analog dial, others as 3 discrete buttons.
+            return [.axis, .button]
+        case .leftToggle1Up,
+             .leftToggle1Down:
+            return [.button, .hat, .axis]
+        case .leftHatUp,
+             .leftHatRight,
+             .leftHatDown:
+            return [.hat]
+        default:
+            return [.button]
+        }
+    }
+
+    public var allowsMultipleBindings: Bool {
+        switch self {
+        case .leftModeRotary:
+            return true
+        default:
+            return false
+        }
     }
 }
 
@@ -144,13 +413,14 @@ public struct CalibrationSpec: Codable, Equatable, Sendable {
 
 public struct ControlBinding: Codable, Equatable, Sendable, Identifiable {
     public var id: String {
-        "\(role.rawValue)-\(sourceKind?.rawValue ?? "any")-\(sourceDeviceID ?? "any-device")"
+        "\(role.rawValue)-\(sourceKind?.rawValue ?? "any")-\(sourceDeviceID ?? "any-device")-\(logicalDevice?.rawValue ?? "any-logical")-\(controlID)-\(kind.rawValue)"
     }
 
     public var role: ControlRole
     public var controlID: String
     public var sourceKind: ControlSourceKind?
     public var sourceDeviceID: String?
+    public var logicalDevice: HOTASLogicalDevice?
     public var kind: ControlSignalKind
     public var calibration: CalibrationSpec
     public var required: Bool
@@ -160,6 +430,7 @@ public struct ControlBinding: Codable, Equatable, Sendable, Identifiable {
         controlID: String,
         sourceKind: ControlSourceKind?,
         sourceDeviceID: String? = nil,
+        logicalDevice: HOTASLogicalDevice? = nil,
         kind: ControlSignalKind,
         calibration: CalibrationSpec = .default,
         required: Bool? = nil
@@ -168,6 +439,17 @@ public struct ControlBinding: Codable, Equatable, Sendable, Identifiable {
         self.controlID = controlID
         self.sourceKind = sourceKind
         self.sourceDeviceID = sourceDeviceID
+        if sourceKind == .hotas {
+            if let logicalDevice {
+                self.logicalDevice = logicalDevice
+            } else if sourceDeviceID == nil {
+                self.logicalDevice = role.preferredHOTASLogicalDevice
+            } else {
+                self.logicalDevice = nil
+            }
+        } else {
+            self.logicalDevice = logicalDevice
+        }
         self.kind = kind
         self.calibration = calibration
         self.required = required ?? role.isRequiredByDefault
@@ -304,12 +586,52 @@ public struct ControlProfile: Codable, Equatable, Sendable {
     }
 
     public func bindings(for signal: ControlSignal) -> [ControlBinding] {
-        bindings
-            .filter { binding in
-                binding.controlID == signal.controlID
-                    && (binding.sourceKind == nil || binding.sourceKind == signal.sourceKind)
-                    && (binding.sourceDeviceID == nil || binding.sourceDeviceID == signal.sourceDeviceID)
+        let signalLogicalDevice = HOTASLogicalDeviceMatcher.classify(
+            sourceDeviceID: signal.sourceDeviceID,
+            controlID: signal.controlID
+        )
+        let signalControlIDs = HOTASLogicalDeviceMatcher.canonicalControlIDVariants(signal.controlID)
+        func controlIDMatches(_ bindingControlID: String) -> Bool {
+            let bindingVariants = HOTASLogicalDeviceMatcher.canonicalControlIDVariants(bindingControlID)
+            return !signalControlIDs.isDisjoint(with: bindingVariants)
+        }
+        let baseMatches = bindings.filter { binding in
+            controlIDMatches(binding.controlID)
+                && (binding.sourceKind == nil || binding.sourceKind == signal.sourceKind)
+                && (binding.sourceDeviceID == nil || binding.sourceDeviceID == signal.sourceDeviceID)
+        }
+
+        // Replug-safe fallback for HOTAS:
+        // if no exact sourceDevice match was found, allow bindings pinned to old
+        // source IDs to match by logical device affinity (stick/throttle).
+        let replugMatches: [ControlBinding] = {
+            guard baseMatches.isEmpty, signal.sourceKind == .hotas else { return [] }
+            return bindings.filter { binding in
+                guard controlIDMatches(binding.controlID) else { return false }
+                guard binding.sourceKind == nil || binding.sourceKind == signal.sourceKind else { return false }
+                guard binding.sourceDeviceID != nil else { return false }
+
+                let bindingLogical = binding.logicalDevice
+                    ?? HOTASLogicalDeviceMatcher.classify(
+                        sourceDeviceID: binding.sourceDeviceID ?? "",
+                        controlID: binding.controlID
+                    )
+                guard bindingLogical != .unspecified else { return false }
+                guard signalLogicalDevice != .unspecified else { return false }
+                return bindingLogical == signalLogicalDevice
             }
+        }()
+
+        let candidateMatches = baseMatches.isEmpty ? replugMatches : baseMatches
+        let strictMatches = candidateMatches.filter { binding in
+            binding.logicalDevice == nil
+                || binding.logicalDevice == .unspecified
+                || binding.logicalDevice == signalLogicalDevice
+        }
+
+        let matches = strictMatches.isEmpty ? candidateMatches : strictMatches
+
+        return matches
             .sorted { lhs, rhs in
                 let lhsMatchesSourceKind = lhs.sourceKind == signal.sourceKind
                 let rhsMatchesSourceKind = rhs.sourceKind == signal.sourceKind
@@ -333,6 +655,11 @@ public struct ControlProfile: Codable, Equatable, Sendable {
                 }
 
                 if lhs.sourceDeviceID == rhs.sourceDeviceID {
+                    let lhsMatchesLogical = lhs.logicalDevice == signalLogicalDevice
+                    let rhsMatchesLogical = rhs.logicalDevice == signalLogicalDevice
+                    if lhsMatchesLogical != rhsMatchesLogical {
+                        return lhsMatchesLogical
+                    }
                     return lhs.sourceKind != nil
                 }
 
@@ -345,13 +672,28 @@ public struct ControlProfile: Codable, Equatable, Sendable {
     }
 
     public mutating func setBinding(_ binding: ControlBinding) {
+        if binding.role.allowsMultipleBindings {
+            if let exactIndex = bindings.firstIndex(where: {
+                $0.role == binding.role
+                    && $0.sourceKind == binding.sourceKind
+                    && $0.controlID == binding.controlID
+                    && $0.logicalDevice == binding.logicalDevice
+                    && $0.sourceDeviceID == binding.sourceDeviceID
+            }) {
+                bindings[exactIndex] = binding
+                return
+            }
+            bindings.append(binding)
+            return
+        }
+
         if let index = bindings.firstIndex(where: {
             $0.role == binding.role && $0.sourceKind == binding.sourceKind
         }) {
             bindings[index] = binding
-        } else {
-            bindings.append(binding)
+            return
         }
+        bindings.append(binding)
     }
 
     public static let defaultX56StrictLive = ControlProfile(
@@ -381,9 +723,10 @@ public struct ControlProfile: Codable, Equatable, Sendable {
             ControlBinding(role: .leftHatRight, controlID: "gd:hat:right", sourceKind: .hotas, kind: .hat),
             ControlBinding(role: .leftHatDown, controlID: "gd:hat:down", sourceKind: .hotas, kind: .hat),
             ControlBinding(role: .leftPlaybackButton, controlID: "btn:4", sourceKind: .hotas, kind: .button, required: false),
-            ControlBinding(role: .leftModeRotary, controlID: "gd:dial", sourceKind: .hotas, kind: .axis),
-            ControlBinding(role: .leftRotary1Decrease, controlID: "btn:14", sourceKind: .hotas, kind: .button),
-            ControlBinding(role: .leftRotary1Increase, controlID: "btn:15", sourceKind: .hotas, kind: .button),
+            ControlBinding(role: .leftModeRotary, controlID: "btn:34", sourceKind: .hotas, kind: .button),
+            ControlBinding(role: .leftModeRotary, controlID: "btn:35", sourceKind: .hotas, kind: .button),
+            ControlBinding(role: .leftModeRotary, controlID: "btn:36", sourceKind: .hotas, kind: .button),
+            ControlBinding(role: .leftRotary1Decrease, controlID: "gd:dial", sourceKind: .hotas, kind: .axis),
             ControlBinding(role: .leftRotary2Axis, controlID: "gd:43", sourceKind: .hotas, kind: .axis),
             ControlBinding(role: .leftBottomToggle1, controlID: "btn:20", sourceKind: .hotas, kind: .button),
             ControlBinding(role: .leftBottomToggle2, controlID: "btn:21", sourceKind: .hotas, kind: .button),
@@ -393,10 +736,6 @@ public struct ControlProfile: Codable, Equatable, Sendable {
             ControlBinding(role: .leftBottomToggle6, controlID: "btn:25", sourceKind: .hotas, kind: .button),
             ControlBinding(role: .leftArmToggleUp, controlID: "btn:5", sourceKind: .hotas, kind: .button),
             ControlBinding(role: .leftArmToggleDown, controlID: "btn:6", sourceKind: .hotas, kind: .button),
-            ControlBinding(role: .leftCueToggleUp, controlID: "btn:7", sourceKind: .hotas, kind: .button),
-            ControlBinding(role: .leftCueToggleDown, controlID: "btn:8", sourceKind: .hotas, kind: .button),
-            ControlBinding(role: .leftCueToggleCenter, controlID: "btn:9", sourceKind: .hotas, kind: .button),
-            ControlBinding(role: .leftToggle1Directional, controlID: "gd:slider2", sourceKind: .hotas, kind: .axis),
             ControlBinding(role: .leftStaticVisualClutch, controlID: "btn:12", sourceKind: .hotas, kind: .button),
 
             // MIDI fallback mappings for dynamic vectors.
