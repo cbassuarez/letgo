@@ -269,6 +269,65 @@ body::before {
   isolation: isolate;
 }
 
+.fixed-video-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: #000;
+}
+
+.fixed-video-surface {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 260ms ease;
+}
+
+.fixed-video-surface.ready {
+  opacity: 1;
+}
+
+.fixed-video-fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-items: end;
+  justify-items: end;
+  padding: 1.1rem;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(230, 240, 248, 0.06), rgba(0, 0, 0, 0.98) 58%),
+    linear-gradient(180deg, rgba(220, 236, 247, 0.05), rgba(0, 0, 0, 0.9) 40%);
+}
+
+.fixed-video-fallback-scan {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.16;
+  background: repeating-linear-gradient(
+    180deg,
+    rgba(214, 231, 243, 0.5) 0px,
+    rgba(214, 231, 243, 0.5) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+.fixed-video-fallback-label {
+  position: relative;
+  margin: 0;
+  border: 1px solid rgba(208, 227, 238, 0.4);
+  background: rgba(0, 0, 0, 0.62);
+  padding: 0.24rem 0.52rem;
+  font-size: 0.58rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(223, 236, 245, 0.88);
+}
+
 .live-ribbon {
   position: absolute;
   left: 50%;
@@ -465,6 +524,10 @@ body::before {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .fixed-video-surface {
+    transition: none;
+  }
+
   .live-ribbon-button,
   .live-permission-button,
   .live-permission-continue {
