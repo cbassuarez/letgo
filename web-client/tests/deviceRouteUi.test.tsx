@@ -9,11 +9,15 @@ let sessionState: any;
 let permissionState: any;
 
 vi.mock("../src/components/FixedVideoLayer", () => ({
-  FixedVideoLayer: (): JSX.Element => <div data-testid="fixed-layer" />
+  FixedVideoLayer: ({ enabled }: { enabled: boolean }): JSX.Element | null => (
+    enabled ? <div data-testid="fixed-layer" /> : null
+  )
 }));
 
 vi.mock("../src/components/DynamicOverlay", () => ({
-  DynamicOverlay: (): JSX.Element => <div data-testid="dynamic-overlay" />
+  DynamicOverlay: ({ enabled }: { enabled: boolean }): JSX.Element | null => (
+    enabled ? <div data-testid="dynamic-overlay" /> : null
+  )
 }));
 
 vi.mock("../src/hooks/useConductorSession", () => ({
@@ -317,6 +321,18 @@ describe("DeviceRoute minimal live UI", () => {
     renderLive();
 
     expect(screen.getByTestId("live-status-toast").textContent).toContain("reconnecting");
+  });
+
+  it("keeps fixed output visible in preshow even when engine is off", () => {
+    sessionState.cue.showState = "preshow";
+    sessionState.cue.payload.engineRunning = false;
+    sessionState.cue.payload.showFixed = false;
+    sessionState.cue.payload.showDynamic = false;
+
+    renderLive();
+
+    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
+    expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
   });
 
   it("shows blocking permission modal until onDone completes", async () => {

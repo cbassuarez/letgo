@@ -229,9 +229,11 @@ export const DeviceRoute = (): JSX.Element => {
   const defaultDynamicEnabled = session.cue?.showState === "main";
   const engineRunning = boolFromPayload(cuePayload.engineRunning, false);
   const rawOutputMode = typeof cuePayload.outputMode === "string" ? cuePayload.outputMode : "legacy";
-  const interMode = rawOutputMode.toLowerCase() === "interstitial" || rawOutputMode.toLowerCase() === "off";
-  const showFixed = engineRunning && (boolFromPayload(cuePayload.showFixed, false) || interMode);
-  const showDynamic = engineRunning && boolFromPayload(cuePayload.showDynamic, defaultDynamicEnabled);
+  const normalizedOutputMode = rawOutputMode.toLowerCase();
+  const interMode = normalizedOutputMode.includes("interstitial") || normalizedOutputMode === "off";
+  const fixedStageState = session.cue?.showState === "preshow" || session.cue?.showState === "introduction" || session.cue?.showState === "ending";
+  const showFixed = boolFromPayload(cuePayload.showFixed, false) || interMode || fixedStageState;
+  const showDynamic = boolFromPayload(cuePayload.showDynamic, defaultDynamicEnabled);
   const outputMode = rawOutputMode;
   const compositorDisplayMode = showDynamic
     ? compositorMode === "unsupported"
