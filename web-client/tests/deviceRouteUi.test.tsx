@@ -335,6 +335,67 @@ describe("DeviceRoute minimal live UI", () => {
     expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
   });
 
+  it("keeps fixed output visible in introduction", () => {
+    sessionState.cue.showState = "introduction";
+    sessionState.cue.payload.engineRunning = false;
+    sessionState.cue.payload.showFixed = false;
+    sessionState.cue.payload.showDynamic = false;
+
+    renderLive();
+
+    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
+    expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
+  });
+
+  it("keeps fixed output visible in ending", () => {
+    sessionState.cue.showState = "ending";
+    sessionState.cue.payload.engineRunning = false;
+    sessionState.cue.payload.showFixed = false;
+    sessionState.cue.payload.showDynamic = false;
+
+    renderLive();
+
+    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
+    expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
+  });
+
+  it("forces fixed output in interstitial mode", () => {
+    sessionState.cue.showState = "main";
+    sessionState.cue.payload.outputMode = "interstitial_loop";
+    sessionState.cue.payload.engineRunning = false;
+    sessionState.cue.payload.showFixed = false;
+    sessionState.cue.payload.showDynamic = true;
+
+    renderLive();
+
+    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
+    expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
+  });
+
+  it("renders main dynamic mode on dynamic layer only", () => {
+    sessionState.cue.showState = "main";
+    sessionState.cue.payload.outputMode = "dynamic";
+    sessionState.cue.payload.showFixed = false;
+    sessionState.cue.payload.showDynamic = true;
+
+    renderLive();
+
+    expect(screen.queryByTestId("fixed-layer")).toBeNull();
+    expect(screen.getByTestId("dynamic-overlay")).toBeTruthy();
+  });
+
+  it("renders main static mode on fixed layer only", () => {
+    sessionState.cue.showState = "main";
+    sessionState.cue.payload.outputMode = "program";
+    sessionState.cue.payload.showFixed = true;
+    sessionState.cue.payload.showDynamic = false;
+
+    renderLive();
+
+    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
+    expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
+  });
+
   it("shows blocking permission modal until onDone completes", async () => {
     renderLive();
 

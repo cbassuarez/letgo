@@ -233,7 +233,7 @@ export const DeviceRoute = (): JSX.Element => {
   const interMode = normalizedOutputMode.includes("interstitial") || normalizedOutputMode === "off";
   const fixedStageState = session.cue?.showState === "preshow" || session.cue?.showState === "introduction" || session.cue?.showState === "ending";
   const showFixed = boolFromPayload(cuePayload.showFixed, false) || interMode || fixedStageState;
-  const showDynamic = boolFromPayload(cuePayload.showDynamic, defaultDynamicEnabled);
+  const showDynamic = interMode ? false : boolFromPayload(cuePayload.showDynamic, defaultDynamicEnabled);
   const outputMode = rawOutputMode;
   const compositorDisplayMode = showDynamic
     ? compositorMode === "unsupported"
