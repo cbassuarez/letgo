@@ -282,6 +282,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
           });
 
           broadcastCue(cue);
+          broadcastShowSnapshot();
           composeAndBroadcastTextScene(true, cue.cueId);
         } catch (error) {
           send(socket, {
@@ -1130,6 +1131,16 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       sentAt: Date.now()
     } satisfies WireEnvelope<CueCommand>;
 
+    broadcastToDevices(envelope);
+    broadcastToHarness(envelope);
+  }
+
+  function broadcastShowSnapshot(): void {
+    const envelope = {
+      kind: "show_snapshot",
+      data: deps.show.snapshot(),
+      sentAt: Date.now()
+    } satisfies WireEnvelope;
     broadcastToDevices(envelope);
     broadcastToHarness(envelope);
   }

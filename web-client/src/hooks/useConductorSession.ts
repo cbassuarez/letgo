@@ -11,6 +11,7 @@ import {
   type DeviceZone,
   type ParticipantVectorPayload,
   type ParamVector,
+  type ShowState,
   type PhoneAudioAckPayload,
   type PhoneAudioCommandPayload,
   type PhoneAudioPoolStatePayload,
@@ -135,6 +136,52 @@ const defaultProceduralState: ProgramProceduralState = {
     probability: 0.5,
     strictRatio: 0.5,
     looseRatio: 0.5
+  }
+};
+
+const allShowStates: ShowState[] = [
+  "idle",
+  "preshow",
+  "introduction",
+  "main",
+  "ending",
+  "hold",
+  "aborted",
+  "recovery"
+];
+
+const isShowState = (value: unknown): value is ShowState =>
+  typeof value === "string" && allShowStates.includes(value as ShowState);
+
+const snapshotPayloadForState = (showState: ShowState): Record<string, unknown> => {
+  switch (showState) {
+    case "preshow":
+    case "introduction":
+    case "ending":
+      return {
+        outputMode: "static",
+        showFixed: true,
+        showDynamic: false,
+        interstitialActive: false
+      };
+    case "main":
+      return {
+        outputMode: "dynamic",
+        showFixed: false,
+        showDynamic: true,
+        interstitialActive: false
+      };
+    case "idle":
+    case "hold":
+    case "aborted":
+    case "recovery":
+    default:
+      return {
+        outputMode: "off",
+        showFixed: true,
+        showDynamic: false,
+        interstitialActive: true
+      };
   }
 };
 
@@ -344,8 +391,24 @@ export const useConductorSession = (hashedId: string): SessionState => {
         const envelope = JSON.parse(event.data) as WireEnvelope;
 
         if (envelope.kind === "show_snapshot") {
-          const snapshot = envelope.data as { logicalTime: number };
+          const snapshot = envelope.data as { logicalTime: number; state?: ShowState; version?: number };
           setLogicalNow(snapshot.logicalTime);
+          if (isShowState(snapshot.state)) {
+            const basePayload = (cueRef.current?.payload ?? {}) as Record<string, unknown>;
+            const nextCue: CueCommand = {
+              cueId: `${snapshot.state}:${Math.round(snapshot.logicalTime)}:snapshot`,
+              showState: snapshot.state,
+              logicalTime: snapshot.logicalTime,
+              payload: {
+                ...basePayload,
+                ...snapshotPayloadForState(snapshot.state)
+              },
+              version: typeof snapshot.version === "number" ? snapshot.version : (cueRef.current?.version ?? 1),
+              action: cueRef.current?.action ?? "jump"
+            };
+            cueRef.current = nextCue;
+            setCue(nextCue);
+          }
         }
 
         if (envelope.kind === "cue") {

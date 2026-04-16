@@ -44,6 +44,25 @@ describe("FixedVideoLayer", () => {
     );
   });
 
+  it("prioritizes scene playlist for ending even when output mode is interstitial", () => {
+    render(
+      <FixedVideoLayer
+        cue={{
+          ...baseCue,
+          showState: "ending",
+          payload: { outputMode: "interstitial_loop" }
+        }}
+        logicalNow={0}
+        enabled
+      />
+    );
+
+    const layer = screen.getByTestId("fixed-video-layer");
+    expect(layer.getAttribute("data-active-source")).toBe(
+      "https://media.letgofilm.com/test-shots-v1/ending/ending.m3u8"
+    );
+  });
+
   it("prefers explicit media ref over interstitial fallback when both are present", () => {
     render(
       <FixedVideoLayer

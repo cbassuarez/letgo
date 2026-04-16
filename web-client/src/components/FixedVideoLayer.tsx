@@ -58,6 +58,15 @@ const resolveConfiguredHlsSource = (showState: string | null, interstitialActive
     interstitial: normalizeUrl(env.VITE_HLS_INTERSTITIAL_URL) ?? joinUrl(base, "interstitial/interstitial.m3u8")
   };
 
+  if (showState === "preshow") {
+    return configured.preshow;
+  }
+  if (showState === "introduction") {
+    return configured.introduction;
+  }
+  if (showState === "ending") {
+    return configured.ending;
+  }
   if (interstitialActive) {
     return configured.interstitial;
   }
