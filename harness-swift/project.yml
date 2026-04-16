@@ -30,12 +30,15 @@ targets:
       - path: Sources/ConductorHarnessApp
       - path: Sources/ConductorHarnessApp/Resources
         buildPhase: resources
+      - path: letgo.icon
+        buildPhase: resources
     dependencies:
       - target: ConductorCore
       - package: swift-collections
         product: Collections
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: letgo
         PRODUCT_BUNDLE_IDENTIFIER: com.letgo.conductor.harness
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES

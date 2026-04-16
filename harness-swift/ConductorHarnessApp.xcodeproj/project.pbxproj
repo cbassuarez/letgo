@@ -8,12 +8,11 @@
 
 /* Begin PBXBuildFile section */
 		076536A1895933293FAF03AD /* IBMPlexMono-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 5805F38E6A2108591D11869E /* IBMPlexMono-Bold.ttf */; };
-		0A11F0011111111111111111 /* HOTASMapperModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A11F1011111111111111111 /* HOTASMapperModels.swift */; };
-		0A11F0022222222222222222 /* HOTASMapperStudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A11F1022222222222222222 /* HOTASMapperStudioView.swift */; };
-		0A11F0033333333333333333 /* HOTASLogicalDeviceMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A11F1033333333333333333 /* HOTASLogicalDeviceMatcher.swift */; };
 		0B099340F33CC06BF5499DEB /* VufineRealtimeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 104BCAA5060AD3B9079D6929 /* VufineRealtimeView.swift */; };
 		0F6A56BBA437A766CC9271F4 /* ControlActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 267DC8734AE2C64EC462EEEF /* ControlActions.swift */; };
 		127A26FBB2247C65608DA4D5 /* HUDTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1912142967A7B120FC153A6 /* HUDTelemetry.swift */; };
+		14860516E2488FAAB88F9C49 /* HOTASMapperStudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86D05366E0ECE5E68DD3BEC8 /* HOTASMapperStudioView.swift */; };
+		15A0B5D43FD81F3EF11EFB82 /* HOTASLogicalDeviceMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCEAEE8DC3F8D6D2F89FDDEC /* HOTASLogicalDeviceMatcher.swift */; };
 		19FDD46C14A51F3E01A08F32 /* ControlSources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56C926477647D701DA7EFC75 /* ControlSources.swift */; };
 		1CBCCC61220A0F86C0A8E05B /* Collections in Frameworks */ = {isa = PBXBuildFile; productRef = 68D85A2B297F5C56813DB2D2 /* Collections */; };
 		1E649D6CA68646DFA3BB3FB5 /* ConsolePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0B2A19D6D45AD434060C96C /* ConsolePanel.swift */; };
@@ -36,6 +35,7 @@
 		72C1D6879F0FF1A644DC4B1A /* SafetyCoverButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = C681DA77ECFC8F98E83C7A6F /* SafetyCoverButton.swift */; };
 		7336E9550D95CE0C6FEC7C2C /* ConductorPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81CDC42646C39E24DFAEE62F /* ConductorPreviewView.swift */; };
 		7BCDC51D24E9DF92AAA85892 /* ProceduralState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C763909381F19C8EA13023F /* ProceduralState.swift */; };
+		850C00B3AC44F0DCAA008339 /* letgo.icon in Resources */ = {isa = PBXBuildFile; fileRef = C07954739E71537A1C10C778 /* letgo.icon */; };
 		8AB684B10B776F4677CF14FC /* VufineHUDSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9942EED02F23A1C81DE05E3F /* VufineHUDSnapshot.swift */; };
 		8B78C5DFC10ABA6EE8301457 /* IBMPlexMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 79243DDC6E4B0DE2FB30C0FB /* IBMPlexMono-Regular.ttf */; };
 		8BF57B82AA974EDC54017CD8 /* MIDIEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F1784CD907BC515895336F4 /* MIDIEngine.swift */; };
@@ -50,6 +50,7 @@
 		A3AA1081A741ABDEA37969F4 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9BDF727C34F8CF4F49035F8 /* Models.swift */; };
 		A4509A6C724CB59470F74955 /* SegmentedCountdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAE2003BB3E2DD1D81C0A32B /* SegmentedCountdown.swift */; };
 		A4BD2359414215FE8B094A54 /* OutputLatchController.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED4D001665D61DE2C051E3E8 /* OutputLatchController.swift */; };
+		A82EABC3E44AEA99F0A5D2F5 /* HOTASMapperModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBECCC1D3282693826D0C45B /* HOTASMapperModels.swift */; };
 		A8E43468729B251A23AF6C99 /* CoreMLScoringModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBE2A39A0D2F92E2E487ACB9 /* CoreMLScoringModel.swift */; };
 		A8FB52461827F30C23C1E694 /* WindowChromeCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0BCAE9795F970AA4D34F5BC /* WindowChromeCoordinator.swift */; };
 		A9CC32A26B054FB2D5DFC7D6 /* InspectorModalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CE963C52E05BC5C6C14DCA5 /* InspectorModalView.swift */; };
@@ -98,9 +99,6 @@
 
 /* Begin PBXFileReference section */
 		0DD0F6310510B2A41E8BB47A /* StaticAudioMacros.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StaticAudioMacros.swift; sourceTree = "<group>"; };
-		0A11F1011111111111111111 /* HOTASMapperModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HOTASMapperModels.swift; sourceTree = "<group>"; };
-		0A11F1022222222222222222 /* HOTASMapperStudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HOTASMapperStudioView.swift; sourceTree = "<group>"; };
-		0A11F1033333333333333333 /* HOTASLogicalDeviceMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HOTASLogicalDeviceMatcher.swift; sourceTree = "<group>"; };
 		0FF5F7677A55DC7E1BFE49DB /* AudioOpsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOpsModels.swift; sourceTree = "<group>"; };
 		104BCAA5060AD3B9079D6929 /* VufineRealtimeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VufineRealtimeView.swift; sourceTree = "<group>"; };
 		1AF90FF2883048ADD4EFA6BB /* ShowStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowStateMachine.swift; sourceTree = "<group>"; };
@@ -126,6 +124,7 @@
 		7D8C42FC26460491C825EB7D /* FlightLogTape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightLogTape.swift; sourceTree = "<group>"; };
 		81CDC42646C39E24DFAEE62F /* ConductorPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConductorPreviewView.swift; sourceTree = "<group>"; };
 		82ACBDDE9235845672187367 /* IBMPlexMono-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "IBMPlexMono-Medium.ttf"; sourceTree = "<group>"; };
+		86D05366E0ECE5E68DD3BEC8 /* HOTASMapperStudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HOTASMapperStudioView.swift; sourceTree = "<group>"; };
 		87DB3E0B8F3894AABCAF309A /* AppPresentationMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPresentationMode.swift; sourceTree = "<group>"; };
 		8AF72F51F31076855E881E7C /* IBMPlexMono-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "IBMPlexMono-SemiBold.ttf"; sourceTree = "<group>"; };
 		8C763909381F19C8EA13023F /* ProceduralState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProceduralState.swift; sourceTree = "<group>"; };
@@ -141,14 +140,17 @@
 		B0B2A19D6D45AD434060C96C /* ConsolePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsolePanel.swift; sourceTree = "<group>"; };
 		BB1F7B2C3AC4A4E4886D324C /* InspectorPresentationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorPresentationState.swift; sourceTree = "<group>"; };
 		BBE2A39A0D2F92E2E487ACB9 /* CoreMLScoringModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreMLScoringModel.swift; sourceTree = "<group>"; };
+		C07954739E71537A1C10C778 /* letgo.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = letgo.icon; sourceTree = "<group>"; };
 		C681DA77ECFC8F98E83C7A6F /* SafetyCoverButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyCoverButton.swift; sourceTree = "<group>"; };
 		C70A25D9325FCC5D8DB42E33 /* ConductorCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = ConductorCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		CBECCC1D3282693826D0C45B /* HOTASMapperModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HOTASMapperModels.swift; sourceTree = "<group>"; };
 		CC2A40F836093865811FBC88 /* AudioRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRouter.swift; sourceTree = "<group>"; };
 		D5BD3063CA875F5C8322E287 /* CoreMIDIEventSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreMIDIEventSource.swift; sourceTree = "<group>"; };
 		D5E04A3068D796CAFEDC9602 /* TextSelectionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSelectionEngine.swift; sourceTree = "<group>"; };
 		D83884D787D6ECB0A4369BDF /* PerformanceLaunchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceLaunchView.swift; sourceTree = "<group>"; };
 		DA0B0C206605B1BEF659B7D6 /* SafetyMonitorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyMonitorView.swift; sourceTree = "<group>"; };
 		DBBF28139F42275126A7FC9C /* ConductorHarnessApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ConductorHarnessApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DCEAEE8DC3F8D6D2F89FDDEC /* HOTASLogicalDeviceMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HOTASLogicalDeviceMatcher.swift; sourceTree = "<group>"; };
 		DD918E63BA355AEB23BC9CED /* ConductorHarnessViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConductorHarnessViewModel.swift; sourceTree = "<group>"; };
 		DF2731A008E2FD07B56DD084 /* ConductorSurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConductorSurfaceView.swift; sourceTree = "<group>"; };
 		E0BCAE9795F970AA4D34F5BC /* WindowChromeCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowChromeCoordinator.swift; sourceTree = "<group>"; };
@@ -184,10 +186,10 @@
 				333F4E6DF516A146C08DBAC1 /* ControlProfile.swift */,
 				98960F0ED17027E839BF3C74 /* ControlProfileMapper.swift */,
 				78E19F30A3E68CB5127326F8 /* ControlSignals.swift */,
-				0A11F1033333333333333333 /* HOTASLogicalDeviceMatcher.swift */,
 				56C926477647D701DA7EFC75 /* ControlSources.swift */,
 				D5BD3063CA875F5C8322E287 /* CoreMIDIEventSource.swift */,
 				BBE2A39A0D2F92E2E487ACB9 /* CoreMLScoringModel.swift */,
+				DCEAEE8DC3F8D6D2F89FDDEC /* HOTASLogicalDeviceMatcher.swift */,
 				5F1784CD907BC515895336F4 /* MIDIEngine.swift */,
 				A9BDF727C34F8CF4F49035F8 /* Models.swift */,
 				ED4D001665D61DE2C051E3E8 /* OutputLatchController.swift */,
@@ -216,10 +218,10 @@
 				81CDC42646C39E24DFAEE62F /* ConductorPreviewView.swift */,
 				DF2731A008E2FD07B56DD084 /* ConductorSurfaceView.swift */,
 				9A9A0633AA0F280514570416 /* ControlActionRouter.swift */,
+				CBECCC1D3282693826D0C45B /* HOTASMapperModels.swift */,
+				86D05366E0ECE5E68DD3BEC8 /* HOTASMapperStudioView.swift */,
 				2FDB18B39387F5821E579F25 /* HUDGaugeView.swift */,
 				F1912142967A7B120FC153A6 /* HUDTelemetry.swift */,
-				0A11F1011111111111111111 /* HOTASMapperModels.swift */,
-				0A11F1022222222222222222 /* HOTASMapperStudioView.swift */,
 				9CE963C52E05BC5C6C14DCA5 /* InspectorModalView.swift */,
 				BB1F7B2C3AC4A4E4886D324C /* InspectorPresentationState.swift */,
 				9DFCC67BDEEA1B8E010D21FC /* LowLatencyPlayerLayerView.swift */,
@@ -241,6 +243,7 @@
 		6772F9F0C0484ADB8E4FBBE5 = {
 			isa = PBXGroup;
 			children = (
+				C07954739E71537A1C10C778 /* letgo.icon */,
 				3C2D78873BB066D645FA3AFC /* ConductorCore */,
 				5B127FC79578138CE0C13192 /* ConductorHarnessApp */,
 				B31867D88EB80D6FB365B756 /* Products */,
@@ -383,6 +386,7 @@
 				478E3A9C0BDE49C7EB321E90 /* IBMPlexMono-Medium.ttf in Resources */,
 				8B78C5DFC10ABA6EE8301457 /* IBMPlexMono-Regular.ttf in Resources */,
 				381EA17FEECB9860750DB15B /* IBMPlexMono-SemiBold.ttf in Resources */,
+				850C00B3AC44F0DCAA008339 /* letgo.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -404,10 +408,10 @@
 				375474312AAACD8310176CD7 /* ConsoleTheme.swift in Sources */,
 				9DCFF92465B04D57A7CA99C7 /* ControlActionRouter.swift in Sources */,
 				8F8CDC84F0139DCDB55F7784 /* FlightLogTape.swift in Sources */,
+				A82EABC3E44AEA99F0A5D2F5 /* HOTASMapperModels.swift in Sources */,
+				14860516E2488FAAB88F9C49 /* HOTASMapperStudioView.swift in Sources */,
 				1F73149A6DDF2C8833231B0E /* HUDGaugeView.swift in Sources */,
 				127A26FBB2247C65608DA4D5 /* HUDTelemetry.swift in Sources */,
-				0A11F0011111111111111111 /* HOTASMapperModels.swift in Sources */,
-				0A11F0022222222222222222 /* HOTASMapperStudioView.swift in Sources */,
 				30EB6D3990835901B7FFA826 /* IlluminatedButton.swift in Sources */,
 				A9CC32A26B054FB2D5DFC7D6 /* InspectorModalView.swift in Sources */,
 				F88902E99A54A8371B37BB46 /* InspectorPresentationState.swift in Sources */,
@@ -439,10 +443,10 @@
 				8ED3D37D6D7518F84853876C /* ControlProfile.swift in Sources */,
 				535FAB3B49A95FDEA8E727DF /* ControlProfileMapper.swift in Sources */,
 				CCA22ADA021B7ADAEB2BE2EA /* ControlSignals.swift in Sources */,
-				0A11F0033333333333333333 /* HOTASLogicalDeviceMatcher.swift in Sources */,
 				19FDD46C14A51F3E01A08F32 /* ControlSources.swift in Sources */,
 				B984C64FD717EA561DC20253 /* CoreMIDIEventSource.swift in Sources */,
 				A8E43468729B251A23AF6C99 /* CoreMLScoringModel.swift in Sources */,
+				15A0B5D43FD81F3EF11EFB82 /* HOTASLogicalDeviceMatcher.swift in Sources */,
 				8BF57B82AA974EDC54017CD8 /* MIDIEngine.swift in Sources */,
 				A3AA1081A741ABDEA37969F4 /* Models.swift in Sources */,
 				A4BD2359414215FE8B094A54 /* OutputLatchController.swift in Sources */,
@@ -618,7 +622,7 @@
 		BB75E5EF2DE1D6AC29405F43 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = letgo;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -641,7 +645,7 @@
 		BFB7C1F1D88A2CCAE4571943 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = letgo;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;

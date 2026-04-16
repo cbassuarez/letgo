@@ -1,0 +1,111 @@
+{
+  "fill" : "system-dark",
+  "groups" : [
+    {
+      "blend-mode" : "screen",
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "image-name" : "music.png",
+          "name" : "music",
+          "position" : {
+            "scale" : 0.73,
+            "translation-in-points" : [
+              0,
+              -4.0150000000001
+            ]
+          }
+        },
+        {
+          "blend-mode" : "normal",
+          "image-name" : "music.png",
+          "name" : "music",
+          "position" : {
+            "scale" : 0.73,
+            "translation-in-points" : [
+              0,
+              -4.0150000000001
+            ]
+          }
+        }
+      ],
+      "position" : {
+        "scale" : 1.45,
+        "translation-in-points" : [
+          0,
+          0
+        ]
+      },
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    },
+    {
+      "blur-material" : 0.26,
+      "hidden" : true,
+      "layers" : [
+        {
+          "blend-mode" : "multiply",
+          "fill" : {
+            "linear-gradient" : [
+              "display-p3:0.04168,0.16651,1.00000,1.00000",
+              "srgb:0.00000,0.58980,1.00000,1.00000"
+            ],
+            "orientation" : {
+              "start" : {
+                "x" : 0.5,
+                "y" : 1.46657294500583
+              },
+              "stop" : {
+                "x" : 0.5,
+                "y" : 0
+              }
+            }
+          },
+          "image-name" : "film.png",
+          "name" : "film",
+          "position" : {
+            "scale" : 1.24,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "fill" : {
+            "solid" : "srgb:1.00000,1.00000,1.00000,1.00000"
+          },
+          "image-name" : "film.png",
+          "name" : "film",
+          "position" : {
+            "scale" : 1.24,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.76
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 1
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

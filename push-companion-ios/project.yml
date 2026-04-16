@@ -10,8 +10,11 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - Sources/PushCompanionIOS
+      - path: ../harness-swift/letgo.icon
+        buildPhase: resources
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: letgo
         PRODUCT_BUNDLE_IDENTIFIER: com.letgo.push.companion
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES

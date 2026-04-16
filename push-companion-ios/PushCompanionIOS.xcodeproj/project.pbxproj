@@ -12,6 +12,7 @@
 		42DB4C5EA41B12D50ABFA6EE /* IBMPlexMono-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = ACA225BE60698AF879D9EB44 /* IBMPlexMono-Medium.ttf */; };
 		571B3C045CA9320BCB4A8DE6 /* IBMPlexMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = E2544EC0BD3D6E5766EF6E89 /* IBMPlexMono-Regular.ttf */; };
 		5864946D68596E3E2B5FA70F /* DeckSceneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74CED272E5346F6A531684BE /* DeckSceneView.swift */; };
+		607C75AAAF1AFDFBB157AE47 /* letgo.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3D15589F51281EB744A14E83 /* letgo.icon */; };
 		64E7B1E1D70194A3EC0A3B60 /* PushDeckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1532A708E7E8CB748EEDC402 /* PushDeckView.swift */; };
 		7A3EA8A2642478C424446206 /* PushDeckViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A64990624ECD39734F97524 /* PushDeckViewModel.swift */; };
 		7C00A227A42885CD305C7741 /* PushQuantizeModal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B229DD3BA3E6AB8F268D538 /* PushQuantizeModal.swift */; };
@@ -34,6 +35,7 @@
 		1532A708E7E8CB748EEDC402 /* PushDeckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushDeckView.swift; sourceTree = "<group>"; };
 		258278F067F323BBF3E314A0 /* PushDeckWireModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushDeckWireModels.swift; sourceTree = "<group>"; };
 		36D547E4E1C8D98AC4E9C382 /* IBMPlexMono-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "IBMPlexMono-SemiBold.ttf"; sourceTree = "<group>"; };
+		3D15589F51281EB744A14E83 /* letgo.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = ../harness-swift/letgo.icon; sourceTree = "<group>"; };
 		5E6B6E348C88D1554A76E81F /* PushCompanionIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushCompanionIOSApp.swift; sourceTree = "<group>"; };
 		74CED272E5346F6A531684BE /* DeckSceneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeckSceneView.swift; sourceTree = "<group>"; };
 		8B580B8E93CD2E74AB1197CA /* PushNotesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotesView.swift; sourceTree = "<group>"; };
@@ -133,6 +135,7 @@
 			isa = PBXGroup;
 			children = (
 				1B027B9FB4F6E48C355D2731 /* PushCompanionIOS */,
+				3D15589F51281EB744A14E83 /* letgo.icon */,
 				AC215BFA62A15F7215B34E21 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -201,6 +204,7 @@
 				42DB4C5EA41B12D50ABFA6EE /* IBMPlexMono-Medium.ttf in Resources */,
 				571B3C045CA9320BCB4A8DE6 /* IBMPlexMono-Regular.ttf in Resources */,
 				CB774AB8DBD8ABDE5FA3A9D2 /* IBMPlexMono-SemiBold.ttf in Resources */,
+				607C75AAAF1AFDFBB157AE47 /* letgo.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -253,7 +257,7 @@
 		20E2B450B1B42883E1142700 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = letgo;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -349,7 +353,7 @@
 		771AF85137780106A408B81C /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = letgo;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
