@@ -252,7 +252,14 @@ export const DeviceRoute = (): JSX.Element => {
 
   const inferredOutputMode = defaultOutputModeForShowState(session.cue?.showState ?? null);
   const defaultDynamicEnabled = session.cue?.showState === "main";
-  const engineRunning = boolFromPayload(cuePayload.engineRunning, session.cue?.showState !== "idle");
+  const inferredEngineFromAudioPath =
+    session.phoneAudioPoolState.quadRouteReady ||
+    session.phoneAudioPoolState.gateArmed ||
+    session.phoneAudioPoolState.gateCommitted;
+  const engineRunning = boolFromPayload(
+    cuePayload.engineRunning,
+    inferredEngineFromAudioPath || session.cue?.showState !== "idle"
+  );
   const rawOutputMode = typeof cuePayload.outputMode === "string" ? cuePayload.outputMode : inferredOutputMode;
   const normalizedOutputMode = rawOutputMode.toLowerCase();
   const interMode = normalizedOutputMode.includes("interstitial") || normalizedOutputMode === "off";
