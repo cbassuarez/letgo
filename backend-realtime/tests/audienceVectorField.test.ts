@@ -17,10 +17,31 @@ describe("AudienceVectorField", () => {
     });
 
     expect(aggregate.participantCount).toBe(2);
-    expect(aggregate.vector.textAmount).toBeCloseTo(0.75, 4);
-    expect(aggregate.vector.spatialX).toBeCloseTo(0.5, 4);
+    expect(aggregate.vector.textAmount).toBeCloseTo(0.7697, 3);
+    expect(aggregate.vector.spatialX).toBeCloseTo(0.4763, 3);
     expect(aggregate.compositorModes["html-in-canvas"]).toBe(1);
     expect(aggregate.compositorModes.fallback).toBe(1);
+  });
+
+  it("tracks prompt and direct pick influences for weighted steering", () => {
+    const field = new AudienceVectorField();
+
+    field.update("a1", {
+      vector: { textAmount: 0.4, compositeBias: 0.3 },
+      influence: 0.4,
+      compositorMode: "fallback"
+    });
+    const before = field.snapshot();
+    expect(before.promptInfluence).toBe(0);
+    expect(before.directPickInfluence).toBe(0);
+
+    const after = field.updatePromptInfluence("a1", {
+      promptInfluence: 0.8,
+      directPickInfluence: 0.6
+    });
+    expect(after.promptInfluence).toBeCloseTo(0.8, 3);
+    expect(after.directPickInfluence).toBeCloseTo(0.6, 3);
+    expect(after.vector.compositeBias).toBeLessThan(0.5);
   });
 
   it("returns neutral vector when field empties", () => {

@@ -14,6 +14,11 @@ interface ScriptCandidate {
   weight: number;
 }
 
+interface GeneratedScenePool {
+  generatedAt: number;
+  candidates: ScriptCandidate[];
+}
+
 const strictScriptBank: ScriptCandidate[] = [
   { id: "line-1", text: "The cyan night opened and each phone became a tuning fork.", weight: 0.84 },
   { id: "line-2", text: "Every tilt reshaped the choir of screens into one shared breath.", weight: 0.76 },
@@ -46,6 +51,16 @@ const rewriteLexicon: Record<string, string[]> = {
   breath: ["rhythm", "tempo", "current"]
 };
 
+const bannedTextPatterns: RegExp[] = [
+  /\bjourney\b/i,
+  /\bgrowth\b/i,
+  /\bhealing\b/i,
+  /\btherapy\b/i,
+  /\btrauma\b/i,
+  /\btranscend/i,
+  /\bsavior\b/i
+];
+
 const fallbackAudioFeatures: AudioFeaturePayload = {
   rms: 0,
   spectralCentroid: 0.5,
@@ -77,6 +92,7 @@ const defaultScene: TextScenePayload = {
 export class TextSceneComposerService {
   private sceneVersion = 0;
   private currentScene: TextScenePayload = defaultScene;
+  private readonly generatedPoolCache = new Map<string, GeneratedScenePool>();
 
   snapshot(): TextScenePayload {
     return this.currentScene;
@@ -97,6 +113,14 @@ export class TextSceneComposerService {
     const strictRatio = clamp01(input.textBlend?.strictRatio ?? 0.5);
     const looseRatio = clamp01(1 - strictRatio);
 
+    const generatedPool = this.getGeneratedPool({
+      cueId: input.cueId,
+      pickEpoch: input.pickEpoch ?? 0,
+      vector,
+      pickLabel,
+      strictRatio
+    });
+
     const strictScored = strictScriptBank
       .map((candidate) => ({
         candidate,
@@ -110,7 +134,7 @@ export class TextSceneComposerService {
       }))
       .sort((lhs, rhs) => rhs.score - lhs.score);
 
-    const looseScored = looseSourceBank
+    const looseScored = [...generatedPool, ...looseSourceBank]
       .map((candidate) => ({
         candidate,
         score:
@@ -168,6 +192,119 @@ export class TextSceneComposerService {
     };
 
     return this.currentScene;
+  }
+
+  private getGeneratedPool(input: {
+    cueId: string;
+    pickEpoch: number;
+    vector: ParamVector;
+    pickLabel: string;
+    strictRatio: number;
+  }): ScriptCandidate[] {
+    const cueBucket = input.cueId.split(":").slice(0, 2).join(":");
+    const key = `${cueBucket}:${input.pickEpoch}:${Math.round(input.vector.textAmount * 10)}:${Math.round(input.strictRatio * 10)}:${input.pickLabel}`;
+    const now = Date.now();
+    const cached = this.generatedPoolCache.get(key);
+    if (cached && now - cached.generatedAt < 70_000) {
+      return cached.candidates;
+    }
+
+    const generated = this.generateCandidates({
+      seed: stableHashToSeed(`${key}:${now >> 12}`),
+      pickLabel: input.pickLabel,
+      strictRatio: input.strictRatio,
+      vector: input.vector
+    });
+    this.generatedPoolCache.set(key, {
+      generatedAt: now,
+      candidates: generated
+    });
+
+    if (this.generatedPoolCache.size > 120) {
+      const oldest = [...this.generatedPoolCache.entries()].sort((lhs, rhs) => lhs[1].generatedAt - rhs[1].generatedAt)[0];
+      if (oldest) {
+        this.generatedPoolCache.delete(oldest[0]);
+      }
+    }
+
+    return generated;
+  }
+
+  private generateCandidates(input: {
+    seed: number;
+    pickLabel: string;
+    strictRatio: number;
+    vector: ParamVector;
+  }): ScriptCandidate[] {
+    const subjects = [
+      "the frame",
+      "the screen edge",
+      "the signal band",
+      "this room",
+      "the current layer",
+      "our shared surface"
+    ];
+    const verbs = ["folds", "tilts", "holds", "cuts", "threads", "drifts", "splits", "cascades"];
+    const objects = [
+      "into static grain",
+      "through a narrow split",
+      "toward the center hold",
+      "into a colder hue",
+      "toward a live seam",
+      "through the next cue"
+    ];
+    const tails = [
+      "while everyone watches it settle.",
+      "before the room resolves.",
+      "and the line keeps moving.",
+      "until the vote closes.",
+      "and no device leads alone.",
+      "while the field keeps score."
+    ];
+
+    const emphasis = input.pickLabel.includes("echo")
+      ? "Echo stays active."
+      : input.pickLabel.includes("scatter")
+        ? "Scatter keeps the edges alive."
+        : input.pickLabel.includes("focus")
+          ? "Focus tightens the center."
+          : "The cue stays open.";
+
+    const candidates: ScriptCandidate[] = [];
+    for (let index = 0; index < 8; index += 1) {
+      const seed = input.seed + index * 37;
+      const subject = subjects[seed % subjects.length];
+      const verb = verbs[(seed >>> 3) % verbs.length];
+      const object = objects[(seed >>> 5) % objects.length];
+      const tail = tails[(seed >>> 7) % tails.length];
+      const densityHint =
+        input.vector.textAmount > 0.62 ? "Keep speaking inside the frame." : "Hold the line short.";
+      const text = this.sanitizeGeneratedText(
+        `${subject} ${verb} ${object} ${tail} ${emphasis} ${densityHint}`
+      );
+      if (!this.passesGuardrails(text)) {
+        continue;
+      }
+      candidates.push({
+        id: `gen-${seed.toString(16)}-${index}`,
+        text,
+        weight: clamp01(0.55 + (input.strictRatio * 0.2) + ((seed % 100) / 1000))
+      });
+    }
+
+    return candidates.slice(0, 6);
+  }
+
+  private sanitizeGeneratedText(text: string): string {
+    return text
+      .replace(/\s+/g, " ")
+      .replace(/\.{2,}/g, ".")
+      .replace(/\s+([,.;!?])/g, "$1")
+      .trim();
+  }
+
+  private passesGuardrails(text: string): boolean {
+    return !bannedTextPatterns.some((pattern) => pattern.test(text));
   }
 
   private buildSceneLine(

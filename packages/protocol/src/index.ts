@@ -33,6 +33,32 @@ export type ShowSceneKey =
 
 export type ShowStreamMap = Partial<Record<ShowSceneKey, string>>;
 
+export type InteractionAuthorityMode = "operator_hard_override_weighted";
+
+export interface PromptPolicyPayload {
+  scheduler: "state_score";
+  cadenceModel: "rolling_cohorts";
+  adaptiveWindowMinMs: number;
+  adaptiveWindowMaxMs: number;
+  directPickBurstMinRatio: number;
+  directPickBurstMaxRatio: number;
+  maxPromptsPerTick: number;
+}
+
+export interface SharedUniqueMixPayload {
+  shared: number;
+  unique: number;
+}
+
+export type EchoStem = "pads" | "hotas" | "choir" | "fx";
+
+export interface EchoStemCap {
+  floor: number;
+  cap: number;
+}
+
+export type EchoCapsByStem = Record<EchoStem, EchoStemCap>;
+
 export interface ShowSnapshotPayload {
   state: ShowState;
   logicalTime: number;
@@ -43,6 +69,11 @@ export interface ShowSnapshotPayload {
   activeScene?: ShowSceneKey;
   streamMap?: ShowStreamMap;
   cuePayload?: Record<string, unknown>;
+  authorityMode?: InteractionAuthorityMode;
+  promptPolicy?: PromptPolicyPayload;
+  cohortSalt?: string;
+  sharedUniqueMix?: SharedUniqueMixPayload;
+  echoCapsByStem?: EchoCapsByStem;
 }
 
 export interface SyncPacket {
@@ -103,7 +134,13 @@ export type PushDeckControlKind =
 export type PushDeckModeContext = "auto" | "dynamic" | "static" | "choir";
 export type PushDeckTimingMode = "immediate" | "quantized";
 export type PushDeckBankDomain = "main" | "choir";
-export type PushDeckMLParamKey = "phone_pad_echo_probability";
+export type PushDeckMLParamKey =
+  | "phone_pad_echo_probability"
+  | "pads_echo_probability"
+  | "global_echo_probability"
+  | "hotas_echo_probability"
+  | "choir_echo_probability"
+  | "fx_echo_probability";
 
 export interface PushDeckPadControl {
   row: number;
@@ -188,6 +225,10 @@ export interface ProgramProceduralState {
   performerVector: ParamVector;
   audienceVector: ParamVector;
   textBlend: TextBlendState;
+  promptInfluence?: number;
+  directPickInfluence?: number;
+  echoProbabilityGlobal?: number;
+  echoProbabilityByStem?: Partial<Record<EchoStem, number>>;
 }
 
 export type ProposalLane = "audio" | "visual_text";
@@ -293,6 +334,8 @@ export interface ParticipantVectorPayload {
   vector: ParamVector;
   influence: number;
   compositorMode: CompositorMode;
+  promptInfluence?: number;
+  directPickInfluence?: number;
   colorIntent?: ColorIntentPayload;
   updatedAt: number;
 }
@@ -302,6 +345,68 @@ export interface AudienceVectorPayload {
   participantCount: number;
   updatedAt: number;
   compositorModes: Record<string, number>;
+  promptInfluence?: number;
+  directPickInfluence?: number;
+  wavefront?: {
+    intensity: number;
+    phase: number;
+    decay: number;
+  };
+}
+
+export type PromptDomain = "video" | "text" | "sound" | "lighting";
+export type PromptAffordance = "tap" | "drag" | "hold";
+export type PromptResponseType = "tap" | "drag" | "hold" | "skip";
+
+export type PromptAction =
+  | "layout_full"
+  | "layout_pip"
+  | "layout_split"
+  | "clip_tension"
+  | "clip_release"
+  | "direct_slot_a"
+  | "direct_slot_b"
+  | "direct_take_next"
+  | "cut"
+  | "stretch"
+  | "echo"
+  | "withhold"
+  | "warm_shift"
+  | "cool_shift"
+  | "luma_raise"
+  | "luma_lower"
+  | "echo_push"
+  | "echo_pull"
+  | "density_hold";
+
+export interface PromptDirectPickTarget {
+  slotId: string;
+  takeId?: string;
+  label?: string;
+}
+
+export interface PromptOfferPayload {
+  promptId: string;
+  cueVersion: number;
+  scene: ShowSceneKey;
+  domain: PromptDomain;
+  action: PromptAction;
+  affordance: PromptAffordance;
+  expiresAt: number;
+  haptic: boolean;
+  directPickTargets?: PromptDirectPickTarget[];
+}
+
+export interface PromptResponsePayload {
+  promptId: string;
+  cueVersion: number;
+  responseType: PromptResponseType;
+  tapChoice?: string;
+  dragVector?: { x: number; y: number };
+  holdMs?: number;
+  latencyMs: number;
+  slotPick?: { slotId: string; takeId?: string };
+  respondedAt?: number;
 }
 
 export interface AudioFeaturePayload {
@@ -552,7 +657,9 @@ export interface WireEnvelope<T = unknown> {
     | "phone_audio_pool_state"
     | "push_deck_event"
     | "push_pad_labels"
-    | "procedural_state";
+    | "procedural_state"
+    | "prompt_offer"
+    | "prompt_response";
   data: T;
   sentAt: number;
 }

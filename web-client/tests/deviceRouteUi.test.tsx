@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
@@ -228,11 +228,13 @@ const baseSession = (): any => ({
     }
   },
   phoneAudioCommand: null,
+  promptOffer: null,
   sendPermissions: vi.fn(),
   sendZoneUpdate: vi.fn(),
   sendParticipantVector: vi.fn(),
   sendPhoneAudioAck: vi.fn(),
-  sendCrowdPickVote: vi.fn()
+  sendCrowdPickVote: vi.fn(),
+  sendPromptResponse: vi.fn()
 });
 
 const renderLive = () => {
@@ -299,9 +301,58 @@ describe("DeviceRoute minimal live UI", () => {
     });
     expect(screen.queryByTestId("live-controls-panel")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Controls" }));
+    fireEvent.click(screen.getByRole("button", { name: "Lighting" }));
 
     expect(screen.getByTestId("live-controls-panel")).toBeTruthy();
+  });
+
+  it("fades utility UI after idle and restores on interaction", async () => {
+    vi.useFakeTimers();
+    try {
+      renderLive();
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+      expect(screen.getByTestId("live-controls-ribbon")).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(3_400);
+      });
+      expect(screen.getByTestId("live-stage").className).toContain("live-ui-faded");
+
+      fireEvent.pointerMove(document.body);
+      act(() => {
+        vi.advanceTimersByTime(20);
+      });
+      expect(screen.getByTestId("live-stage").className).not.toContain("live-ui-faded");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders prompt card and sends prompt responses", async () => {
+    sessionState.promptOffer = {
+      promptId: "prompt-1",
+      cueVersion: 11,
+      scene: "mainDynamic",
+      domain: "text",
+      action: "cut",
+      affordance: "tap",
+      expiresAt: Date.now() + 5_000,
+      haptic: false
+    };
+
+    renderLive();
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("live-prompt-card")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Primary" }));
+    expect(sessionState.sendPromptResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptId: "prompt-1",
+        responseType: "tap"
+      })
+    );
   });
 
   it("shows diagnostics ribbon and toggles diagnostics drawer", async () => {

@@ -24,7 +24,12 @@ import {
   type PushPadLabelsPayload,
   type PushDeckBankDomain,
   type ProgramProceduralState,
+  type PromptOfferPayload,
+  type PromptResponsePayload,
   stableHashToSeed,
+  type EchoCapsByStem,
+  type EchoStem,
+  type PushDeckMLParamKey,
   type TextBlendState,
   type SyncPacket,
   type TextScenePayload,
@@ -47,6 +52,7 @@ import { ReplayService } from "../services/replayService";
 import { ShowOrchestrator } from "../services/showOrchestrator";
 import { SyncService } from "../services/syncService";
 import type { TextSceneComposerService } from "../services/textSceneComposer";
+import { PromptOrchestrator } from "../services/promptOrchestrator";
 import type { SessionStore } from "../stores/sessionStore";
 import { logger } from "../utils/logger";
 
@@ -92,7 +98,8 @@ type DeviceInbound =
   | { kind: "ack"; data: { cueId: string; seenAt: number } }
   | { kind: "phone_audio_ack"; data: Partial<PhoneAudioAckPayload> }
   | { kind: "push_deck_event"; data: Partial<PushDeckEventPayload> }
-  | { kind: "crowd_pick_vote"; data: Partial<CrowdPickVotePayload> };
+  | { kind: "crowd_pick_vote"; data: Partial<CrowdPickVotePayload> }
+  | { kind: "prompt_response"; data: Partial<PromptResponsePayload> };
 
 const parse = <T>(raw: string): T | null => {
   try {
@@ -130,6 +137,15 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       timeout: NodeJS.Timeout;
     }
   >();
+  const promptOrchestrator = new PromptOrchestrator();
+  const promptInfluenceByDevice = new Map<string, { promptInfluence: number; directPickInfluence: number }>();
+  const echoByStem: Record<EchoStem, number> = {
+    pads: 0,
+    hotas: 0,
+    choir: 0,
+    fx: 0
+  };
+  let globalEchoProbability = 0;
   const wsApp = app as unknown as {
     get: (
       path: string,
@@ -209,6 +225,40 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     return sceneKeys.includes(value as ShowSceneKey) ? (value as ShowSceneKey) : null;
   };
 
+  const resolveEchoCapsByScene = (scene: ShowSceneKey | null): EchoCapsByStem => {
+    const key = scene ?? "interstitial";
+    if (key === "mainDynamic") {
+      return {
+        pads: { floor: 0.02, cap: 0.28 },
+        hotas: { floor: 0.01, cap: 0.24 },
+        choir: { floor: 0.02, cap: 0.32 },
+        fx: { floor: 0.01, cap: 0.26 }
+      };
+    }
+    if (key === "mainStatic") {
+      return {
+        pads: { floor: 0.01, cap: 0.2 },
+        hotas: { floor: 0.01, cap: 0.18 },
+        choir: { floor: 0.02, cap: 0.24 },
+        fx: { floor: 0.01, cap: 0.2 }
+      };
+    }
+    if (key === "ending") {
+      return {
+        pads: { floor: 0.01, cap: 0.16 },
+        hotas: { floor: 0.01, cap: 0.16 },
+        choir: { floor: 0.02, cap: 0.2 },
+        fx: { floor: 0.01, cap: 0.18 }
+      };
+    }
+    return {
+      pads: { floor: 0.01, cap: 0.14 },
+      hotas: { floor: 0.01, cap: 0.14 },
+      choir: { floor: 0.01, cap: 0.18 },
+      fx: { floor: 0.01, cap: 0.16 }
+    };
+  };
+
   const parseStreamMap = (payload: Record<string, unknown>): ShowStreamMap => {
     const map: ShowStreamMap = {};
 
@@ -243,6 +293,49 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
 
     return map;
   };
+
+  const configuredStreamMap = (() => {
+    const fromEnvFields: ShowStreamMap = {};
+    const fieldMap: Record<ShowSceneKey, string | undefined> = {
+      interstitial: deps.config.CONDUCTOR_HLS_INTERSTITIAL_URL,
+      preshow: deps.config.CONDUCTOR_HLS_PRESHOW_URL,
+      introduction: deps.config.CONDUCTOR_HLS_INTRODUCTION_URL,
+      mainStatic: deps.config.CONDUCTOR_HLS_MAIN_STATIC_URL,
+      mainDynamic: deps.config.CONDUCTOR_HLS_MAIN_DYNAMIC_URL,
+      ending: deps.config.CONDUCTOR_HLS_ENDING_URL
+    };
+    for (const key of sceneKeys) {
+      const value = normalizeStreamURL(fieldMap[key]);
+      if (value) {
+        fromEnvFields[key] = value;
+      }
+    }
+
+    const rawMap = deps.config.CONDUCTOR_HLS_STREAM_MAP;
+    if (!rawMap) {
+      return fromEnvFields;
+    }
+
+    try {
+      const parsed = JSON.parse(rawMap) as Record<string, unknown>;
+      const fromJson: ShowStreamMap = {};
+      for (const key of sceneKeys) {
+        const value = normalizeStreamURL(parsed[key]);
+        if (value) {
+          fromJson[key] = value;
+        }
+      }
+      return {
+        ...fromJson,
+        ...fromEnvFields
+      };
+    } catch {
+      logger.warn("invalid CONDUCTOR_HLS_STREAM_MAP json", {
+        value: rawMap
+      });
+      return fromEnvFields;
+    }
+  })();
 
   const mergeStreamMaps = (base: ShowStreamMap, incoming: ShowStreamMap): ShowStreamMap => {
     if (Object.keys(incoming).length === 0) {
@@ -343,13 +436,19 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     };
   };
   let latestCue: CueCommand = buildSnapshotCue();
-  let latestStreamMap: ShowStreamMap = parseStreamMap((latestCue.payload ?? {}) as Record<string, unknown>);
+  let latestStreamMap: ShowStreamMap = mergeStreamMaps(
+    configuredStreamMap,
+    parseStreamMap((latestCue.payload ?? {}) as Record<string, unknown>)
+  );
   let latestActiveScene: ShowSceneKey | null = inferActiveSceneFromCue(latestCue, latestStreamMap);
   let latestCueVersion = latestCue.version;
 
   const syncCueMediaState = (cue: CueCommand): void => {
     const payload = (cue.payload ?? {}) as Record<string, unknown>;
-    latestStreamMap = mergeStreamMaps(latestStreamMap, parseStreamMap(payload));
+    latestStreamMap = mergeStreamMaps(
+      configuredStreamMap,
+      mergeStreamMaps(latestStreamMap, parseStreamMap(payload))
+    );
     const activeScene = inferActiveSceneFromCue(cue, latestStreamMap);
     if (activeScene) {
       latestActiveScene = activeScene;
@@ -360,7 +459,10 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   const buildShowSnapshotPayload = (): ShowSnapshotPayload => {
     const snapshot = deps.show.snapshot();
     const cuePayload = (latestCue.payload ?? {}) as Record<string, unknown>;
-    latestStreamMap = mergeStreamMaps(latestStreamMap, parseStreamMap(cuePayload));
+    latestStreamMap = mergeStreamMaps(
+      configuredStreamMap,
+      mergeStreamMaps(latestStreamMap, parseStreamMap(cuePayload))
+    );
     const activeScene = inferActiveSceneFromCue(latestCue, latestStreamMap);
     if (activeScene) {
       latestActiveScene = activeScene;
@@ -376,7 +478,71 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       cueVersion: latestCueVersion,
       activeScene: latestActiveScene ?? undefined,
       streamMap: Object.keys(latestStreamMap).length > 0 ? latestStreamMap : undefined,
-      cuePayload
+      cuePayload,
+      authorityMode: promptOrchestrator.authorityMode(),
+      promptPolicy: promptOrchestrator.policy(),
+      cohortSalt: promptOrchestrator.currentCohortSalt(),
+      sharedUniqueMix: promptOrchestrator.sharedUniqueMix(),
+      echoCapsByStem: resolveEchoCapsByScene(latestActiveScene)
+    };
+  };
+
+  const enrichCuePayload = (cue: CueCommand): CueCommand => {
+    const payload = (cue.payload ?? {}) as Record<string, unknown>;
+    latestStreamMap = mergeStreamMaps(
+      configuredStreamMap,
+      mergeStreamMaps(latestStreamMap, parseStreamMap(payload))
+    );
+    const activeScene = inferActiveSceneFromCue(cue, latestStreamMap) ?? latestActiveScene;
+    if (activeScene) {
+      latestActiveScene = activeScene;
+    }
+    latestCueVersion = Math.max(latestCueVersion, cue.version);
+    const outputFallback = fallbackOutputForState(cue.showState);
+
+    const nextPayload: Record<string, unknown> = {
+      ...payload,
+      cueVersion: latestCueVersion,
+      outputMode:
+        typeof payload.outputMode === "string" && payload.outputMode.trim().length > 0
+          ? payload.outputMode
+          : outputFallback.outputMode,
+      showFixed:
+        typeof payload.showFixed === "boolean"
+          ? payload.showFixed
+          : outputFallback.showFixed,
+      showDynamic:
+        typeof payload.showDynamic === "boolean"
+          ? payload.showDynamic
+          : outputFallback.showDynamic,
+      interstitialActive:
+        typeof payload.interstitialActive === "boolean"
+          ? payload.interstitialActive
+          : outputFallback.interstitialActive,
+      showStreamMap: latestStreamMap
+    };
+
+    for (const key of sceneKeys) {
+      const value = latestStreamMap[key];
+      if (value) {
+        nextPayload[streamPayloadFieldByScene[key]] = value;
+      }
+    }
+
+    if (latestActiveScene) {
+      nextPayload.showActiveScene = latestActiveScene;
+      nextPayload.activeSceneKey = latestActiveScene;
+      const activeRef = latestStreamMap[latestActiveScene];
+      if (activeRef) {
+        nextPayload.showFixedMediaRef = activeRef;
+        nextPayload.showFixedMediaMime = "application/vnd.apple.mpegurl";
+      }
+    }
+
+    return {
+      ...cue,
+      payload: nextPayload,
+      version: latestCueVersion
     };
   };
 
@@ -618,6 +784,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     }
 
     deviceSockets.set(hashedId, socket);
+    promptOrchestrator.upsertDevice(hashedId);
     logger.info("ws socket opened", { role: "device", hashedId });
 
     const existing = await deps.sessions.get(hashedId);
@@ -646,6 +813,8 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         reason: decodeCloseReason(reason)
       });
       deviceSockets.delete(hashedId);
+      promptOrchestrator.removeDevice(hashedId);
+      promptInfluenceByDevice.delete(hashedId);
       const aggregate = audienceField.remove(hashedId);
       broadcastAudienceVector(aggregate);
       const lighting = deps.lightingField.remove(hashedId);
@@ -727,10 +896,25 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       if (inbound.kind === "participant_vector") {
         const vector = normalizeVector(inbound.data.vector ?? {});
         const influence = clamp01Number(inbound.data.influence);
+        const priorPrompt = promptInfluenceByDevice.get(hashedId);
+        const promptInfluence =
+          typeof inbound.data.promptInfluence === "number"
+            ? clamp01Number(inbound.data.promptInfluence)
+            : priorPrompt?.promptInfluence ?? 0;
+        const directPickInfluence =
+          typeof inbound.data.directPickInfluence === "number"
+            ? clamp01Number(inbound.data.directPickInfluence)
+            : priorPrompt?.directPickInfluence ?? 0;
+        promptInfluenceByDevice.set(hashedId, {
+          promptInfluence,
+          directPickInfluence
+        });
         const compositorMode = toCompositorMode(inbound.data.compositorMode);
         const aggregate = audienceField.update(hashedId, {
           vector,
           influence,
+          promptInfluence,
+          directPickInfluence,
           compositorMode
         });
         choirAllocator.updateVector(hashedId, vector, influence, Date.now());
@@ -744,6 +928,8 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
             hashedId,
             kind: "participant_vector",
             influence,
+            promptInfluence,
+            directPickInfluence,
             compositorMode,
             colorIntent: normalizeColorIntent(inbound.data.colorIntent),
             vector
@@ -776,6 +962,22 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         const normalized = normalizePushDeckEvent(inbound.data, hashedId);
         if (!normalized) {
           return;
+        }
+
+        if (normalized.controlKind === "ml_param" && normalized.mlParam) {
+          const activeEchoCaps = resolveEchoCapsByScene(latestActiveScene);
+          const normalizedEcho = applyEchoMLParam(
+            normalized.mlParam.key,
+            normalized.mlParam.value,
+            activeEchoCaps,
+            echoByStem
+          );
+          echoByStem.pads = normalizedEcho.pads;
+          echoByStem.hotas = normalizedEcho.hotas;
+          echoByStem.choir = normalizedEcho.choir;
+          echoByStem.fx = normalizedEcho.fx;
+          globalEchoProbability = normalizedEcho.global;
+          composeAndBroadcastProceduralState();
         }
 
         if (
@@ -827,6 +1029,83 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
             hashedId,
             kind: "crowd_pick_vote",
             ...vote
+          }
+        });
+        return;
+      }
+
+      if (inbound.kind === "prompt_response") {
+        const response = normalizePromptResponse(inbound.data);
+        const result = promptOrchestrator.consumeResponse(hashedId, response, Date.now());
+        if (!result.accepted) {
+          return;
+        }
+
+        const aggregate = audienceField.updatePromptInfluence(hashedId, {
+          promptInfluence: result.promptInfluence,
+          directPickInfluence: result.directPickInfluence,
+          updatedAt: Date.now()
+        });
+        promptInfluenceByDevice.set(hashedId, {
+          promptInfluence: result.promptInfluence,
+          directPickInfluence: result.directPickInfluence
+        });
+        broadcastAudienceVector(aggregate);
+
+        if (result.slotPick && baseProceduralState.dynamicBinManifest.length > 0) {
+          const preferredIndex = baseProceduralState.dynamicBinManifest.findIndex(
+            (clip) => clip.id === result.slotPick?.takeId || clip.id === result.slotPick?.slotId
+          );
+          if (preferredIndex >= 0) {
+            baseProceduralState = normalizeProceduralState(
+              {
+                ...baseProceduralState,
+                dynamicBinSelection:
+                  baseProceduralState.dynamicBinManifest.length <= 1
+                    ? 0
+                    : preferredIndex / Math.max(1, baseProceduralState.dynamicBinManifest.length - 1),
+                dynamicBinIndex: preferredIndex
+              },
+              baseProceduralState
+            );
+          }
+        }
+
+        if (result.action === "layout_pip" || result.action === "layout_split" || result.action === "layout_full") {
+          const splitLayout =
+            result.action === "layout_pip"
+              ? "pip"
+              : result.action === "layout_split"
+                ? "split-2"
+                : "none";
+          baseProceduralState = normalizeProceduralState(
+            {
+              ...baseProceduralState,
+              splitLayout
+            },
+            baseProceduralState
+          );
+        }
+
+        if (result.domain === "text") {
+          composeAndBroadcastTextScene(true);
+        }
+        composeAndBroadcastProceduralState();
+
+        await deps.replayService.record({
+          type: "device_uplink",
+          timestamp: Date.now(),
+          logicalTime: deps.show.snapshot().logicalTime,
+          source: "phone",
+          payload: {
+            hashedId,
+            kind: "prompt_response",
+            promptId: response.promptId,
+            responseType: response.responseType,
+            promptInfluence: result.promptInfluence,
+            directPickInfluence: result.directPickInfluence,
+            action: result.action,
+            domain: result.domain
           }
         });
         return;
@@ -932,6 +1211,51 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     }
   }, 1000).unref();
 
+  setInterval(() => {
+    const now = Date.now();
+    const showSnapshot = deps.show.snapshot();
+    const cuePayload = (latestCue.payload ?? {}) as Record<string, unknown>;
+    const dispatches = promptOrchestrator.tick({
+      now,
+      cueVersion: latestCueVersion,
+      showState: showSnapshot.state,
+      activeScene: latestActiveScene,
+      engineRunning: parseBoolean(cuePayload.engineRunning, showSnapshot.state !== "idle"),
+      participantCount: audienceField.snapshot().participantCount,
+      entropy: deps.lightingField.snapshot().entropy,
+      audioFlux: lastAudioFeatures.flux,
+      connectedHashedIds: [...deviceSockets.keys()]
+    });
+    if (dispatches.length === 0) {
+      return;
+    }
+
+    for (const dispatch of dispatches) {
+      broadcastToSpecificDevices(
+        [dispatch.hashedId],
+        {
+          kind: "prompt_offer",
+          data: dispatch.offer,
+          sentAt: now
+        } satisfies WireEnvelope<PromptOfferPayload>
+      );
+      broadcastToHarness({
+        kind: "telemetry",
+        data: {
+          kind: "prompt_offer",
+          targetHashedId: dispatch.hashedId,
+          promptId: dispatch.offer.promptId,
+          scene: dispatch.offer.scene,
+          domain: dispatch.offer.domain,
+          action: dispatch.offer.action,
+          affordance: dispatch.offer.affordance,
+          expiresAt: dispatch.offer.expiresAt
+        },
+        sentAt: now
+      } satisfies WireEnvelope);
+    }
+  }, 500).unref();
+
   deps.audioOpsStateHub.subscribe((snapshot) => {
     broadcastToHarness({
       kind: "telemetry",
@@ -946,11 +1270,24 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   function composeAndBroadcastProceduralState(): void {
     const audience = audienceField.snapshot();
     const pulse = deps.crowdPickPulse.snapshot();
+    const echoCaps = resolveEchoCapsByScene(latestActiveScene);
+    for (const stem of Object.keys(echoByStem) as EchoStem[]) {
+      const caps = echoCaps[stem];
+      echoByStem[stem] = Math.max(caps.floor, Math.min(caps.cap, echoByStem[stem]));
+    }
+    globalEchoProbability = clamp01((echoByStem.pads + echoByStem.hotas + echoByStem.choir + echoByStem.fx) / 4);
     effectiveProceduralState = applyAudienceSteeringAndVariance(
       baseProceduralState,
       audience,
       lastAudioFeatures,
-      pulse.result
+      pulse.result,
+      {
+        promptInfluence: clamp01(audience.promptInfluence ?? 0),
+        directPickInfluence: clamp01(audience.directPickInfluence ?? 0),
+        globalEchoProbability,
+        echoByStem,
+        echoCapsByStem: echoCaps
+      }
     );
     deps.audioOpsStateHub.setProceduralState(effectiveProceduralState);
     broadcastProceduralState(effectiveProceduralState);
@@ -1006,7 +1343,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     // immediately renderable output mode/layer state.
     send(socket, {
       kind: "cue",
-      data: latestCue ?? buildSnapshotCue(),
+      data: enrichCuePayload(latestCue ?? buildSnapshotCue()),
       sentAt: Date.now()
     } satisfies WireEnvelope);
 
@@ -1247,9 +1584,21 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   }
 
   function forwardPushDeckEvent(payload: PushDeckEventPayload): void {
+    const harnessPayload =
+      payload.controlKind === "ml_param" &&
+      payload.mlParam &&
+      payload.mlParam.key !== "phone_pad_echo_probability"
+        ? {
+            ...payload,
+            mlParam: {
+              key: "phone_pad_echo_probability" as const,
+              value: Math.max(0, Math.min(0.2, globalEchoProbability * 0.2))
+            }
+          }
+        : payload;
     broadcastToHarness({
       kind: "push_deck_event",
-      data: payload,
+      data: harnessPayload,
       sentAt: Date.now()
     } satisfies WireEnvelope<PushDeckEventPayload>);
   }
@@ -1298,11 +1647,12 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   }
 
   function broadcastCue(cue: CueCommand): void {
-    latestCue = cue;
-    syncCueMediaState(cue);
+    const enriched = enrichCuePayload(cue);
+    latestCue = enriched;
+    syncCueMediaState(enriched);
     const envelope = {
       kind: "cue",
-      data: cue,
+      data: enriched,
       sentAt: Date.now()
     } satisfies WireEnvelope<CueCommand>;
 
@@ -1603,13 +1953,15 @@ const normalizePushDeckMLParamControl = (value: unknown): PushDeckEventPayload["
     return undefined;
   }
   const payload = value as Record<string, unknown>;
-  if (payload.key !== "phone_pad_echo_probability") {
+  const key = toPushDeckMLParamKey(payload.key);
+  if (!key) {
     return undefined;
   }
   const raw = typeof payload.value === "number" && Number.isFinite(payload.value) ? payload.value : 0;
+  const max = key === "phone_pad_echo_probability" ? 0.2 : 1;
   return {
-    key: "phone_pad_echo_probability",
-    value: Math.max(0, Math.min(0.2, raw))
+    key,
+    value: Math.max(0, Math.min(max, raw))
   };
 };
 
@@ -1685,6 +2037,20 @@ const toPushDeckBankDomain = (value: unknown): PushDeckBankDomain | null => {
   return null;
 };
 
+const toPushDeckMLParamKey = (value: unknown): PushDeckMLParamKey | null => {
+  if (
+    value === "phone_pad_echo_probability" ||
+    value === "pads_echo_probability" ||
+    value === "global_echo_probability" ||
+    value === "hotas_echo_probability" ||
+    value === "choir_echo_probability" ||
+    value === "fx_echo_probability"
+  ) {
+    return value;
+  }
+  return null;
+};
+
 const toPhoneAudioCommandKind = (value: unknown): PhoneAudioCommandPayload["kind"] => {
   if (
     value === "note_on" ||
@@ -1740,6 +2106,102 @@ const normalizeRenderHintsByTarget = (
   }, {});
 };
 
+const toPromptResponseType = (value: unknown): PromptResponsePayload["responseType"] => {
+  if (value === "tap" || value === "drag" || value === "hold" || value === "skip") {
+    return value;
+  }
+  return "tap";
+};
+
+const normalizePromptResponse = (value: Partial<PromptResponsePayload>): PromptResponsePayload => {
+  const drag = value.dragVector;
+  const hasDrag = Boolean(
+    drag &&
+      typeof drag === "object" &&
+      typeof drag.x === "number" &&
+      typeof drag.y === "number"
+  );
+  const slotPick = value.slotPick;
+  const hasSlotPick = Boolean(
+    slotPick &&
+      typeof slotPick === "object" &&
+      typeof slotPick.slotId === "string" &&
+      slotPick.slotId.length > 0
+  );
+  return {
+    promptId: typeof value.promptId === "string" ? value.promptId : "",
+    cueVersion: typeof value.cueVersion === "number" ? Math.max(0, Math.round(value.cueVersion)) : 0,
+    responseType: toPromptResponseType(value.responseType),
+    tapChoice: typeof value.tapChoice === "string" ? value.tapChoice : undefined,
+    dragVector: hasDrag
+      ? {
+          x: Math.max(-1, Math.min(1, drag!.x)),
+          y: Math.max(-1, Math.min(1, drag!.y))
+        }
+      : undefined,
+    holdMs: typeof value.holdMs === "number" && Number.isFinite(value.holdMs)
+      ? Math.max(0, Math.round(value.holdMs))
+      : undefined,
+    latencyMs: typeof value.latencyMs === "number" && Number.isFinite(value.latencyMs)
+      ? Math.max(0, Math.round(value.latencyMs))
+      : 0,
+    slotPick: hasSlotPick
+      ? {
+          slotId: slotPick!.slotId,
+          takeId: typeof slotPick!.takeId === "string" ? slotPick!.takeId : undefined
+        }
+      : undefined,
+    respondedAt: typeof value.respondedAt === "number" && Number.isFinite(value.respondedAt)
+      ? value.respondedAt
+      : Date.now()
+  };
+};
+
+const applyEchoMLParam = (
+  key: PushDeckMLParamKey,
+  value: number,
+  capsByStem: EchoCapsByStem,
+  current: Record<EchoStem, number>
+): { global: number; pads: number; hotas: number; choir: number; fx: number } => {
+  const normalizeLegacy = key === "phone_pad_echo_probability" ? clamp01(value / 0.2) : clamp01(value);
+  let next: Record<EchoStem, number> = {
+    pads: current.pads,
+    hotas: current.hotas,
+    choir: current.choir,
+    fx: current.fx
+  };
+
+  if (key === "global_echo_probability") {
+    next = {
+      pads: normalizeLegacy,
+      hotas: normalizeLegacy,
+      choir: normalizeLegacy,
+      fx: normalizeLegacy
+    };
+  } else if (key === "hotas_echo_probability") {
+    next.hotas = normalizeLegacy;
+  } else if (key === "choir_echo_probability") {
+    next.choir = normalizeLegacy;
+  } else if (key === "fx_echo_probability") {
+    next.fx = normalizeLegacy;
+  } else if (key === "pads_echo_probability" || key === "phone_pad_echo_probability") {
+    next.pads = normalizeLegacy;
+  }
+
+  for (const stem of Object.keys(next) as EchoStem[]) {
+    const caps = capsByStem[stem];
+    next[stem] = Math.max(caps.floor, Math.min(caps.cap, next[stem]));
+  }
+
+  return {
+    global: clamp01((next.pads + next.hotas + next.choir + next.fx) / 4),
+    pads: next.pads,
+    hotas: next.hotas,
+    choir: next.choir,
+    fx: next.fx
+  };
+};
+
 const clampSigned = (value: number): number => Math.min(1, Math.max(-1, value));
 
 const createDefaultProceduralState = (performerVector: ParamVector): ProgramProceduralState => ({
@@ -1759,6 +2221,15 @@ const createDefaultProceduralState = (performerVector: ParamVector): ProgramProc
   strictLooseBlend: 0.5,
   visualVariance: 0.5,
   crowdSteeringLevel: 0,
+  promptInfluence: 0,
+  directPickInfluence: 0,
+  echoProbabilityGlobal: 0,
+  echoProbabilityByStem: {
+    pads: 0,
+    hotas: 0,
+    choir: 0,
+    fx: 0
+  },
   performerVector: normalizeVector(performerVector),
   audienceVector: normalizeVector({}),
   textBlend: {
@@ -1832,6 +2303,28 @@ const normalizeProceduralState = (
     crowdSteeringLevel: clamp01Number(
       typeof input.crowdSteeringLevel === "number" ? input.crowdSteeringLevel : current.crowdSteeringLevel
     ),
+    promptInfluence: clamp01Number(
+      typeof input.promptInfluence === "number" ? input.promptInfluence : current.promptInfluence ?? 0
+    ),
+    directPickInfluence: clamp01Number(
+      typeof input.directPickInfluence === "number"
+        ? input.directPickInfluence
+        : current.directPickInfluence ?? 0
+    ),
+    echoProbabilityGlobal: clamp01Number(
+      typeof input.echoProbabilityGlobal === "number"
+        ? input.echoProbabilityGlobal
+        : current.echoProbabilityGlobal ?? 0
+    ),
+    echoProbabilityByStem:
+      input.echoProbabilityByStem && typeof input.echoProbabilityByStem === "object"
+        ? {
+            pads: clamp01Number(input.echoProbabilityByStem.pads ?? current.echoProbabilityByStem?.pads ?? 0),
+            hotas: clamp01Number(input.echoProbabilityByStem.hotas ?? current.echoProbabilityByStem?.hotas ?? 0),
+            choir: clamp01Number(input.echoProbabilityByStem.choir ?? current.echoProbabilityByStem?.choir ?? 0),
+            fx: clamp01Number(input.echoProbabilityByStem.fx ?? current.echoProbabilityByStem?.fx ?? 0)
+          }
+        : current.echoProbabilityByStem,
     performerVector: normalizeVector((input.performerVector ?? current.performerVector) as Partial<ParamVector>),
     audienceVector: normalizeVector((input.audienceVector ?? current.audienceVector) as Partial<ParamVector>),
     textBlend
@@ -1842,10 +2335,20 @@ const applyAudienceSteeringAndVariance = (
   base: ProgramProceduralState,
   audience: AudienceVectorPayload,
   audioFeatures: AudioFeaturePayload,
-  pickResult: CrowdPickResultPayload | null
+  pickResult: CrowdPickResultPayload | null,
+  interaction: {
+    promptInfluence: number;
+    directPickInfluence: number;
+    globalEchoProbability: number;
+    echoByStem: Record<EchoStem, number>;
+    echoCapsByStem: EchoCapsByStem;
+  }
 ): ProgramProceduralState => {
   const crowdWeight = clamp01((audience.participantCount - 1) / 20);
-  const steeringLevel = crowdWeight * 0.35;
+  const waveIntensity = clamp01(audience.wavefront?.intensity ?? 0);
+  const wavePhase = clamp01(audience.wavefront?.phase ?? 0.5);
+  const promptBoost = interaction.promptInfluence * 0.32 + interaction.directPickInfluence * 0.46;
+  const steeringLevel = clamp01(crowdWeight * 0.35 + promptBoost * 0.6 + waveIntensity * 0.18);
   const centered = {
     text: audience.vector.textAmount - 0.5,
     comp: audience.vector.compositeBias - 0.5,
@@ -1862,7 +2365,17 @@ const applyAudienceSteeringAndVariance = (
       fade: clamp01(base.fade + centered.comp * steeringLevel * 1.2),
       textProbability: clamp01(base.textProbability + centered.text * steeringLevel * 1.4),
       strictLooseBlend: clamp01(base.strictLooseBlend + centered.comp * -steeringLevel * 0.95),
-      visualVariance: clamp01(base.visualVariance + centered.comp * steeringLevel * 1.1 + (audioFeatures.flux - 0.5) * 0.06)
+      visualVariance: clamp01(
+        base.visualVariance +
+          centered.comp * steeringLevel * 1.1 +
+          (audioFeatures.flux - 0.5) * 0.06 +
+          interaction.directPickInfluence * 0.08 +
+          waveIntensity * 0.12
+      ),
+      promptInfluence: interaction.promptInfluence,
+      directPickInfluence: interaction.directPickInfluence,
+      echoProbabilityGlobal: interaction.globalEchoProbability,
+      echoProbabilityByStem: interaction.echoByStem
     },
     base
   );
@@ -1882,7 +2395,7 @@ const applyAudienceSteeringAndVariance = (
         ...next,
         transitionMode: transitions[seed % transitions.length],
         compositorPreset: compositors[(seed >>> 2) % compositors.length],
-        splitLayout: splits[(seed >>> 4) % splits.length]
+        splitLayout: splits[(seed + Math.round(wavePhase * 10)) % splits.length]
       },
       next
     );

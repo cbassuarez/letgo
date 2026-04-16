@@ -1,6 +1,7 @@
 import {
   clamp01,
   type ColorInteractionPolicy,
+  type PromptOfferPayload,
   deterministicPick,
   type Role,
   type ShowState,
@@ -9,7 +10,7 @@ import {
   type ScriptCandidate
 } from "@conductor/protocol";
 import { motion } from "framer-motion";
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { DynamicOverlay } from "../components/DynamicOverlay";
 import { FixedVideoLayer } from "../components/FixedVideoLayer";
@@ -194,10 +195,21 @@ export const DeviceRoute = (): JSX.Element => {
   const [selectedVoteOptionId, setSelectedVoteOptionId] = useState<string | null>(null);
   const [controlsOpen, setControlsOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [uiVisible, setUiVisible] = useState(true);
   const [fixedLayerErrored, setFixedLayerErrored] = useState(false);
+  const [promptDrag, setPromptDrag] = useState({ x: 0, y: 0 });
+  const [promptStartAt, setPromptStartAt] = useState<number | null>(null);
+  const [dismissedPromptId, setDismissedPromptId] = useState<string | null>(null);
+  const [promptInfluenceState, setPromptInfluenceState] = useState({
+    promptInfluence: 0,
+    directPickInfluence: 0
+  });
   const permissionsSentRef = useRef(false);
   const zoneSentRef = useRef(false);
   const handledPhoneCommandRef = useRef<string>("");
+  const uiIdleTimerRef = useRef<number | null>(null);
+  const holdPromptStartRef = useRef<number | null>(null);
+  const lastPromptIdRef = useRef<string>("");
 
   const session = useConductorSession(hashedId);
   const {
@@ -205,7 +217,8 @@ export const DeviceRoute = (): JSX.Element => {
     sendPhoneAudioAck,
     sendPermissions,
     sendZoneUpdate,
-    sendParticipantVector
+    sendParticipantVector,
+    sendPromptResponse
   } = session;
   const participantVector = useParticipantVector(permissionsDone);
   const cuePayload = (session.cue?.payload ?? {}) as Record<string, unknown>;
@@ -257,10 +270,27 @@ export const DeviceRoute = (): JSX.Element => {
     session.proceduralState.textProbability < 0.08 ? "" : (deviceTextVariance.lines[0] ?? seededLine);
   const proceduralClip = session.proceduralState.dynamicBinClipId ?? "none";
   const crowdPickWindow = session.crowdPickWindow;
+  const promptOffer = session.promptOffer;
+  const activePrompt: PromptOfferPayload | null =
+    promptOffer &&
+    promptOffer.promptId !== dismissedPromptId &&
+    clockNow <= promptOffer.expiresAt
+      ? promptOffer
+      : null;
+  const promptCountdownMs = activePrompt ? Math.max(0, activePrompt.expiresAt - clockNow) : 0;
   const pickWindowIsActive = Boolean(
     crowdPickWindow && clockNow >= crowdPickWindow.opensAt && clockNow <= crowdPickWindow.closesAt
   );
   const pickCountdownMs = crowdPickWindow ? Math.max(0, crowdPickWindow.closesAt - clockNow) : 0;
+  const bumpUiVisibility = useCallback(() => {
+    setUiVisible(true);
+    if (uiIdleTimerRef.current !== null) {
+      window.clearTimeout(uiIdleTimerRef.current);
+    }
+    uiIdleTimerRef.current = window.setTimeout(() => {
+      setUiVisible(controlsOpen || diagnosticsOpen);
+    }, 3000);
+  }, [controlsOpen, diagnosticsOpen]);
 
   const goNoGoChecks = [
     {
@@ -360,6 +390,8 @@ export const DeviceRoute = (): JSX.Element => {
       sendParticipantVector({
         vector: participantVector.vector,
         influence: participantVector.influence,
+        promptInfluence: promptInfluenceState.promptInfluence,
+        directPickInfluence: promptInfluenceState.directPickInfluence,
         compositorMode,
         colorIntent: colorBias.intent,
         updatedAt: Date.now()
@@ -381,6 +413,8 @@ export const DeviceRoute = (): JSX.Element => {
     participantVector.recommendedIntervalMs,
     participantVector.vector,
     permissionsDone,
+    promptInfluenceState.directPickInfluence,
+    promptInfluenceState.promptInfluence,
     sendParticipantVector
   ]);
 
@@ -449,6 +483,75 @@ export const DeviceRoute = (): JSX.Element => {
   }, [permissionsDone]);
 
   useEffect(() => {
+    if (!permissionsDone) {
+      setUiVisible(true);
+      return;
+    }
+
+    const onInteract = (): void => bumpUiVisibility();
+    window.addEventListener("pointerdown", onInteract, { passive: true });
+    window.addEventListener("pointermove", onInteract, { passive: true });
+    window.addEventListener("mousemove", onInteract, { passive: true });
+    window.addEventListener("touchstart", onInteract, { passive: true });
+    window.addEventListener("keydown", onInteract, { passive: true });
+    bumpUiVisibility();
+
+    return () => {
+      window.removeEventListener("pointerdown", onInteract);
+      window.removeEventListener("pointermove", onInteract);
+      window.removeEventListener("mousemove", onInteract);
+      window.removeEventListener("touchstart", onInteract);
+      window.removeEventListener("keydown", onInteract);
+      if (uiIdleTimerRef.current !== null) {
+        window.clearTimeout(uiIdleTimerRef.current);
+      }
+    };
+  }, [bumpUiVisibility, permissionsDone]);
+
+  useEffect(() => {
+    if (controlsOpen || diagnosticsOpen) {
+      setUiVisible(true);
+      if (uiIdleTimerRef.current !== null) {
+        window.clearTimeout(uiIdleTimerRef.current);
+      }
+      return;
+    }
+    if (permissionsDone) {
+      bumpUiVisibility();
+    }
+  }, [bumpUiVisibility, controlsOpen, diagnosticsOpen, permissionsDone]);
+
+  useEffect(() => {
+    if (!activePrompt) {
+      setPromptStartAt(null);
+      holdPromptStartRef.current = null;
+      return;
+    }
+    if (activePrompt.promptId !== lastPromptIdRef.current) {
+      lastPromptIdRef.current = activePrompt.promptId;
+      setPromptStartAt(Date.now());
+    }
+    if (activePrompt.haptic && typeof navigator !== "undefined" && "vibrate" in navigator) {
+      try {
+        navigator.vibrate?.(18);
+      } catch {
+        // ignore
+      }
+    }
+    setUiVisible(true);
+  }, [activePrompt]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setPromptInfluenceState((current) => ({
+        promptInfluence: Math.max(0, current.promptInfluence - 0.04),
+        directPickInfluence: Math.max(0, current.directPickInfluence - 0.06)
+      }));
+    }, 240);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (!session.phoneAudioCommand) {
       return;
     }
@@ -466,6 +569,7 @@ export const DeviceRoute = (): JSX.Element => {
       : !engineRunning
         ? "awaiting engine"
         : null;
+  const uiFaded = permissionsDone && !uiVisible && !controlsOpen && !diagnosticsOpen;
   const showDynamicWithFallback = showDynamic;
   const diagnosticLines = [
     session.connected ? "Live Link" : "Field Reconnect",
@@ -490,12 +594,96 @@ export const DeviceRoute = (): JSX.Element => {
     `Strict ${(session.proceduralState.strictLooseBlend * 100).toFixed(0)}%`,
     `Variance ${(session.proceduralState.visualVariance * 100).toFixed(0)}%`,
     `CrowdSteer ${(session.proceduralState.crowdSteeringLevel * 100).toFixed(0)}%`,
+    `Prompt ${(((session.proceduralState.promptInfluence ?? 0) * 100)).toFixed(0)}%`,
+    `Direct ${(((session.proceduralState.directPickInfluence ?? 0) * 100)).toFixed(0)}%`,
     `Drift ${session.driftMs.toFixed(1)}ms`,
     session.fallbackActive ? "Fallback" : "Synced",
     session.fallbackActive ? `FallbackAge ${(session.fallbackAgeMs / 1000).toFixed(1)}s` : null,
     `Engine ${engineRunning ? "ON" : "OFF"}`,
     `Mode ${outputModeLabel(outputMode)}`
   ].filter((line): line is string => Boolean(line));
+
+  const promptActionLabel = (offer: PromptOfferPayload): string => {
+    switch (offer.action) {
+      case "layout_full":
+        return "Set Frame Full";
+      case "layout_pip":
+        return "Shift To PIP";
+      case "layout_split":
+        return "Split The Frame";
+      case "clip_tension":
+        return "Push Tension Clip";
+      case "clip_release":
+        return "Push Release Clip";
+      case "direct_slot_a":
+        return "Direct Pick Slot A";
+      case "direct_slot_b":
+        return "Direct Pick Slot B";
+      case "direct_take_next":
+        return "Direct Next Take";
+      case "cut":
+        return "Text Cut";
+      case "stretch":
+        return "Text Stretch";
+      case "echo":
+        return "Text Echo";
+      case "withhold":
+        return "Text Withhold";
+      case "warm_shift":
+        return "Warm Lighting";
+      case "cool_shift":
+        return "Cool Lighting";
+      case "luma_raise":
+        return "Lift Luminance";
+      case "luma_lower":
+        return "Drop Luminance";
+      case "echo_push":
+        return "Push Echo";
+      case "echo_pull":
+        return "Pull Echo";
+      case "density_hold":
+        return "Hold Density";
+      default:
+        return offer.action;
+    }
+  };
+
+  const submitPromptResponse = (
+    responseType: "tap" | "drag" | "hold",
+    options?: {
+      tapChoice?: string;
+      dragVector?: { x: number; y: number };
+      holdMs?: number;
+      slotPick?: { slotId: string; takeId?: string };
+    }
+  ): void => {
+    if (!activePrompt) {
+      return;
+    }
+    const now = Date.now();
+    const latencyMs = Math.max(0, now - (promptStartAt ?? now));
+    sendPromptResponse({
+      promptId: activePrompt.promptId,
+      cueVersion: activePrompt.cueVersion,
+      responseType,
+      tapChoice: options?.tapChoice,
+      dragVector: options?.dragVector,
+      holdMs: options?.holdMs,
+      latencyMs,
+      slotPick: options?.slotPick,
+      respondedAt: now
+    });
+
+    const promptInfluence = clamp01(0.34 + Math.max(0, 1 - latencyMs / Math.max(1, promptCountdownMs || 4000)) * 0.5);
+    const directPickInfluence = activePrompt.directPickTargets?.length ? clamp01(promptInfluence * 0.82) : 0;
+    setPromptInfluenceState({
+      promptInfluence,
+      directPickInfluence
+    });
+    setDismissedPromptId(activePrompt.promptId);
+    setPromptStartAt(null);
+    holdPromptStartRef.current = null;
+  };
 
   if (!isValidHashedId(hashedId)) {
     return (
@@ -540,7 +728,7 @@ export const DeviceRoute = (): JSX.Element => {
 
   return (
     <main
-      className="live-stage-shell relative min-h-dvh overflow-hidden text-cyanotype-050"
+      className={`live-stage-shell relative min-h-dvh overflow-hidden text-cyanotype-050 ${uiFaded ? "live-ui-faded" : ""}`}
       data-testid="live-stage"
     >
       <FixedVideoLayer
@@ -560,7 +748,7 @@ export const DeviceRoute = (): JSX.Element => {
 
       {permissionsDone ? (
         <>
-          <section className="live-ribbon live-ribbon-top" data-testid="live-diagnostics-ribbon">
+          <section className="live-ribbon live-ribbon-top live-ui-layer" data-testid="live-diagnostics-ribbon">
             <button
               type="button"
               className="live-ribbon-button"
@@ -578,7 +766,7 @@ export const DeviceRoute = (): JSX.Element => {
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.24 }}
-              className="live-diagnostics-panel"
+              className="live-diagnostics-panel live-ui-layer"
               data-testid="live-diagnostics-panel"
             >
               <div className="live-gng-block">
@@ -599,7 +787,7 @@ export const DeviceRoute = (): JSX.Element => {
             </motion.aside>
           ) : null}
 
-          <section className="live-ribbon live-ribbon-bottom" data-testid="live-controls-ribbon">
+          <section className="live-ribbon live-ribbon-bottom live-ui-layer" data-testid="live-controls-ribbon">
             <button
               type="button"
               className="live-ribbon-button"
@@ -607,7 +795,7 @@ export const DeviceRoute = (): JSX.Element => {
               aria-expanded={controlsOpen}
               aria-controls="live-controls-panel"
             >
-              {controlsOpen ? "Hide Controls" : "Controls"}
+              {controlsOpen ? "Hide Lighting" : "Lighting"}
             </button>
           </section>
 
@@ -617,7 +805,7 @@ export const DeviceRoute = (): JSX.Element => {
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.24 }}
-              className="live-controls-panel"
+              className="live-controls-panel live-ui-layer"
               data-testid="live-controls-panel"
             >
               <div className="color-bias-header">
@@ -708,6 +896,117 @@ export const DeviceRoute = (): JSX.Element => {
               ) : null}
             </motion.section>
           ) : null}
+
+          {activePrompt ? (
+            <motion.section
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.22 }}
+              className="live-prompt-card live-ui-layer"
+              data-testid="live-prompt-card"
+            >
+              <p className="live-ribbon-label">
+                Prompt · {activePrompt.domain.toUpperCase()} · {Math.ceil(promptCountdownMs / 1000)}s
+              </p>
+              <p className="live-prompt-title">{promptActionLabel(activePrompt)}</p>
+              {activePrompt.affordance === "tap" ? (
+                <div className="live-prompt-actions">
+                  {(activePrompt.directPickTargets && activePrompt.directPickTargets.length > 0
+                    ? activePrompt.directPickTargets
+                    : [
+                        { slotId: "primary", label: "Primary" },
+                        { slotId: "secondary", label: "Secondary" }
+                      ]
+                  ).map((choice) => (
+                    <button
+                      key={choice.slotId}
+                      type="button"
+                      className="live-prompt-button"
+                      onClick={() =>
+                        submitPromptResponse("tap", {
+                          tapChoice: choice.label ?? choice.slotId,
+                          slotPick: activePrompt.directPickTargets
+                            ? {
+                                slotId: choice.slotId,
+                                takeId: choice.takeId
+                              }
+                            : undefined
+                        })
+                      }
+                    >
+                      {choice.label ?? choice.slotId}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {activePrompt.affordance === "drag" ? (
+                <div
+                  className="live-prompt-drag-surface"
+                  role="button"
+                  tabIndex={0}
+                  onPointerDown={(event) => {
+                    bumpUiVisibility();
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    const x = clamp01((event.clientX - rect.left) / Math.max(1, rect.width));
+                    const y = clamp01((event.clientY - rect.top) / Math.max(1, rect.height));
+                    setPromptDrag({
+                      x: (x - 0.5) * 2,
+                      y: (y - 0.5) * 2
+                    });
+                  }}
+                  onPointerMove={(event) => {
+                    if (event.buttons <= 0) {
+                      return;
+                    }
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    const x = clamp01((event.clientX - rect.left) / Math.max(1, rect.width));
+                    const y = clamp01((event.clientY - rect.top) / Math.max(1, rect.height));
+                    setPromptDrag({
+                      x: (x - 0.5) * 2,
+                      y: (y - 0.5) * 2
+                    });
+                  }}
+                  onPointerUp={() =>
+                    submitPromptResponse("drag", {
+                      dragVector: promptDrag
+                    })
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      submitPromptResponse("drag", {
+                        dragVector: promptDrag
+                      });
+                    }
+                  }}
+                >
+                  <span>Drag To Steer</span>
+                  <span>
+                    X {promptDrag.x.toFixed(2)} · Y {promptDrag.y.toFixed(2)}
+                  </span>
+                </div>
+              ) : null}
+              {activePrompt.affordance === "hold" ? (
+                <button
+                  type="button"
+                  className="live-prompt-button live-prompt-hold"
+                  onPointerDown={() => {
+                    holdPromptStartRef.current = Date.now();
+                    bumpUiVisibility();
+                  }}
+                  onPointerUp={() =>
+                    submitPromptResponse("hold", {
+                      holdMs: Math.max(0, Date.now() - (holdPromptStartRef.current ?? Date.now()))
+                    })
+                  }
+                  onPointerLeave={() => {
+                    holdPromptStartRef.current = null;
+                  }}
+                >
+                  Hold To Commit
+                </button>
+              ) : null}
+            </motion.section>
+          ) : null}
         </>
       ) : null}
 
@@ -716,7 +1015,7 @@ export const DeviceRoute = (): JSX.Element => {
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.24 }}
-          className="live-status-toast"
+          className="live-status-toast live-ui-layer"
           data-testid="live-status-toast"
         >
           {statusToastLabel}

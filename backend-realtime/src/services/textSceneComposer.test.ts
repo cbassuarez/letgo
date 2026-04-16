@@ -55,6 +55,6 @@ describe("TextSceneComposerService", () => {
 
     const ids = scene.lines.map((line) => line.id);
     expect(ids.some((id) => id.startsWith("line-"))).toBe(true);
-    expect(ids.some((id) => id.startsWith("loose-"))).toBe(true);
+    expect(ids.some((id) => id.startsWith("loose-") || id.startsWith("gen-"))).toBe(true);
   });
 });

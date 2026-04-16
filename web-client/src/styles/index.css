@@ -269,6 +269,16 @@ body::before {
   isolation: isolate;
 }
 
+.live-ui-layer {
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+
+.live-ui-faded .live-ui-layer {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+}
+
 .fixed-video-layer {
   position: absolute;
   inset: 0;
@@ -450,6 +460,69 @@ body::before {
   color: rgba(225, 237, 245, 0.9);
 }
 
+.live-prompt-card {
+  position: absolute;
+  left: 50%;
+  bottom: 102px;
+  z-index: 22;
+  transform: translateX(-50%);
+  width: min(90vw, 480px);
+  border: 1px solid rgba(191, 218, 234, 0.38);
+  background: rgba(0, 0, 0, 0.78);
+  padding: 0.7rem 0.8rem;
+  backdrop-filter: blur(8px);
+}
+
+.live-prompt-title {
+  margin: 0.4rem 0 0;
+  font-size: 0.9rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(236, 247, 252, 0.96);
+}
+
+.live-prompt-actions {
+  margin-top: 0.58rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.live-prompt-button {
+  border: 1px solid rgba(188, 218, 236, 0.38);
+  background: rgba(0, 0, 0, 0.62);
+  color: rgba(232, 242, 248, 0.94);
+  padding: 0.38rem 0.62rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.live-prompt-button:hover {
+  border-color: rgba(234, 245, 251, 0.78);
+}
+
+.live-prompt-drag-surface {
+  margin-top: 0.6rem;
+  border: 1px dashed rgba(181, 214, 233, 0.42);
+  background: rgba(7, 24, 38, 0.55);
+  padding: 0.65rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(210, 232, 244, 0.88);
+}
+
+.live-prompt-hold {
+  margin-top: 0.58rem;
+  width: 100%;
+}
+
 .live-permission-overlay {
   position: absolute;
   inset: 0;
@@ -529,6 +602,8 @@ body::before {
   }
 
   .live-ribbon-button,
+  .live-prompt-button,
+  .live-ui-layer,
   .live-permission-button,
   .live-permission-continue {
     transition: none;

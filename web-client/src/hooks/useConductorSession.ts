@@ -18,6 +18,8 @@ import {
   type PhoneAudioAckPayload,
   type PhoneAudioCommandPayload,
   type PhoneAudioPoolStatePayload,
+  type PromptOfferPayload,
+  type PromptResponsePayload,
   type ProgramProceduralState,
   type SyncPacket,
   type TextScenePayload,
@@ -49,11 +51,13 @@ interface SessionState {
   proceduralState: ProgramProceduralState;
   textScene: TextScenePayload;
   phoneAudioCommand: PhoneAudioCommandPayload | null;
+  promptOffer: PromptOfferPayload | null;
   sendPermissions: (permissions: DevicePermissions) => void;
   sendZoneUpdate: (zone: DeviceZone) => void;
   sendParticipantVector: (payload: ParticipantVectorPayload) => void;
   sendPhoneAudioAck: (payload: PhoneAudioAckPayload) => void;
   sendCrowdPickVote: (payload: CrowdPickVotePayload) => void;
+  sendPromptResponse: (payload: PromptResponsePayload) => void;
 }
 
 const defaultVector = normalizeVector({});
@@ -328,6 +332,7 @@ export const useConductorSession = (hashedId: string): SessionState => {
   const [proceduralState, setProceduralState] = useState<ProgramProceduralState>(defaultProceduralState);
   const [textScene, setTextScene] = useState<TextScenePayload>(defaultTextScene);
   const [phoneAudioCommand, setPhoneAudioCommand] = useState<PhoneAudioCommandPayload | null>(null);
+  const [promptOffer, setPromptOffer] = useState<PromptOfferPayload | null>(null);
 
   const clockRef = useRef(new SyncClock());
   const cueRef = useRef<CueCommand | null>(fallback?.cue ?? null);
@@ -382,6 +387,13 @@ export const useConductorSession = (hashedId: string): SessionState => {
   const sendCrowdPickVote = useCallback(
     (payload: CrowdPickVotePayload): void => {
       sendWithSocket("crowd_pick_vote", payload);
+    },
+    [sendWithSocket]
+  );
+
+  const sendPromptResponse = useCallback(
+    (payload: PromptResponsePayload): void => {
+      sendWithSocket("prompt_response", payload);
     },
     [sendWithSocket]
   );
@@ -537,7 +549,14 @@ export const useConductorSession = (hashedId: string): SessionState => {
 
         if (envelope.kind === "cue") {
           const inboundCue = envelope.data as CueCommand;
-          const payload = materializeStreamCuePayload((inboundCue.payload ?? {}) as Record<string, unknown>);
+          const payload = materializeStreamCuePayload((inboundCue.payload ?? {}) as Record<string, unknown>, {
+            streamMapOverride: parseStreamMapFromPayload((cueRef.current?.payload ?? {}) as Record<string, unknown>),
+            activeSceneOverride:
+              parseSceneKey((inboundCue.payload as Record<string, unknown> | undefined)?.showActiveScene) ??
+              parseSceneKey((inboundCue.payload as Record<string, unknown> | undefined)?.activeSceneKey) ??
+              parseSceneKey((cueRef.current?.payload as Record<string, unknown> | undefined)?.showActiveScene) ??
+              parseSceneKey((cueRef.current?.payload as Record<string, unknown> | undefined)?.activeSceneKey)
+          });
           const nextVersion = resolveCueVersion(inboundCue.version, payload, cueRef.current?.version ?? 0);
 
           if (cueRef.current && nextVersion < cueRef.current.version) {
@@ -603,6 +622,10 @@ export const useConductorSession = (hashedId: string): SessionState => {
           setPhoneAudioCommand(envelope.data as PhoneAudioCommandPayload);
         }
 
+        if (envelope.kind === "prompt_offer") {
+          setPromptOffer(envelope.data as PromptOfferPayload);
+        }
+
         if (envelope.kind === "sync") {
           const packet = envelope.data as SyncPacket;
           if (packet.kind === "ping") {
@@ -640,6 +663,16 @@ export const useConductorSession = (hashedId: string): SessionState => {
       } else {
         setFallbackAgeMs(0);
       }
+
+      setPromptOffer((current) => {
+        if (!current) {
+          return current;
+        }
+        if (Date.now() > current.expiresAt) {
+          return null;
+        }
+        return current;
+      });
     }, 200);
 
     const supervisionTimer = window.setInterval(() => {
@@ -697,10 +730,12 @@ export const useConductorSession = (hashedId: string): SessionState => {
     proceduralState,
     textScene,
     phoneAudioCommand,
+    promptOffer,
     sendPermissions,
     sendZoneUpdate,
     sendParticipantVector,
     sendPhoneAudioAck,
-    sendCrowdPickVote
+    sendCrowdPickVote,
+    sendPromptResponse
   };
 };
