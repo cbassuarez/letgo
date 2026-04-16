@@ -38,7 +38,7 @@ export const HashedAboutRoute = (): JSX.Element => {
       <motion.section {...fadeConfig(reducedMotion, 0.2)} className="participant-card mt-10">
         <p className="participant-kicker">Plot</p>
         <p className="mt-4 max-w-4xl text-lg leading-relaxed text-participant-smoke/88">
-          a reflection on the rejection of letting go as a formalized concept; this variable length work 
+          a reflection on the rejection of letting go as a formalized concept; this variable length work
         </p>
       </motion.section>
 

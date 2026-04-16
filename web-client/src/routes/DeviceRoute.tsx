@@ -421,7 +421,7 @@ export const DeviceRoute = (): JSX.Element => {
         : "STREAM HOLD";
   const offlineHint =
     offlineReason === "engine_off"
-      ? "Operator must start engine to arm live output."
+      ? "The film is starting soon! Stay on this page to join."
       : offlineReason === "link_reconnecting"
         ? "Hold position while control link renegotiates."
         : "Fallback stream unavailable. Awaiting stable media route.";
