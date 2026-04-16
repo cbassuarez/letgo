@@ -231,6 +231,8 @@ private struct MediaManifest: Codable {
 }
 
 private struct HLSStreamConfig {
+    static let defaultBaseURL = "https://media.letgofilm.com/test-shots-v1"
+
     let preshowURL: String?
     let introductionURL: String?
     let mainURL: String?
@@ -239,14 +241,14 @@ private struct HLSStreamConfig {
     let laneBaseURL: String?
 
     static func fromEnvironment(_ env: [String: String] = ProcessInfo.processInfo.environment) -> HLSStreamConfig {
-        let baseURL = normalized(env["CONDUCTOR_HLS_BASE_URL"])
+        let baseURL = normalized(env["CONDUCTOR_HLS_BASE_URL"]) ?? defaultBaseURL
         return HLSStreamConfig(
-            preshowURL: normalized(env["CONDUCTOR_HLS_PRESHOW_URL"]) ?? baseURL.map { join($0, "preshow.m3u8") },
-            introductionURL: normalized(env["CONDUCTOR_HLS_INTRODUCTION_URL"]) ?? baseURL.map { join($0, "introduction.m3u8") },
-            mainURL: normalized(env["CONDUCTOR_HLS_MAIN_URL"]) ?? baseURL.map { join($0, "main.m3u8") },
-            endingURL: normalized(env["CONDUCTOR_HLS_ENDING_URL"]) ?? baseURL.map { join($0, "ending.m3u8") },
-            interstitialURL: normalized(env["CONDUCTOR_HLS_INTERSTITIAL_URL"]) ?? baseURL.map { join($0, "interstitial.m3u8") },
-            laneBaseURL: normalized(env["CONDUCTOR_HLS_LANE_BASE_URL"]) ?? baseURL.map { join($0, "lanes") }
+            preshowURL: normalized(env["CONDUCTOR_HLS_PRESHOW_URL"]) ?? join(baseURL, "preshow/preshow.m3u8"),
+            introductionURL: normalized(env["CONDUCTOR_HLS_INTRODUCTION_URL"]) ?? join(baseURL, "introduction/introduction.m3u8"),
+            mainURL: normalized(env["CONDUCTOR_HLS_MAIN_URL"]) ?? join(baseURL, "main/main.m3u8"),
+            endingURL: normalized(env["CONDUCTOR_HLS_ENDING_URL"]) ?? join(baseURL, "ending/ending.m3u8"),
+            interstitialURL: normalized(env["CONDUCTOR_HLS_INTERSTITIAL_URL"]) ?? join(baseURL, "interstitial/interstitial.m3u8"),
+            laneBaseURL: normalized(env["CONDUCTOR_HLS_LANE_BASE_URL"]) ?? join(baseURL, "lanes")
         )
     }
 
@@ -5266,6 +5268,25 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     ) -> OutputProfile {
         switch committedOutputMode {
         case .off:
+            switch showState {
+            case .preshow, .introduction, .ending:
+                let showFixedMediaRef = resolveShowFixedMediaRef(
+                    showState: showState,
+                    usesInterstitialMedia: false,
+                    showFixedLaneId: nil
+                )
+                return OutputProfile(
+                    mode: .static,
+                    showFixed: true,
+                    showDynamic: false,
+                    loopsIndefinitely: false,
+                    usesInterstitialMedia: false,
+                    showFixedLaneId: nil,
+                    showFixedMediaRef: showFixedMediaRef
+                )
+            case .idle, .main, .hold, .aborted, .recovery:
+                break
+            }
             let showFixedMediaRef = resolveShowFixedMediaRef(
                 showState: showState,
                 usesInterstitialMedia: true,
@@ -5373,9 +5394,9 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
 
     private func isBetweenStartedAndEnding(_ showState: ShowState) -> Bool {
         switch showState {
-        case .preshow, .introduction, .main, .hold, .aborted, .recovery:
+        case .main, .hold, .aborted, .recovery:
             return true
-        case .idle, .ending:
+        case .idle, .preshow, .introduction, .ending:
             return false
         }
     }

@@ -17,6 +17,7 @@ const mediaForState: Record<string, string> = {
   interstitial: "media/interstitial-loop.mp4"
 };
 const hlsMimeType = "application/vnd.apple.mpegurl";
+const defaultHlsBaseUrl = "https://media.letgofilm.com/test-shots-v1";
 
 const toBaseAssetUrl = (path: string): string => {
   const base = import.meta.env.BASE_URL ?? "/";
@@ -30,6 +31,40 @@ const toSharedMediaUrl = (value: string): string => {
     return value;
   }
   return toBaseAssetUrl(value);
+};
+
+const normalizeUrl = (value: string | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const joinUrl = (base: string, path: string): string => {
+  const normalizedBase = base.endsWith("/") ? base.slice(0, -1) : base;
+  const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
+  return `${normalizedBase}/${normalizedPath}`;
+};
+
+const resolveConfiguredHlsSource = (showState: string | null, interstitialActive: boolean): string | null => {
+  const env = import.meta.env as Record<string, string | undefined>;
+  const base = normalizeUrl(env.VITE_HLS_BASE_URL) ?? defaultHlsBaseUrl;
+  const configured = {
+    preshow: normalizeUrl(env.VITE_HLS_PRESHOW_URL) ?? joinUrl(base, "preshow/preshow.m3u8"),
+    introduction: normalizeUrl(env.VITE_HLS_INTRODUCTION_URL) ?? joinUrl(base, "introduction/introduction.m3u8"),
+    main: normalizeUrl(env.VITE_HLS_MAIN_URL) ?? joinUrl(base, "main/main.m3u8"),
+    ending: normalizeUrl(env.VITE_HLS_ENDING_URL) ?? joinUrl(base, "ending/ending.m3u8"),
+    interstitial: normalizeUrl(env.VITE_HLS_INTERSTITIAL_URL) ?? joinUrl(base, "interstitial/interstitial.m3u8")
+  };
+
+  if (interstitialActive) {
+    return configured.interstitial;
+  }
+  if (!showState) {
+    return configured.preshow;
+  }
+  return configured[showState as keyof typeof configured] ?? null;
 };
 
 const looksLikeHlsSource = (source: string, mimeHint: string | null): boolean => {
@@ -122,9 +157,13 @@ export const FixedVideoLayer = ({
     : typeof payload.showFixedMime === "string"
       ? payload.showFixedMime
       : null;
+  const configuredHlsSource = resolveConfiguredHlsSource(cue?.showState ?? null, interstitialActive);
   const source = useMemo(() => {
     if (explicitFixedMediaRef) {
       return toSharedMediaUrl(explicitFixedMediaRef);
+    }
+    if (configuredHlsSource) {
+      return configuredHlsSource;
     }
     if (interstitialActive) {
       return toBaseAssetUrl(mediaForState.interstitial);
@@ -133,7 +172,7 @@ export const FixedVideoLayer = ({
       return toBaseAssetUrl(mediaForState[cue.showState] ?? mediaForState.main);
     }
     return toBaseAssetUrl(mediaForState.preshow);
-  }, [cue, explicitFixedMediaRef, interstitialActive]);
+  }, [configuredHlsSource, cue, explicitFixedMediaRef, interstitialActive]);
   const hlsSource = looksLikeHlsSource(source, explicitMimeHint);
   const shouldLoop = hlsSource ? false : boolFromPayload(payload.outputLoop, true);
   const fallbackLabel = interstitialActive ? "INTERSTITIAL" : (cue?.showState ?? "preshow").toUpperCase();

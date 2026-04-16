@@ -39,7 +39,9 @@ describe("FixedVideoLayer", () => {
     );
 
     const layer = screen.getByTestId("fixed-video-layer");
-    expect(layer.getAttribute("data-active-source")).toContain("/media/interstitial-loop.mp4");
+    expect(layer.getAttribute("data-active-source")).toBe(
+      "https://media.letgofilm.com/test-shots-v1/interstitial/interstitial.m3u8"
+    );
   });
 
   it("prefers explicit media ref over interstitial fallback when both are present", () => {
