@@ -196,6 +196,12 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     return trimmed.length > 0 ? trimmed : null;
   };
 
+  const joinUrlPath = (base: string, path: string): string => {
+    const normalizedBase = base.endsWith("/") ? base.slice(0, -1) : base;
+    const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
+    return `${normalizedBase}/${normalizedPath}`;
+  };
+
   const asRecord = (value: unknown): Record<string, unknown> | null => {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       return null;
@@ -223,6 +229,16 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       return null;
     }
     return sceneKeys.includes(value as ShowSceneKey) ? (value as ShowSceneKey) : null;
+  };
+
+  const defaultOutputModeForState = (showState: ShowState): "static" | "dynamic" | "off" => {
+    if (showState === "main") {
+      return "dynamic";
+    }
+    if (showState === "preshow" || showState === "introduction" || showState === "ending") {
+      return "static";
+    }
+    return "off";
   };
 
   const resolveEchoCapsByScene = (scene: ShowSceneKey | null): EchoCapsByStem => {
@@ -295,13 +311,30 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   };
 
   const configuredStreamMap = (() => {
+    const defaultProductionBaseURL = "https://media.letgofilm.com/test-shots-v1";
+    const configuredBaseURL =
+      normalizeStreamURL(deps.config.CONDUCTOR_HLS_BASE_URL) ??
+      (deps.config.NODE_ENV === "production" ? defaultProductionBaseURL : null);
+
+    const fromBaseURL: ShowStreamMap = configuredBaseURL
+      ? {
+          interstitial: joinUrlPath(configuredBaseURL, "interstitial/interstitial.m3u8"),
+          preshow: joinUrlPath(configuredBaseURL, "preshow/preshow.m3u8"),
+          introduction: joinUrlPath(configuredBaseURL, "introduction/introduction.m3u8"),
+          mainStatic: joinUrlPath(configuredBaseURL, "main/main.m3u8"),
+          mainDynamic: joinUrlPath(configuredBaseURL, "main/main.m3u8"),
+          ending: joinUrlPath(configuredBaseURL, "ending/ending.m3u8")
+        }
+      : {};
+
+    const mainLegacy = normalizeStreamURL(deps.config.CONDUCTOR_HLS_MAIN_URL);
     const fromEnvFields: ShowStreamMap = {};
     const fieldMap: Record<ShowSceneKey, string | undefined> = {
       interstitial: deps.config.CONDUCTOR_HLS_INTERSTITIAL_URL,
       preshow: deps.config.CONDUCTOR_HLS_PRESHOW_URL,
       introduction: deps.config.CONDUCTOR_HLS_INTRODUCTION_URL,
-      mainStatic: deps.config.CONDUCTOR_HLS_MAIN_STATIC_URL,
-      mainDynamic: deps.config.CONDUCTOR_HLS_MAIN_DYNAMIC_URL,
+      mainStatic: deps.config.CONDUCTOR_HLS_MAIN_STATIC_URL ?? mainLegacy ?? undefined,
+      mainDynamic: deps.config.CONDUCTOR_HLS_MAIN_DYNAMIC_URL ?? mainLegacy ?? undefined,
       ending: deps.config.CONDUCTOR_HLS_ENDING_URL
     };
     for (const key of sceneKeys) {
@@ -313,7 +346,10 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
 
     const rawMap = deps.config.CONDUCTOR_HLS_STREAM_MAP;
     if (!rawMap) {
-      return fromEnvFields;
+      return {
+        ...fromBaseURL,
+        ...fromEnvFields
+      };
     }
 
     try {
@@ -326,6 +362,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         }
       }
       return {
+        ...fromBaseURL,
         ...fromJson,
         ...fromEnvFields
       };
@@ -333,7 +370,10 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       logger.warn("invalid CONDUCTOR_HLS_STREAM_MAP json", {
         value: rawMap
       });
-      return fromEnvFields;
+      return {
+        ...fromBaseURL,
+        ...fromEnvFields
+      };
     }
   })();
 
@@ -349,16 +389,26 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
 
   const inferActiveSceneFromCue = (cue: CueCommand, streamMap: ShowStreamMap): ShowSceneKey | null => {
     const payload = (cue.payload ?? {}) as Record<string, unknown>;
-    const explicit = parseSceneKey(payload.showActiveScene ?? payload.activeSceneKey);
-    if (explicit) {
-      return explicit;
-    }
-
-    const outputMode = typeof payload.outputMode === "string" ? payload.outputMode.toLowerCase() : "";
+    const outputModeRaw = typeof payload.outputMode === "string" ? payload.outputMode.toLowerCase() : "";
+    const outputMode = outputModeRaw.length > 0 ? outputModeRaw : defaultOutputModeForState(cue.showState);
     const interstitialActive = parseBoolean(
       payload.interstitialActive,
       outputMode.includes("interstitial") || outputMode === "off"
     );
+    const explicit = parseSceneKey(payload.showActiveScene ?? payload.activeSceneKey);
+    const explicitAllowed =
+      explicit &&
+      ((cue.showState === "preshow" && explicit === "preshow") ||
+        (cue.showState === "introduction" && explicit === "introduction") ||
+        (cue.showState === "ending" && explicit === "ending") ||
+        (cue.showState === "main" && (explicit === "mainStatic" || explicit === "mainDynamic")) ||
+        (explicit === "interstitial" && interstitialActive) ||
+        ((cue.showState === "idle" || cue.showState === "hold" || cue.showState === "aborted" || cue.showState === "recovery") &&
+          explicit === "interstitial"));
+
+    if (explicitAllowed) {
+      return explicit;
+    }
 
     if (cue.showState === "preshow") {
       return streamMap.preshow ? "preshow" : null;

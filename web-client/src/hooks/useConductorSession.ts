@@ -185,6 +185,32 @@ const parseSceneKey = (value: unknown): ShowSceneKey | null =>
     ? (value as ShowSceneKey)
     : null;
 
+const parseBoolean = (value: unknown, fallback = false): boolean => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+  return fallback;
+};
+
+const defaultOutputModeForState = (showState: ShowState | null): "off" | "static" | "dynamic" => {
+  if (showState === "main") {
+    return "dynamic";
+  }
+  if (showState === "preshow" || showState === "introduction" || showState === "ending") {
+    return "static";
+  }
+  return "off";
+};
+
 const normalizeStreamUrl = (value: unknown): string | null => {
   if (typeof value !== "string") {
     return null;
@@ -228,6 +254,57 @@ const parseStreamMapFromPayload = (payload: Record<string, unknown>): ShowStream
   };
 };
 
+const inferActiveSceneFromState = (
+  showState: ShowState | null,
+  payload: Record<string, unknown>,
+  streamMap: ShowStreamMap
+): ShowSceneKey | null => {
+  const explicit = parseSceneKey(payload.showActiveScene ?? payload.activeSceneKey);
+  const outputModeRaw = typeof payload.outputMode === "string" ? payload.outputMode.toLowerCase() : "";
+  const outputMode = outputModeRaw.length > 0 ? outputModeRaw : defaultOutputModeForState(showState);
+  const interstitialActive = parseBoolean(
+    payload.interstitialActive,
+    outputMode.includes("interstitial") || outputMode === "off"
+  );
+  const explicitAllowed =
+    explicit &&
+    ((showState === "preshow" && explicit === "preshow") ||
+      (showState === "introduction" && explicit === "introduction") ||
+      (showState === "ending" && explicit === "ending") ||
+      (showState === "main" && (explicit === "mainStatic" || explicit === "mainDynamic")) ||
+      (explicit === "interstitial" && interstitialActive) ||
+      ((showState === "idle" || showState === "hold" || showState === "aborted" || showState === "recovery") &&
+        explicit === "interstitial"));
+
+  if (explicitAllowed) {
+    return explicit;
+  }
+
+  if (showState === "preshow") {
+    return streamMap.preshow ? "preshow" : null;
+  }
+  if (showState === "introduction") {
+    return streamMap.introduction ? "introduction" : null;
+  }
+  if (showState === "ending") {
+    return streamMap.ending ? "ending" : null;
+  }
+  if (interstitialActive && streamMap.interstitial) {
+    return "interstitial";
+  }
+  if (showState === "main") {
+    if (outputMode.includes("dynamic")) {
+      return streamMap.mainDynamic ? "mainDynamic" : null;
+    }
+    if (outputMode.includes("static") || outputMode === "program") {
+      return streamMap.mainStatic ? "mainStatic" : null;
+    }
+    return (streamMap.mainDynamic ? "mainDynamic" : null) ?? (streamMap.mainStatic ? "mainStatic" : null);
+  }
+
+  return null;
+};
+
 const resolveCueVersion = (incomingVersion: unknown, payload: Record<string, unknown>, fallback = 0): number => {
   const payloadVersionRaw = payload.cueVersion;
   const payloadVersion =
@@ -247,6 +324,7 @@ const resolveCueVersion = (incomingVersion: unknown, payload: Record<string, unk
 const materializeStreamCuePayload = (
   basePayload: Record<string, unknown>,
   options?: {
+    showState?: ShowState | null;
     streamMapOverride?: ShowStreamMap;
     activeSceneOverride?: ShowSceneKey | null;
     cueVersionOverride?: number | null;
@@ -269,9 +347,9 @@ const materializeStreamCuePayload = (
     }
   }
 
-  const activeScene = parseSceneKey(
-    options?.activeSceneOverride ?? nextPayload.showActiveScene ?? nextPayload.activeSceneKey
-  );
+  const activeScene =
+    parseSceneKey(options?.activeSceneOverride ?? null) ??
+    inferActiveSceneFromState(options?.showState ?? null, nextPayload, streamMap);
   if (activeScene) {
     nextPayload.showActiveScene = activeScene;
     nextPayload.activeSceneKey = activeScene;
@@ -513,6 +591,7 @@ export const useConductorSession = (hashedId: string): SessionState => {
               ? snapshot.cuePayload
               : ((cueRef.current?.payload ?? {}) as Record<string, unknown>);
             const payload = materializeStreamCuePayload(basePayload, {
+              showState: snapshot.state,
               streamMapOverride: parseStreamMapFromUnknown(snapshot.streamMap),
               activeSceneOverride: parseSceneKey(snapshot.activeScene),
               cueVersionOverride:
@@ -550,12 +629,11 @@ export const useConductorSession = (hashedId: string): SessionState => {
         if (envelope.kind === "cue") {
           const inboundCue = envelope.data as CueCommand;
           const payload = materializeStreamCuePayload((inboundCue.payload ?? {}) as Record<string, unknown>, {
+            showState: inboundCue.showState,
             streamMapOverride: parseStreamMapFromPayload((cueRef.current?.payload ?? {}) as Record<string, unknown>),
             activeSceneOverride:
               parseSceneKey((inboundCue.payload as Record<string, unknown> | undefined)?.showActiveScene) ??
-              parseSceneKey((inboundCue.payload as Record<string, unknown> | undefined)?.activeSceneKey) ??
-              parseSceneKey((cueRef.current?.payload as Record<string, unknown> | undefined)?.showActiveScene) ??
-              parseSceneKey((cueRef.current?.payload as Record<string, unknown> | undefined)?.activeSceneKey)
+              parseSceneKey((inboundCue.payload as Record<string, unknown> | undefined)?.activeSceneKey)
           });
           const nextVersion = resolveCueVersion(inboundCue.version, payload, cueRef.current?.version ?? 0);
 

@@ -77,6 +77,16 @@ const parseSceneKey = (value: unknown): ShowSceneKey | null =>
     ? (value as ShowSceneKey)
     : null;
 
+const defaultOutputModeForState = (showState: CueCommand["showState"] | null): "off" | "static" | "dynamic" => {
+  if (showState === "main") {
+    return "dynamic";
+  }
+  if (showState === "preshow" || showState === "introduction" || showState === "ending") {
+    return "static";
+  }
+  return "off";
+};
+
 const parseStreamMapFromUnknown = (value: unknown): ShowStreamMap => {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const record = value as Record<string, unknown>;
@@ -138,7 +148,20 @@ const resolveActiveScene = (
   interstitialActive: boolean
 ): ShowSceneKey | null => {
   const explicit = parseSceneKey(payload.showActiveScene ?? payload.activeSceneKey);
-  if (explicit) {
+  const explicitAllowed =
+    explicit &&
+    ((cue?.showState === "preshow" && explicit === "preshow") ||
+      (cue?.showState === "introduction" && explicit === "introduction") ||
+      (cue?.showState === "ending" && explicit === "ending") ||
+      (cue?.showState === "main" && (explicit === "mainStatic" || explicit === "mainDynamic")) ||
+      (explicit === "interstitial" && interstitialActive) ||
+      ((cue?.showState === "idle" ||
+        cue?.showState === "hold" ||
+        cue?.showState === "aborted" ||
+        cue?.showState === "recovery") &&
+        explicit === "interstitial"));
+
+  if (explicitAllowed) {
     return explicit;
   }
 
@@ -289,7 +312,8 @@ export const FixedVideoLayer = ({
   const [videoFailed, setVideoFailed] = useState(false);
 
   const payload = (cue?.payload ?? {}) as Record<string, unknown>;
-  const outputMode = typeof payload.outputMode === "string" ? payload.outputMode.toLowerCase() : "";
+  const outputModeRaw = typeof payload.outputMode === "string" ? payload.outputMode.toLowerCase() : "";
+  const outputMode = outputModeRaw.length > 0 ? outputModeRaw : defaultOutputModeForState(cue?.showState ?? null);
   const interstitialActive = boolFromPayload(
     payload.interstitialActive,
     outputMode.includes("interstitial") || outputMode === "off"

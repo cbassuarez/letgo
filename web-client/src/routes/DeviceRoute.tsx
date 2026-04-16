@@ -83,6 +83,16 @@ const outputModeLabel = (rawMode: string): string => {
   return rawMode.toUpperCase();
 };
 
+const defaultOutputModeForShowState = (showState: ShowState | null): "off" | "static" | "dynamic" => {
+  if (showState === "main") {
+    return "dynamic";
+  }
+  if (showState === "preshow" || showState === "introduction" || showState === "ending") {
+    return "static";
+  }
+  return "off";
+};
+
 const buildAutoZone = (hashedId: string): { name: string; x: number; y: number; z: number } => {
   const seed = stableHashToSeed(hashedId);
   const x = ((seed % 1000) + 1) / 1001;
@@ -240,7 +250,7 @@ export const DeviceRoute = (): JSX.Element => {
     return deterministicPick(seed, scriptBank).text;
   }, [hashedId]);
 
-  const inferredOutputMode = session.cue?.showState === "main" ? "dynamic" : "off";
+  const inferredOutputMode = defaultOutputModeForShowState(session.cue?.showState ?? null);
   const defaultDynamicEnabled = session.cue?.showState === "main";
   const engineRunning = boolFromPayload(cuePayload.engineRunning, session.cue?.showState !== "idle");
   const rawOutputMode = typeof cuePayload.outputMode === "string" ? cuePayload.outputMode : inferredOutputMode;
