@@ -381,7 +381,14 @@ describe("DeviceRoute minimal live UI", () => {
   });
 
   it("shows mission-control offline card when engine is off", async () => {
+    sessionState.cue.showState = "idle";
     sessionState.cue.payload.engineRunning = false;
+    sessionState.phoneAudioPoolState = {
+      ...sessionState.phoneAudioPoolState,
+      gateArmed: false,
+      gateCommitted: false,
+      quadRouteReady: false
+    };
 
     renderLive();
     continueIntoLive();
@@ -519,16 +526,24 @@ describe("DeviceRoute minimal live UI", () => {
   it("runs a 3-second countdown before returning from offline to live", async () => {
     vi.useFakeTimers();
     try {
+      sessionState.cue.showState = "idle";
       sessionState.cue.payload.engineRunning = false;
       sessionState.cue.payload.showFixed = false;
       sessionState.cue.payload.showDynamic = true;
       sessionState.cue.payload.outputMode = "dynamic";
+      sessionState.phoneAudioPoolState = {
+        ...sessionState.phoneAudioPoolState,
+        gateArmed: false,
+        gateCommitted: false,
+        quadRouteReady: false
+      };
 
       renderLive();
       continueIntoLive();
       expect(screen.getByTestId("live-offline-card").textContent).toContain("ENGINE OFFLINE");
 
       act(() => {
+        sessionState.cue.showState = "main";
         sessionState.cue.payload.engineRunning = true;
         vi.advanceTimersByTime(300);
       });

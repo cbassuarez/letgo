@@ -29,14 +29,14 @@ export const KeylessIntroRoute = (): JSX.Element => {
 
       <section className="participant-frame mx-auto max-w-5xl py-8 sm:py-12">
         <motion.p {...fadeConfig(reducedMotion, 0.05)} className="participant-kicker">
-          KEYLESS INTRO
+          ACCESS REQUIRED
         </motion.p>
 
         <motion.h1
           {...fadeConfig(reducedMotion, 0.11)}
           className="participant-headline mt-4 max-w-4xl text-[2.3rem] leading-[0.9] text-participant-cream sm:text-[4.4rem]"
         >
-          Tap your NFC program to enter the participant field.
+          Tap your program to enter the participant field.
         </motion.h1>
 
         <motion.p
@@ -44,14 +44,14 @@ export const KeylessIntroRoute = (): JSX.Element => {
           className="mt-7 max-w-3xl text-base leading-relaxed text-participant-smoke/86 sm:text-lg"
         >
           This site only opens live routes from assigned participant links. Use the NFC marker on the concert program
-          to receive your hashed address, then continue to HOME, ABOUT, and ENTER.
+          to receive your unique address, then continue to HOME, ABOUT, and ENTER.
         </motion.p>
 
         <motion.p
           {...fadeConfig(reducedMotion, 0.24)}
           className="participant-script mt-10 max-w-4xl text-[2rem] leading-[1.06] text-participant-blush sm:text-[3.6rem]"
         >
-          If the key is missing, the field stays closed.
+          let go letting go let go letting go let go letting go
         </motion.p>
 
         <motion.div
@@ -59,10 +59,10 @@ export const KeylessIntroRoute = (): JSX.Element => {
           className="mt-10 flex flex-wrap items-center gap-6 border-t border-participant-smoke/25 pt-5"
         >
           <Link to="/logbook" className="participant-nav-link participant-nav-link-secondary">
-            VIEW PUBLIC LOGBOOK
+            VIEW THE PUBLIC LOGBOOK
           </Link>
           <span className="text-xs uppercase tracking-[0.22em] text-participant-smoke/62">
-            Example key shape · 32 lowercase hex characters
+            let go letting go · cybernetic cinema (2021-2026)
           </span>
         </motion.div>
       </section>

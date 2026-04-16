@@ -302,10 +302,12 @@ export const DeviceRoute = (): JSX.Element => {
     session.phoneAudioPoolState.quadRouteReady ||
     session.phoneAudioPoolState.gateArmed ||
     session.phoneAudioPoolState.gateCommitted;
-  const engineRunning = boolFromPayload(
-    cuePayload.engineRunning,
-    inferredEngineFromAudioPath || session.cue?.showState !== "idle"
-  );
+  const explicitEngineRunning =
+    cuePayload.engineRunning === true || cuePayload.engineRunning === "true";
+  const showStateRunning =
+    session.cue !== null && session.cue.showState !== "idle";
+  const engineRunning =
+    explicitEngineRunning || inferredEngineFromAudioPath || showStateRunning;
   const linkOnline = session.connected && session.linkState === "online";
   const rawOutputMode = typeof cuePayload.outputMode === "string" ? cuePayload.outputMode : inferredOutputMode;
   const normalizedOutputMode = rawOutputMode.toLowerCase();
