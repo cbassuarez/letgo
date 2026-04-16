@@ -23,9 +23,19 @@ Place fixed-scene files in `public/media`:
 
 ## HLS Live Streams
 
-`/live` prefers a cue payload stream ref when present:
+`/live` resolves media from cue/snapshot stream metadata:
 
 - `showFixedMediaRef` (supports `.m3u8` HLS playlists)
+- `showActiveScene`
+- `showStreamMap` or flat fields:
+  - `showStreamInterstitial`
+  - `showStreamPreshow`
+  - `showStreamIntroduction`
+  - `showStreamMainStatic`
+  - `showStreamMainDynamic`
+  - `showStreamEnding`
 - `showFixedMediaMime` optional (set to `application/vnd.apple.mpegurl` for explicit HLS typing)
 
-When no stream ref is provided, it falls back to local files in `public/media`.
+Local file fallback is disabled by default for production parity. Enable explicitly with:
+
+- `VITE_ENABLE_LOCAL_MEDIA_FALLBACK=true`

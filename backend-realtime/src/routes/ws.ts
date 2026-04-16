@@ -9,6 +9,9 @@ import {
   type CrowdPickResultPayload,
   type CueCommand,
   type ShowState,
+  type ShowSceneKey,
+  type ShowSnapshotPayload,
+  type ShowStreamMap,
   isCueCommand,
   type LightingStatePayload,
   normalizeVector,
@@ -152,6 +155,142 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     showStates: ["idle", "preshow", "introduction", "main", "ending", "hold", "aborted", "recovery"]
   } as const;
 
+  const sceneKeys: ShowSceneKey[] = [
+    "interstitial",
+    "preshow",
+    "introduction",
+    "mainStatic",
+    "mainDynamic",
+    "ending"
+  ];
+  const streamPayloadFieldByScene: Record<ShowSceneKey, string> = {
+    interstitial: "showStreamInterstitial",
+    preshow: "showStreamPreshow",
+    introduction: "showStreamIntroduction",
+    mainStatic: "showStreamMainStatic",
+    mainDynamic: "showStreamMainDynamic",
+    ending: "showStreamEnding"
+  };
+
+  const normalizeStreamURL = (value: unknown): string | null => {
+    if (typeof value !== "string") {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
+
+  const asRecord = (value: unknown): Record<string, unknown> | null => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+    return value as Record<string, unknown>;
+  };
+
+  const parseBoolean = (value: unknown, fallback = false): boolean => {
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (typeof value === "string") {
+      if (value === "true") {
+        return true;
+      }
+      if (value === "false") {
+        return false;
+      }
+    }
+    return fallback;
+  };
+
+  const parseSceneKey = (value: unknown): ShowSceneKey | null => {
+    if (typeof value !== "string") {
+      return null;
+    }
+    return sceneKeys.includes(value as ShowSceneKey) ? (value as ShowSceneKey) : null;
+  };
+
+  const parseStreamMap = (payload: Record<string, unknown>): ShowStreamMap => {
+    const map: ShowStreamMap = {};
+
+    const rawMap = payload.showStreamMap;
+    const rawMapRecord =
+      asRecord(rawMap) ??
+      (() => {
+        if (typeof rawMap !== "string") {
+          return null;
+        }
+        try {
+          return asRecord(JSON.parse(rawMap));
+        } catch {
+          return null;
+        }
+      })();
+    if (rawMapRecord) {
+      for (const key of sceneKeys) {
+        const value = normalizeStreamURL(rawMapRecord[key]);
+        if (value) {
+          map[key] = value;
+        }
+      }
+    }
+
+    for (const key of sceneKeys) {
+      const value = normalizeStreamURL(payload[streamPayloadFieldByScene[key]]);
+      if (value) {
+        map[key] = value;
+      }
+    }
+
+    return map;
+  };
+
+  const mergeStreamMaps = (base: ShowStreamMap, incoming: ShowStreamMap): ShowStreamMap => {
+    if (Object.keys(incoming).length === 0) {
+      return base;
+    }
+    return {
+      ...base,
+      ...incoming
+    };
+  };
+
+  const inferActiveSceneFromCue = (cue: CueCommand, streamMap: ShowStreamMap): ShowSceneKey | null => {
+    const payload = (cue.payload ?? {}) as Record<string, unknown>;
+    const explicit = parseSceneKey(payload.showActiveScene ?? payload.activeSceneKey);
+    if (explicit) {
+      return explicit;
+    }
+
+    const outputMode = typeof payload.outputMode === "string" ? payload.outputMode.toLowerCase() : "";
+    const interstitialActive = parseBoolean(
+      payload.interstitialActive,
+      outputMode.includes("interstitial") || outputMode === "off"
+    );
+
+    if (cue.showState === "preshow") {
+      return streamMap.preshow ? "preshow" : null;
+    }
+    if (cue.showState === "introduction") {
+      return streamMap.introduction ? "introduction" : null;
+    }
+    if (cue.showState === "ending") {
+      return streamMap.ending ? "ending" : null;
+    }
+    if (interstitialActive && streamMap.interstitial) {
+      return "interstitial";
+    }
+    if (cue.showState === "main") {
+      if (outputMode.includes("dynamic")) {
+        return streamMap.mainDynamic ? "mainDynamic" : null;
+      }
+      if (outputMode.includes("static") || outputMode === "program") {
+        return streamMap.mainStatic ? "mainStatic" : null;
+      }
+      return (streamMap.mainDynamic ? "mainDynamic" : null) ?? (streamMap.mainStatic ? "mainStatic" : null);
+    }
+    return null;
+  };
+
   const fallbackOutputForState = (
     showState: ShowState
   ): Pick<CueCommand["payload"], "outputMode" | "showFixed" | "showDynamic" | "interstitialActive"> => {
@@ -204,6 +343,42 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     };
   };
   let latestCue: CueCommand = buildSnapshotCue();
+  let latestStreamMap: ShowStreamMap = parseStreamMap((latestCue.payload ?? {}) as Record<string, unknown>);
+  let latestActiveScene: ShowSceneKey | null = inferActiveSceneFromCue(latestCue, latestStreamMap);
+  let latestCueVersion = latestCue.version;
+
+  const syncCueMediaState = (cue: CueCommand): void => {
+    const payload = (cue.payload ?? {}) as Record<string, unknown>;
+    latestStreamMap = mergeStreamMaps(latestStreamMap, parseStreamMap(payload));
+    const activeScene = inferActiveSceneFromCue(cue, latestStreamMap);
+    if (activeScene) {
+      latestActiveScene = activeScene;
+    }
+    latestCueVersion = Math.max(latestCueVersion, cue.version);
+  };
+
+  const buildShowSnapshotPayload = (): ShowSnapshotPayload => {
+    const snapshot = deps.show.snapshot();
+    const cuePayload = (latestCue.payload ?? {}) as Record<string, unknown>;
+    latestStreamMap = mergeStreamMaps(latestStreamMap, parseStreamMap(cuePayload));
+    const activeScene = inferActiveSceneFromCue(latestCue, latestStreamMap);
+    if (activeScene) {
+      latestActiveScene = activeScene;
+    }
+    latestCueVersion = Math.max(latestCueVersion, latestCue.version, snapshot.version);
+
+    return {
+      state: snapshot.state,
+      logicalTime: snapshot.logicalTime,
+      version: snapshot.version,
+      vector: snapshot.vector,
+      cueId: latestCue.cueId,
+      cueVersion: latestCueVersion,
+      activeScene: latestActiveScene ?? undefined,
+      streamMap: Object.keys(latestStreamMap).length > 0 ? latestStreamMap : undefined,
+      cuePayload
+    };
+  };
 
   deps.crowdPickPulse.tick(0, Date.now());
   const initialPulse = deps.crowdPickPulse.snapshot();
@@ -258,6 +433,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
           payload: inbound.data.payload
         });
         broadcastCue(inbound.data);
+        broadcastShowSnapshot();
         composeAndBroadcastTextScene(true, inbound.data.cueId);
         return;
       }
@@ -820,11 +996,9 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   }
 
   function pushInitialSnapshot(socket: WebSocket, role: "harness" | "device"): void {
-    const snapshot = deps.show.snapshot();
-
     send(socket, {
       kind: "show_snapshot",
-      data: snapshot,
+      data: buildShowSnapshotPayload(),
       sentAt: Date.now()
     } satisfies WireEnvelope);
 
@@ -1125,6 +1299,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
 
   function broadcastCue(cue: CueCommand): void {
     latestCue = cue;
+    syncCueMediaState(cue);
     const envelope = {
       kind: "cue",
       data: cue,
@@ -1138,9 +1313,9 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   function broadcastShowSnapshot(): void {
     const envelope = {
       kind: "show_snapshot",
-      data: deps.show.snapshot(),
+      data: buildShowSnapshotPayload(),
       sentAt: Date.now()
-    } satisfies WireEnvelope;
+    } satisfies WireEnvelope<ShowSnapshotPayload>;
     broadcastToDevices(envelope);
     broadcastToHarness(envelope);
   }

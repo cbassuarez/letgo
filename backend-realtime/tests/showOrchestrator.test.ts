@@ -45,4 +45,15 @@ describe("ShowOrchestrator", () => {
     expect(colorPolicy.roles).toContain("performer");
     expect(colorPolicy.showStates).toContain("main");
   });
+
+  it("increments cue version monotonically across transitions", () => {
+    const show = new ShowOrchestrator();
+    const first = show.applyAction("start", 1000);
+    const second = show.applyAction("jump", 2000, "introduction");
+    const third = show.applyAction("jump", 3000, "ending");
+
+    expect(second.version).toBeGreaterThan(first.version);
+    expect(third.version).toBeGreaterThan(second.version);
+    expect(show.snapshot(3000).version).toBe(third.version);
+  });
 });

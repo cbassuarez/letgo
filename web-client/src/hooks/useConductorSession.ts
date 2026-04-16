@@ -11,7 +11,10 @@ import {
   type DeviceZone,
   type ParticipantVectorPayload,
   type ParamVector,
+  type ShowSceneKey,
+  type ShowSnapshotPayload,
   type ShowState,
+  type ShowStreamMap,
   type PhoneAudioAckPayload,
   type PhoneAudioCommandPayload,
   type PhoneAudioPoolStatePayload,
@@ -152,37 +155,134 @@ const allShowStates: ShowState[] = [
 
 const isShowState = (value: unknown): value is ShowState =>
   typeof value === "string" && allShowStates.includes(value as ShowState);
+const showSceneKeys: ShowSceneKey[] = [
+  "interstitial",
+  "preshow",
+  "introduction",
+  "mainStatic",
+  "mainDynamic",
+  "ending"
+];
 
-const snapshotPayloadForState = (showState: ShowState): Record<string, unknown> => {
-  switch (showState) {
-    case "preshow":
-    case "introduction":
-    case "ending":
-      return {
-        outputMode: "static",
-        showFixed: true,
-        showDynamic: false,
-        interstitialActive: false
-      };
-    case "main":
-      return {
-        outputMode: "dynamic",
-        showFixed: false,
-        showDynamic: true,
-        interstitialActive: false
-      };
-    case "idle":
-    case "hold":
-    case "aborted":
-    case "recovery":
-    default:
-      return {
-        outputMode: "off",
-        showFixed: true,
-        showDynamic: false,
-        interstitialActive: true
-      };
+const streamPayloadFieldByScene: Record<ShowSceneKey, string> = {
+  interstitial: "showStreamInterstitial",
+  preshow: "showStreamPreshow",
+  introduction: "showStreamIntroduction",
+  mainStatic: "showStreamMainStatic",
+  mainDynamic: "showStreamMainDynamic",
+  ending: "showStreamEnding"
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const parseSceneKey = (value: unknown): ShowSceneKey | null =>
+  typeof value === "string" && showSceneKeys.includes(value as ShowSceneKey)
+    ? (value as ShowSceneKey)
+    : null;
+
+const normalizeStreamUrl = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
   }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const parseStreamMapFromUnknown = (value: unknown): ShowStreamMap => {
+  if (isRecord(value)) {
+    return showSceneKeys.reduce<ShowStreamMap>((acc, key) => {
+      const maybe = normalizeStreamUrl(value[key]);
+      if (maybe) {
+        acc[key] = maybe;
+      }
+      return acc;
+    }, {});
+  }
+  if (typeof value === "string") {
+    try {
+      return parseStreamMapFromUnknown(JSON.parse(value));
+    } catch {
+      return {};
+    }
+  }
+  return {};
+};
+
+const parseStreamMapFromPayload = (payload: Record<string, unknown>): ShowStreamMap => {
+  const fromMap = parseStreamMapFromUnknown(payload.showStreamMap);
+  const fromFields = showSceneKeys.reduce<ShowStreamMap>((acc, key) => {
+    const maybe = normalizeStreamUrl(payload[streamPayloadFieldByScene[key]]);
+    if (maybe) {
+      acc[key] = maybe;
+    }
+    return acc;
+  }, {});
+  return {
+    ...fromMap,
+    ...fromFields
+  };
+};
+
+const resolveCueVersion = (incomingVersion: unknown, payload: Record<string, unknown>, fallback = 0): number => {
+  const payloadVersionRaw = payload.cueVersion;
+  const payloadVersion =
+    typeof payloadVersionRaw === "number"
+      ? payloadVersionRaw
+      : typeof payloadVersionRaw === "string"
+        ? Number(payloadVersionRaw)
+        : NaN;
+  const normalizedIncoming = typeof incomingVersion === "number" ? incomingVersion : NaN;
+  const candidates = [normalizedIncoming, payloadVersion, fallback].filter((value) => Number.isFinite(value));
+  if (candidates.length === 0) {
+    return 0;
+  }
+  return Math.max(...candidates);
+};
+
+const materializeStreamCuePayload = (
+  basePayload: Record<string, unknown>,
+  options?: {
+    streamMapOverride?: ShowStreamMap;
+    activeSceneOverride?: ShowSceneKey | null;
+    cueVersionOverride?: number | null;
+  }
+): Record<string, unknown> => {
+  const nextPayload: Record<string, unknown> = { ...basePayload };
+  const streamMap: ShowStreamMap = {
+    ...parseStreamMapFromPayload(basePayload),
+    ...(options?.streamMapOverride ?? {})
+  };
+  const hasStreamMap = Object.keys(streamMap).length > 0;
+
+  if (hasStreamMap) {
+    nextPayload.showStreamMap = streamMap;
+    for (const key of showSceneKeys) {
+      const maybe = streamMap[key];
+      if (maybe) {
+        nextPayload[streamPayloadFieldByScene[key]] = maybe;
+      }
+    }
+  }
+
+  const activeScene = parseSceneKey(
+    options?.activeSceneOverride ?? nextPayload.showActiveScene ?? nextPayload.activeSceneKey
+  );
+  if (activeScene) {
+    nextPayload.showActiveScene = activeScene;
+    nextPayload.activeSceneKey = activeScene;
+    const activeRef = streamMap[activeScene];
+    if (activeRef) {
+      nextPayload.showFixedMediaRef = activeRef;
+      nextPayload.showFixedMediaMime = "application/vnd.apple.mpegurl";
+    }
+  }
+
+  if (typeof options?.cueVersionOverride === "number") {
+    nextPayload.cueVersion = options.cueVersionOverride;
+  }
+
+  return nextPayload;
 };
 
 export const computeReconnectDelayMs = (attempt: number, jitterSeed: number = 0.5): number => {
@@ -391,28 +491,65 @@ export const useConductorSession = (hashedId: string): SessionState => {
         const envelope = JSON.parse(event.data) as WireEnvelope;
 
         if (envelope.kind === "show_snapshot") {
-          const snapshot = envelope.data as { logicalTime: number; state?: ShowState; version?: number };
-          setLogicalNow(snapshot.logicalTime);
-          if (isShowState(snapshot.state)) {
-            const basePayload = (cueRef.current?.payload ?? {}) as Record<string, unknown>;
+          const snapshot = envelope.data as Partial<ShowSnapshotPayload>;
+          if (typeof snapshot.logicalTime === "number" && Number.isFinite(snapshot.logicalTime)) {
+            setLogicalNow(snapshot.logicalTime);
+          }
+
+          if (isShowState(snapshot.state) && typeof snapshot.logicalTime === "number" && Number.isFinite(snapshot.logicalTime)) {
+            const basePayload = isRecord(snapshot.cuePayload)
+              ? snapshot.cuePayload
+              : ((cueRef.current?.payload ?? {}) as Record<string, unknown>);
+            const payload = materializeStreamCuePayload(basePayload, {
+              streamMapOverride: parseStreamMapFromUnknown(snapshot.streamMap),
+              activeSceneOverride: parseSceneKey(snapshot.activeScene),
+              cueVersionOverride:
+                typeof snapshot.cueVersion === "number" && Number.isFinite(snapshot.cueVersion)
+                  ? snapshot.cueVersion
+                  : null
+            });
+            const nextVersion = resolveCueVersion(
+              typeof snapshot.cueVersion === "number" ? snapshot.cueVersion : snapshot.version,
+              payload,
+              cueRef.current?.version ?? 0
+            );
+
+            if (cueRef.current && nextVersion < cueRef.current.version) {
+              return;
+            }
+
             const nextCue: CueCommand = {
-              cueId: `${snapshot.state}:${Math.round(snapshot.logicalTime)}:snapshot`,
+              cueId:
+                typeof snapshot.cueId === "string"
+                  ? snapshot.cueId
+                  : `${snapshot.state}:${Math.round(snapshot.logicalTime)}:snapshot`,
               showState: snapshot.state,
               logicalTime: snapshot.logicalTime,
-              payload: {
-                ...basePayload,
-                ...snapshotPayloadForState(snapshot.state)
-              },
-              version: typeof snapshot.version === "number" ? snapshot.version : (cueRef.current?.version ?? 1),
+              payload,
+              version: nextVersion,
               action: cueRef.current?.action ?? "jump"
             };
             cueRef.current = nextCue;
+            cueReceivedAtRef.current = Date.now();
             setCue(nextCue);
           }
         }
 
         if (envelope.kind === "cue") {
-          const nextCue = envelope.data as CueCommand;
+          const inboundCue = envelope.data as CueCommand;
+          const payload = materializeStreamCuePayload((inboundCue.payload ?? {}) as Record<string, unknown>);
+          const nextVersion = resolveCueVersion(inboundCue.version, payload, cueRef.current?.version ?? 0);
+
+          if (cueRef.current && nextVersion < cueRef.current.version) {
+            return;
+          }
+
+          const nextCue: CueCommand = {
+            ...inboundCue,
+            payload,
+            version: nextVersion
+          };
+
           cueRef.current = nextCue;
           cueReceivedAtRef.current = Date.now();
           setCue(nextCue);

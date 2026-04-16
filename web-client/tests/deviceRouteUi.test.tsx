@@ -430,7 +430,7 @@ describe("DeviceRoute minimal live UI", () => {
     expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
   });
 
-  it("falls back to dynamic overlay when fixed layer errors", async () => {
+  it("holds fixed output and surfaces stream-hold toast when fixed layer errors", async () => {
     sessionState.cue.showState = "ending";
     sessionState.cue.payload.outputMode = "program";
     sessionState.cue.payload.showFixed = true;
@@ -441,8 +441,9 @@ describe("DeviceRoute minimal live UI", () => {
 
     expect(screen.getByTestId("fixed-layer")).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByTestId("dynamic-overlay")).toBeTruthy();
+      expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
     });
+    expect(screen.getByTestId("live-status-toast").textContent).toContain("stream hold");
   });
 
   it("shows blocking permission modal until onDone completes", async () => {

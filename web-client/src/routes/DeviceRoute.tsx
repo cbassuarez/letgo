@@ -459,8 +459,14 @@ export const DeviceRoute = (): JSX.Element => {
     void handleCommand(session.phoneAudioCommand);
   }, [handleCommand, session.phoneAudioCommand]);
 
-  const statusToastLabel = !session.connected ? "reconnecting" : !engineRunning ? "awaiting engine" : null;
-  const showDynamicWithFallback = showDynamic || (showFixed && fixedLayerErrored);
+  const statusToastLabel = !session.connected
+    ? "reconnecting"
+    : fixedLayerErrored
+      ? "stream hold"
+      : !engineRunning
+        ? "awaiting engine"
+        : null;
+  const showDynamicWithFallback = showDynamic;
   const diagnosticLines = [
     session.connected ? "Live Link" : "Field Reconnect",
     `Link ${session.linkState}`,

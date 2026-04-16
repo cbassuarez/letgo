@@ -1,5 +1,4 @@
 import {
-  PROTOCOL_VERSION,
   type ColorInteractionPolicy,
   type CueAction,
   type CueCommand,
@@ -48,7 +47,7 @@ export interface ShowSnapshot {
 
 export class ShowOrchestrator {
   private state: ShowState = "idle";
-  private version = PROTOCOL_VERSION;
+  private cueVersion = 0;
   private startedAtMs: number | null = null;
   private pausedAtMs: number | null = null;
   private pauseOffsetMs = 0;
@@ -58,7 +57,7 @@ export class ShowOrchestrator {
     return {
       state: this.state,
       logicalTime: this.logicalTime(now),
-      version: this.version,
+      version: this.cueVersion,
       vector: this.vector
     };
   }
@@ -117,6 +116,8 @@ export class ShowOrchestrator {
 
     this.state = nextState;
     const logicalTime = this.logicalTime(now);
+    this.cueVersion += 1;
+    const version = this.cueVersion;
 
     return {
       cueId: `${nextState}:${logicalTime}`,
@@ -134,7 +135,7 @@ export class ShowOrchestrator {
               }
             : undefined
       },
-      version: this.version,
+      version,
       action
     };
   }

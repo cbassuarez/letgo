@@ -1,6 +1,6 @@
 import Hls from "hls.js";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CueCommand } from "@conductor/protocol";
+import type { CueCommand, ShowSceneKey, ShowStreamMap } from "@conductor/protocol";
 
 interface FixedVideoLayerProps {
   cue: CueCommand | null;
@@ -9,15 +9,30 @@ interface FixedVideoLayerProps {
   onPlaybackErrorChange?: (hasError: boolean) => void;
 }
 
-const mediaForState: Record<string, string> = {
+const hlsMimeType = "application/vnd.apple.mpegurl";
+const localDevMediaForState: Record<string, string> = {
   preshow: "media/preshow.mp4",
   introduction: "media/introduction.mp4",
   main: "media/show-fixed.mp4",
   ending: "media/ending.mp4",
   interstitial: "media/interstitial-loop.mp4"
 };
-const hlsMimeType = "application/vnd.apple.mpegurl";
-const defaultHlsBaseUrl = "https://media.letgofilm.com/test-shots-v1";
+const sceneKeys: ShowSceneKey[] = [
+  "interstitial",
+  "preshow",
+  "introduction",
+  "mainStatic",
+  "mainDynamic",
+  "ending"
+];
+const streamPayloadFieldByScene: Record<ShowSceneKey, string> = {
+  interstitial: "showStreamInterstitial",
+  preshow: "showStreamPreshow",
+  introduction: "showStreamIntroduction",
+  mainStatic: "showStreamMainStatic",
+  mainDynamic: "showStreamMainDynamic",
+  ending: "showStreamEnding"
+};
 
 const toBaseAssetUrl = (path: string): string => {
   const base = import.meta.env.BASE_URL ?? "/";
@@ -33,47 +48,187 @@ const toSharedMediaUrl = (value: string): string => {
   return toBaseAssetUrl(value);
 };
 
-const normalizeUrl = (value: string | undefined): string | null => {
-  if (!value) {
+const normalizeUrl = (value: unknown): string | null => {
+  if (typeof value !== "string") {
     return null;
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 };
 
-const joinUrl = (base: string, path: string): string => {
-  const normalizedBase = base.endsWith("/") ? base.slice(0, -1) : base;
-  const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
-  return `${normalizedBase}/${normalizedPath}`;
+const boolFromPayload = (value: unknown, fallback = false): boolean => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+  return fallback;
 };
 
-const resolveConfiguredHlsSource = (showState: string | null, interstitialActive: boolean): string | null => {
-  const env = import.meta.env as Record<string, string | undefined>;
-  const base = normalizeUrl(env.VITE_HLS_BASE_URL) ?? defaultHlsBaseUrl;
-  const configured = {
-    preshow: normalizeUrl(env.VITE_HLS_PRESHOW_URL) ?? joinUrl(base, "preshow/preshow.m3u8"),
-    introduction: normalizeUrl(env.VITE_HLS_INTRODUCTION_URL) ?? joinUrl(base, "introduction/introduction.m3u8"),
-    main: normalizeUrl(env.VITE_HLS_MAIN_URL) ?? joinUrl(base, "main/main.m3u8"),
-    ending: normalizeUrl(env.VITE_HLS_ENDING_URL) ?? joinUrl(base, "ending/ending.m3u8"),
-    interstitial: normalizeUrl(env.VITE_HLS_INTERSTITIAL_URL) ?? joinUrl(base, "interstitial/interstitial.m3u8")
-  };
+const parseSceneKey = (value: unknown): ShowSceneKey | null =>
+  typeof value === "string" && sceneKeys.includes(value as ShowSceneKey)
+    ? (value as ShowSceneKey)
+    : null;
 
-  if (showState === "preshow") {
-    return configured.preshow;
+const parseStreamMapFromUnknown = (value: unknown): ShowStreamMap => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    return sceneKeys.reduce<ShowStreamMap>((acc, key) => {
+      const maybe = normalizeUrl(record[key]);
+      if (maybe) {
+        acc[key] = maybe;
+      }
+      return acc;
+    }, {});
   }
-  if (showState === "introduction") {
-    return configured.introduction;
+
+  if (typeof value === "string") {
+    try {
+      return parseStreamMapFromUnknown(JSON.parse(value));
+    } catch {
+      return {};
+    }
   }
-  if (showState === "ending") {
-    return configured.ending;
+
+  return {};
+};
+
+const parseStreamMapFromPayload = (payload: Record<string, unknown>): ShowStreamMap => {
+  const fromMap = parseStreamMapFromUnknown(payload.showStreamMap);
+  const fromFields = sceneKeys.reduce<ShowStreamMap>((acc, key) => {
+    const maybe = normalizeUrl(payload[streamPayloadFieldByScene[key]]);
+    if (maybe) {
+      acc[key] = maybe;
+    }
+    return acc;
+  }, {});
+
+  return {
+    ...fromMap,
+    ...fromFields
+  };
+};
+
+const resolveCueVersion = (cue: CueCommand | null, payload: Record<string, unknown>): number => {
+  const payloadVersionRaw = payload.cueVersion;
+  const parsedPayloadVersion =
+    typeof payloadVersionRaw === "number"
+      ? payloadVersionRaw
+      : typeof payloadVersionRaw === "string"
+        ? Number(payloadVersionRaw)
+        : NaN;
+  const candidates = [
+    cue?.version,
+    Number.isFinite(parsedPayloadVersion) ? parsedPayloadVersion : undefined
+  ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  return candidates.length > 0 ? Math.max(...candidates) : 0;
+};
+
+const resolveActiveScene = (
+  cue: CueCommand | null,
+  payload: Record<string, unknown>,
+  streamMap: ShowStreamMap,
+  interstitialActive: boolean
+): ShowSceneKey | null => {
+  const explicit = parseSceneKey(payload.showActiveScene ?? payload.activeSceneKey);
+  if (explicit) {
+    return explicit;
   }
+
+  if (cue?.showState === "preshow" && streamMap.preshow) {
+    return "preshow";
+  }
+  if (cue?.showState === "introduction" && streamMap.introduction) {
+    return "introduction";
+  }
+  if (cue?.showState === "ending" && streamMap.ending) {
+    return "ending";
+  }
+  if (interstitialActive && streamMap.interstitial) {
+    return "interstitial";
+  }
+
+  const outputMode = typeof payload.outputMode === "string" ? payload.outputMode.toLowerCase() : "";
+  if (cue?.showState === "main") {
+    if (outputMode.includes("dynamic")) {
+      return streamMap.mainDynamic ? "mainDynamic" : null;
+    }
+    if (outputMode.includes("static") || outputMode === "program") {
+      return streamMap.mainStatic ? "mainStatic" : null;
+    }
+    return (streamMap.mainDynamic ? "mainDynamic" : null) ?? (streamMap.mainStatic ? "mainStatic" : null);
+  }
+
+  return null;
+};
+
+const resolveSource = (
+  cue: CueCommand | null,
+  payload: Record<string, unknown>,
+  interstitialActive: boolean,
+  streamMap: ShowStreamMap,
+  activeScene: ShowSceneKey | null
+): string | null => {
+  const explicitFixedMediaRef =
+    normalizeUrl(payload.showFixedMediaRef) ??
+    normalizeUrl(payload.showFixedMediaUrl) ??
+    normalizeUrl(payload.showFixedSrc);
+  if (explicitFixedMediaRef) {
+    return toSharedMediaUrl(explicitFixedMediaRef);
+  }
+
+  if (activeScene && streamMap[activeScene]) {
+    return toSharedMediaUrl(streamMap[activeScene]!);
+  }
+
+  if (cue?.showState === "preshow" && streamMap.preshow) {
+    return toSharedMediaUrl(streamMap.preshow);
+  }
+  if (cue?.showState === "introduction" && streamMap.introduction) {
+    return toSharedMediaUrl(streamMap.introduction);
+  }
+  if (cue?.showState === "ending" && streamMap.ending) {
+    return toSharedMediaUrl(streamMap.ending);
+  }
+  if (cue?.showState === "main") {
+    const outputMode = typeof payload.outputMode === "string" ? payload.outputMode.toLowerCase() : "";
+    if (outputMode.includes("dynamic") && streamMap.mainDynamic) {
+      return toSharedMediaUrl(streamMap.mainDynamic);
+    }
+    if ((outputMode.includes("static") || outputMode === "program") && streamMap.mainStatic) {
+      return toSharedMediaUrl(streamMap.mainStatic);
+    }
+    if (streamMap.mainDynamic) {
+      return toSharedMediaUrl(streamMap.mainDynamic);
+    }
+    if (streamMap.mainStatic) {
+      return toSharedMediaUrl(streamMap.mainStatic);
+    }
+  }
+  if (interstitialActive && streamMap.interstitial) {
+    return toSharedMediaUrl(streamMap.interstitial);
+  }
+
+  const env = import.meta.env as Record<string, string | undefined>;
+  const allowLocalFallback = boolFromPayload(env.VITE_ENABLE_LOCAL_MEDIA_FALLBACK, false);
+  if (!allowLocalFallback) {
+    return null;
+  }
+
   if (interstitialActive) {
-    return configured.interstitial;
+    return toBaseAssetUrl(localDevMediaForState.interstitial);
   }
-  if (!showState) {
-    return configured.preshow;
+  if (cue) {
+    return toBaseAssetUrl(localDevMediaForState[cue.showState] ?? localDevMediaForState.main);
   }
-  return configured[showState as keyof typeof configured] ?? null;
+  return toBaseAssetUrl(localDevMediaForState.preshow);
 };
 
 const looksLikeHlsSource = (source: string, mimeHint: string | null): boolean => {
@@ -118,22 +273,6 @@ const resetVideoElement = (video: HTMLVideoElement): void => {
   }
 };
 
-const boolFromPayload = (value: unknown, fallback = false): boolean => {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string") {
-    const normalized = value.toLowerCase();
-    if (normalized === "true") {
-      return true;
-    }
-    if (normalized === "false") {
-      return false;
-    }
-  }
-  return fallback;
-};
-
 export const FixedVideoLayer = ({
   cue,
   logicalNow,
@@ -148,49 +287,40 @@ export const FixedVideoLayer = ({
   const hlsRef = useRef<Hls | null>(null);
   const [videoReady, setVideoReady] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
+
   const payload = (cue?.payload ?? {}) as Record<string, unknown>;
   const outputMode = typeof payload.outputMode === "string" ? payload.outputMode.toLowerCase() : "";
   const interstitialActive = boolFromPayload(
     payload.interstitialActive,
     outputMode.includes("interstitial") || outputMode === "off"
   );
-  const explicitFixedMediaRef = typeof payload.showFixedMediaRef === "string"
-    ? payload.showFixedMediaRef
-    : typeof payload.showFixedMediaUrl === "string"
-      ? payload.showFixedMediaUrl
-      : typeof payload.showFixedSrc === "string"
-        ? payload.showFixedSrc
-        : null;
-  const explicitMimeHint = typeof payload.showFixedMediaMime === "string"
-    ? payload.showFixedMediaMime
-    : typeof payload.showFixedMime === "string"
-      ? payload.showFixedMime
-      : null;
-  const configuredHlsSource = resolveConfiguredHlsSource(cue?.showState ?? null, interstitialActive);
-  const source = useMemo(() => {
-    if (explicitFixedMediaRef) {
-      return toSharedMediaUrl(explicitFixedMediaRef);
-    }
-    if (configuredHlsSource) {
-      return configuredHlsSource;
-    }
-    if (interstitialActive) {
-      return toBaseAssetUrl(mediaForState.interstitial);
-    }
-    if (cue) {
-      return toBaseAssetUrl(mediaForState[cue.showState] ?? mediaForState.main);
-    }
-    return toBaseAssetUrl(mediaForState.preshow);
-  }, [configuredHlsSource, cue, explicitFixedMediaRef, interstitialActive]);
-  const hlsSource = looksLikeHlsSource(source, explicitMimeHint);
+  const streamMap = useMemo(() => parseStreamMapFromPayload(payload), [payload]);
+  const activeScene = useMemo(
+    () => resolveActiveScene(cue, payload, streamMap, interstitialActive),
+    [cue, payload, streamMap, interstitialActive]
+  );
+  const cueVersion = useMemo(() => resolveCueVersion(cue, payload), [cue, payload]);
+  const source = useMemo(
+    () => resolveSource(cue, payload, interstitialActive, streamMap, activeScene),
+    [cue, payload, interstitialActive, streamMap, activeScene]
+  );
+  const explicitMimeHint =
+    normalizeUrl(payload.showFixedMediaMime) ??
+    normalizeUrl(payload.showFixedMime);
+  const hlsSource = source ? looksLikeHlsSource(source, explicitMimeHint) : false;
   const shouldLoop = hlsSource ? false : boolFromPayload(payload.outputLoop, true);
-  const fallbackLabel = interstitialActive ? "INTERSTITIAL" : (cue?.showState ?? "preshow").toUpperCase();
+  const fallbackLabel = activeScene
+    ? activeScene.replace(/([A-Z])/g, " $1").toUpperCase()
+    : interstitialActive
+      ? "INTERSTITIAL"
+      : (cue?.showState ?? "preshow").toUpperCase();
+  const playbackBindingKey = `${source ?? "none"}::${activeScene ?? "none"}::${cueVersion}`;
 
   useEffect(() => {
     setVideoReady(false);
     setVideoFailed(false);
     onPlaybackErrorChange?.(false);
-  }, [onPlaybackErrorChange, source]);
+  }, [onPlaybackErrorChange, playbackBindingKey]);
 
   useEffect(() => () => {
     if (hlsRef.current) {
@@ -208,6 +338,12 @@ export const FixedVideoLayer = ({
     if (hlsRef.current) {
       hlsRef.current.destroy();
       hlsRef.current = null;
+    }
+
+    if (!source) {
+      setVideoFailed(true);
+      onPlaybackErrorChange?.(true);
+      return;
     }
 
     resetVideoElement(video);
@@ -240,8 +376,6 @@ export const FixedVideoLayer = ({
       if (!data.fatal) {
         return;
       }
-      setVideoFailed(true);
-      onPlaybackErrorChange?.(true);
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
         hls.startLoad();
         return;
@@ -250,10 +384,8 @@ export const FixedVideoLayer = ({
         hls.recoverMediaError();
         return;
       }
-      hls.destroy();
-      if (hlsRef.current === hls) {
-        hlsRef.current = null;
-      }
+      setVideoFailed(true);
+      onPlaybackErrorChange?.(true);
     });
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -274,15 +406,15 @@ export const FixedVideoLayer = ({
         hlsRef.current = null;
       }
     };
-  }, [hlsSource, onPlaybackErrorChange, source]);
+  }, [hlsSource, onPlaybackErrorChange, playbackBindingKey, source]);
 
   useEffect(() => {
     const video = ref.current;
-    if (!video || !cue) {
+    if (!video || !cue || !source) {
       return;
     }
 
-    if (interstitialActive || hlsSource) {
+    if (interstitialActive || hlsSource || activeScene === "interstitial") {
       return;
     }
 
@@ -290,10 +422,17 @@ export const FixedVideoLayer = ({
     if (Math.abs(video.currentTime - targetTime) > 0.2) {
       video.currentTime = targetTime;
     }
-  }, [cue, hlsSource, logicalNow, interstitialActive]);
+  }, [activeScene, cue, hlsSource, logicalNow, source, interstitialActive]);
+
+  const showFallbackOverlay = source === null || (!videoReady && !videoFailed);
 
   return (
-    <div className="fixed-video-layer" data-testid="fixed-video-layer" data-active-source={source}>
+    <div
+      className="fixed-video-layer"
+      data-testid="fixed-video-layer"
+      data-active-source={source ?? "none"}
+      data-active-scene={activeScene ?? "none"}
+    >
       <video
         ref={ref}
         className={`fixed-video-surface ${videoReady && !videoFailed ? "ready" : ""}`}
@@ -313,7 +452,7 @@ export const FixedVideoLayer = ({
           onPlaybackErrorChange?.(true);
         }}
       />
-      {!videoReady || videoFailed ? (
+      {showFallbackOverlay ? (
         <div className="fixed-video-fallback" data-testid="fixed-video-fallback">
           <div className="fixed-video-fallback-scan" />
           <p className="fixed-video-fallback-label">{fallbackLabel}</p>

@@ -235,17 +235,25 @@ private struct HLSStreamConfig {
 
     let preshowURL: String?
     let introductionURL: String?
-    let mainURL: String?
+    let mainStaticURL: String?
+    let mainDynamicURL: String?
     let endingURL: String?
     let interstitialURL: String?
     let laneBaseURL: String?
 
     static func fromEnvironment(_ env: [String: String] = ProcessInfo.processInfo.environment) -> HLSStreamConfig {
         let baseURL = normalized(env["CONDUCTOR_HLS_BASE_URL"]) ?? defaultBaseURL
+        let mainStatic = normalized(env["CONDUCTOR_HLS_MAIN_STATIC_URL"])
+            ?? normalized(env["CONDUCTOR_HLS_MAIN_URL"])
+            ?? join(baseURL, "main/main.m3u8")
+        let mainDynamic = normalized(env["CONDUCTOR_HLS_MAIN_DYNAMIC_URL"])
+            ?? normalized(env["CONDUCTOR_HLS_MAIN_URL"])
+            ?? mainStatic
         return HLSStreamConfig(
             preshowURL: normalized(env["CONDUCTOR_HLS_PRESHOW_URL"]) ?? join(baseURL, "preshow/preshow.m3u8"),
             introductionURL: normalized(env["CONDUCTOR_HLS_INTRODUCTION_URL"]) ?? join(baseURL, "introduction/introduction.m3u8"),
-            mainURL: normalized(env["CONDUCTOR_HLS_MAIN_URL"]) ?? join(baseURL, "main/main.m3u8"),
+            mainStaticURL: mainStatic,
+            mainDynamicURL: mainDynamic,
             endingURL: normalized(env["CONDUCTOR_HLS_ENDING_URL"]) ?? join(baseURL, "ending/ending.m3u8"),
             interstitialURL: normalized(env["CONDUCTOR_HLS_INTERSTITIAL_URL"]) ?? join(baseURL, "interstitial/interstitial.m3u8"),
             laneBaseURL: normalized(env["CONDUCTOR_HLS_LANE_BASE_URL"]) ?? join(baseURL, "lanes")
@@ -259,7 +267,7 @@ private struct HLSStreamConfig {
         case .introduction:
             return introductionURL
         case .main:
-            return mainURL
+            return mainStaticURL
         case .ending:
             return endingURL
         case .idle, .hold, .aborted, .recovery:
@@ -273,6 +281,13 @@ private struct HLSStreamConfig {
         }
         let encodedLaneId = laneId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? laneId
         return Self.join(laneBaseURL, "\(encodedLaneId).m3u8")
+    }
+
+    func dynamicURL(for laneId: String?) -> String? {
+        if let laneId, let laneURL = laneURL(for: laneId) {
+            return laneURL
+        }
+        return mainDynamicURL ?? mainStaticURL
     }
 
     private static func normalized(_ rawValue: String?) -> String? {
@@ -633,6 +648,12 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private var showFixedCounter = 0
     private var sequenceWorkItems: [DispatchWorkItem] = []
     private let hlsStreamConfig = HLSStreamConfig.fromEnvironment()
+    private let localMediaPreviewEnabled: Bool = {
+        let env = ProcessInfo.processInfo.environment["CONDUCTOR_LOCAL_MEDIA_PREVIEW"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return env == "1" || env == "true" || env == "yes"
+    }()
     private var phoneCommandSequence = 0
     private var lastLatchStatus: StatusLineEvent?
     private var midiIngestor: MIDIIngestor?
@@ -1741,8 +1762,10 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
 
             var cuePayload = baseCue.payload
             cuePayload.merge(outputProfile.payload) { _, new in new }
+            cuePayload.merge(canonicalStreamPayload(showState: baseCue.showState, outputProfile: outputProfile)) { _, new in new }
             cuePayload.merge(extraPayload) { _, new in new }
             cuePayload["engineRunning"] = engineRunning ? "true" : "false"
+            cuePayload["cueVersion"] = String(baseCue.version)
 
             let cue = CueCommand(
                 cueId: baseCue.cueId,
@@ -2230,7 +2253,11 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return
         }
 
-        guard laneMediaURL(for: plan.laneId) != nil else {
+        guard resolveShowFixedMediaRef(
+            showState: plan.targetState,
+            usesInterstitialMedia: false,
+            showFixedLaneId: plan.laneId
+        ) != nil else {
             pushStatus(StatusLineEvent(
                 message: "Blocked: load media for \(plan.laneId.uppercased()) first",
                 severity: .warn,
@@ -5189,14 +5216,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return
         }
 
-        let mediaURL: URL?
-        if profile.usesInterstitialMedia {
-            mediaURL = interstitialMediaURL
-        } else if let laneId = profile.showFixedLaneId {
-            mediaURL = laneMediaURL(for: laneId)
-        } else {
-            mediaURL = sceneMediaURLs[cue.showState]
-        }
+        let mediaURL = previewMediaURL(for: cue, outputProfile: profile)
 
         guard let mediaURL else {
             configurePreviewLoop(shouldLoop: false)
@@ -5260,6 +5280,66 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return laneURL
         }
         return hlsStreamConfig.sceneURL(for: showState)
+    }
+
+    private func activeSceneKey(
+        for showState: ShowState,
+        outputProfile: OutputProfile
+    ) -> String {
+        if outputProfile.usesInterstitialMedia {
+            return "interstitial"
+        }
+
+        switch showState {
+        case .preshow:
+            return "preshow"
+        case .introduction:
+            return "introduction"
+        case .ending:
+            return "ending"
+        case .main:
+            return outputProfile.mode == .dynamic ? "mainDynamic" : "mainStatic"
+        case .idle, .hold, .aborted, .recovery:
+            if outputProfile.mode == .dynamic {
+                return "mainDynamic"
+            }
+            if outputProfile.mode == .static {
+                return "mainStatic"
+            }
+            return "interstitial"
+        }
+    }
+
+    private func canonicalStreamPayload(
+        showState: ShowState,
+        outputProfile: OutputProfile
+    ) -> [String: String] {
+        var payload: [String: String] = [:]
+        var streamMap: [String: String] = [:]
+
+        func assign(_ payloadKey: String, _ streamMapKey: String, _ value: String?) {
+            guard let value, !value.isEmpty else {
+                return
+            }
+            payload[payloadKey] = value
+            streamMap[streamMapKey] = value
+        }
+
+        assign("showStreamPreshow", "preshow", hlsStreamConfig.preshowURL)
+        assign("showStreamIntroduction", "introduction", hlsStreamConfig.introductionURL)
+        assign("showStreamMainStatic", "mainStatic", hlsStreamConfig.mainStaticURL)
+        assign("showStreamMainDynamic", "mainDynamic", hlsStreamConfig.dynamicURL(for: outputProfile.showFixedLaneId))
+        assign("showStreamEnding", "ending", hlsStreamConfig.endingURL)
+        assign("showStreamInterstitial", "interstitial", hlsStreamConfig.interstitialURL)
+
+        if !streamMap.isEmpty,
+           let data = try? JSONSerialization.data(withJSONObject: streamMap, options: []),
+           let json = String(data: data, encoding: .utf8) {
+            payload["showStreamMap"] = json
+        }
+
+        payload["showActiveScene"] = activeSceneKey(for: showState, outputProfile: outputProfile)
+        return payload
     }
 
     private func resolveOutputProfile(
@@ -5386,7 +5466,12 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     }
 
     private func shouldUseInterstitial(for showState: ShowState) -> Bool {
-        guard interstitialMediaURL != nil else {
+        let hasInterstitial = if localMediaPreviewEnabled {
+            interstitialMediaURL != nil
+        } else {
+            hlsStreamConfig.interstitialURL != nil
+        }
+        guard hasInterstitial else {
             return false
         }
         return isBetweenStartedAndEnding(showState)
@@ -5510,11 +5595,44 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         }
     }
 
-    private func staticMediaURL(for cue: CueCommand, outputProfile: OutputProfile) -> URL? {
-        if let laneId = outputProfile.showFixedLaneId {
-            return laneMediaURL(for: laneId)
+    private func remotePreviewURL(from mediaRef: String?) -> URL? {
+        guard let mediaRef else {
+            return nil
         }
-        return sceneMediaURLs[cue.showState]
+        guard let url = URL(string: mediaRef), let scheme = url.scheme, !scheme.isEmpty else {
+            return nil
+        }
+        return url
+    }
+
+    private func previewMediaURL(
+        for cue: CueCommand,
+        outputProfile: OutputProfile
+    ) -> URL? {
+        if localMediaPreviewEnabled {
+            if outputProfile.usesInterstitialMedia {
+                return interstitialMediaURL
+            }
+            if let laneId = outputProfile.showFixedLaneId {
+                return laneMediaURL(for: laneId)
+            }
+            return sceneMediaURLs[cue.showState]
+        }
+
+        if let directURL = remotePreviewURL(from: outputProfile.showFixedMediaRef) {
+            return directURL
+        }
+
+        let resolved = resolveShowFixedMediaRef(
+            showState: cue.showState,
+            usesInterstitialMedia: outputProfile.usesInterstitialMedia,
+            showFixedLaneId: outputProfile.showFixedLaneId
+        )
+        return remotePreviewURL(from: resolved)
+    }
+
+    private func staticMediaURL(for cue: CueCommand, outputProfile: OutputProfile) -> URL? {
+        previewMediaURL(for: cue, outputProfile: outputProfile)
     }
 
     private func cachedMediaDuration(for mediaURL: URL) async -> TimeInterval? {

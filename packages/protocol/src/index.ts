@@ -23,6 +23,28 @@ export interface CueCommand {
   action: CueAction;
 }
 
+export type ShowSceneKey =
+  | "interstitial"
+  | "preshow"
+  | "introduction"
+  | "mainStatic"
+  | "mainDynamic"
+  | "ending";
+
+export type ShowStreamMap = Partial<Record<ShowSceneKey, string>>;
+
+export interface ShowSnapshotPayload {
+  state: ShowState;
+  logicalTime: number;
+  version: number;
+  vector: ParamVector;
+  cueId?: string;
+  cueVersion?: number;
+  activeScene?: ShowSceneKey;
+  streamMap?: ShowStreamMap;
+  cuePayload?: Record<string, unknown>;
+}
+
 export interface SyncPacket {
   kind: "ping" | "pong";
   serverTime: number;

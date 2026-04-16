@@ -25,13 +25,16 @@ describe("FixedVideoLayer", () => {
     expect(screen.getByTestId("fixed-video-fallback")).toBeTruthy();
   });
 
-  it("uses interstitial source when output mode is interstitial", () => {
+  it("uses stream-map interstitial source when output mode is interstitial", () => {
     render(
       <FixedVideoLayer
         cue={{
           ...baseCue,
           showState: "main",
-          payload: { outputMode: "interstitial_loop" }
+          payload: {
+            outputMode: "interstitial_loop",
+            showStreamInterstitial: "https://stream.example.com/interstitial.m3u8"
+          }
         }}
         logicalNow={0}
         enabled
@@ -40,7 +43,7 @@ describe("FixedVideoLayer", () => {
 
     const layer = screen.getByTestId("fixed-video-layer");
     expect(layer.getAttribute("data-active-source")).toBe(
-      "https://media.letgofilm.com/test-shots-v1/interstitial/interstitial.m3u8"
+      "https://stream.example.com/interstitial.m3u8"
     );
   });
 
@@ -50,7 +53,11 @@ describe("FixedVideoLayer", () => {
         cue={{
           ...baseCue,
           showState: "ending",
-          payload: { outputMode: "interstitial_loop" }
+          payload: {
+            outputMode: "interstitial_loop",
+            showStreamInterstitial: "https://stream.example.com/interstitial.m3u8",
+            showStreamEnding: "https://stream.example.com/ending.m3u8"
+          }
         }}
         logicalNow={0}
         enabled
@@ -59,7 +66,7 @@ describe("FixedVideoLayer", () => {
 
     const layer = screen.getByTestId("fixed-video-layer");
     expect(layer.getAttribute("data-active-source")).toBe(
-      "https://media.letgofilm.com/test-shots-v1/ending/ending.m3u8"
+      "https://stream.example.com/ending.m3u8"
     );
   });
 
@@ -120,7 +127,16 @@ describe("FixedVideoLayer", () => {
   });
 
   it("hides fallback when video can play", () => {
-    render(<FixedVideoLayer cue={baseCue} logicalNow={0} enabled />);
+    render(
+      <FixedVideoLayer
+        cue={{
+          ...baseCue,
+          payload: { showFixedMediaRef: "https://stream.example.com/preshow.m3u8" }
+        }}
+        logicalNow={0}
+        enabled
+      />
+    );
 
     const video = screen.getByTestId("fixed-video-layer").querySelector("video");
     expect(video).toBeTruthy();
@@ -129,13 +145,29 @@ describe("FixedVideoLayer", () => {
     expect(screen.queryByTestId("fixed-video-fallback")).toBeNull();
   });
 
-  it("keeps fallback visible on load error", () => {
-    render(<FixedVideoLayer cue={baseCue} logicalNow={0} enabled />);
+  it("keeps frame visible on load error without fallback overlay takeover", () => {
+    render(
+      <FixedVideoLayer
+        cue={{
+          ...baseCue,
+          payload: { showFixedMediaRef: "https://stream.example.com/preshow.m3u8" }
+        }}
+        logicalNow={0}
+        enabled
+      />
+    );
 
     const video = screen.getByTestId("fixed-video-layer").querySelector("video");
     expect(video).toBeTruthy();
     fireEvent.error(video as HTMLVideoElement);
 
-    expect(screen.getByTestId("fixed-video-fallback")).toBeTruthy();
+    expect(screen.queryByTestId("fixed-video-fallback")).toBeNull();
+  });
+
+  it("uses no source by default without stream refs when local fallback is disabled", () => {
+    render(<FixedVideoLayer cue={baseCue} logicalNow={0} enabled />);
+
+    const layer = screen.getByTestId("fixed-video-layer");
+    expect(layer.getAttribute("data-active-source")).toBe("none");
   });
 });
