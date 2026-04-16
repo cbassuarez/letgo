@@ -341,20 +341,14 @@ export const DeviceRoute = (): JSX.Element => {
     offlineReason === null &&
     (forceInterstitialRecovery
       ? showRecoveryInterstitial && fixedLayerReady && !fixedLayerErrored
-      : !showFixedPlanned || (fixedLayerReady && !fixedLayerErrored));
+      : true);
   const renderLiveStage =
     permissionsDone &&
     offlineReason === null &&
     !forceInterstitialRecovery &&
     !needsRevealCountdown &&
     countdownStep === null;
-  const armingForReveal =
-    permissionsDone &&
-    offlineReason === null &&
-    !forceInterstitialRecovery &&
-    (needsRevealCountdown || countdownStep !== null);
-  const fixedLayerEnabled =
-    ((renderLiveStage || armingForReveal) && showFixedPlanned) || showRecoveryInterstitial;
+  const fixedLayerEnabled = (renderLiveStage && showFixedPlanned) || showRecoveryInterstitial;
   const showDynamicWithFallback = renderLiveStage && showDynamicPlanned;
   const compositorDisplayMode = showDynamicWithFallback
     ? compositorMode === "unsupported"
