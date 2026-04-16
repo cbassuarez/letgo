@@ -1274,8 +1274,35 @@ export const DeviceRoute = (): JSX.Element => {
           className="live-countdown-shell"
           data-testid="live-reveal-countdown"
         >
-          <p className="live-countdown-label">Live In</p>
-          <p className="live-countdown-value">{countdownStep}</p>
+          <motion.article
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: prefersReducedMotion ? 0 : 0.26 }}
+            className="live-countdown-card"
+          >
+            <p className="live-countdown-kicker">Mission Control</p>
+            <p className="live-countdown-title">Live Stage In</p>
+            <div className="live-countdown-figure">
+              <p className="live-countdown-value" aria-live="polite">
+                {String(countdownStep).padStart(2, "0")}
+              </p>
+              <p className="live-countdown-unit">sec</p>
+            </div>
+            <div
+              className="live-countdown-progress"
+              role="progressbar"
+              aria-valuenow={LIVE_REVEAL_COUNTDOWN_SECONDS - countdownStep + 1}
+              aria-valuemin={0}
+              aria-valuemax={LIVE_REVEAL_COUNTDOWN_SECONDS}
+            >
+              <span
+                style={{
+                  width: `${((LIVE_REVEAL_COUNTDOWN_SECONDS - countdownStep + 1) / LIVE_REVEAL_COUNTDOWN_SECONDS) * 100}%`
+                }}
+              />
+            </div>
+            <p className="live-countdown-hint">Holding until stream stabilizes.</p>
+          </motion.article>
         </motion.section>
       ) : null}
 

@@ -300,44 +300,6 @@ body::before {
   opacity: 1;
 }
 
-.fixed-video-fallback {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  align-items: end;
-  justify-items: end;
-  padding: 1.1rem;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(230, 240, 248, 0.06), rgba(0, 0, 0, 0.98) 58%),
-    linear-gradient(180deg, rgba(220, 236, 247, 0.05), rgba(0, 0, 0, 0.9) 40%);
-}
-
-.fixed-video-fallback-scan {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.16;
-  background: repeating-linear-gradient(
-    180deg,
-    rgba(214, 231, 243, 0.5) 0px,
-    rgba(214, 231, 243, 0.5) 1px,
-    transparent 1px,
-    transparent 3px
-  );
-}
-
-.fixed-video-fallback-label {
-  position: relative;
-  margin: 0;
-  border: 1px solid rgba(208, 227, 238, 0.4);
-  background: rgba(0, 0, 0, 0.62);
-  padding: 0.24rem 0.52rem;
-  font-size: 0.58rem;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: rgba(223, 236, 245, 0.88);
-}
-
 .live-ribbon {
   position: absolute;
   left: 50%;
@@ -534,27 +496,84 @@ body::before {
   z-index: 31;
   display: grid;
   place-items: center;
+  padding: 1rem;
   pointer-events: none;
-  background: radial-gradient(circle at 50% 50%, rgba(183, 211, 225, 0.1), rgba(0, 0, 0, 0) 56%);
 }
 
-.live-countdown-label {
+.live-countdown-card {
+  width: min(92vw, 520px);
+  border: 1px solid rgba(190, 213, 227, 0.36);
+  background:
+    linear-gradient(180deg, rgba(13, 17, 20, 0.94), rgba(0, 0, 0, 0.88)),
+    radial-gradient(circle at 12% 10%, rgba(175, 200, 214, 0.09), transparent 52%);
+  box-shadow: 0 0 0 1px rgba(220, 236, 245, 0.05), 0 24px 80px rgba(0, 0, 0, 0.48);
+  padding: 1rem 1.1rem 0.95rem;
+}
+
+.live-countdown-kicker {
   margin: 0;
-  position: absolute;
-  top: calc(50% - 2.7rem);
-  font-size: 0.72rem;
+  font-size: 0.58rem;
   letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: rgba(197, 222, 235, 0.86);
+  color: rgba(177, 203, 219, 0.78);
+}
+
+.live-countdown-title {
+  margin: 0.4rem 0 0;
+  font-size: clamp(1.1rem, 5vw, 1.9rem);
+  line-height: 1.04;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(232, 244, 250, 0.97);
+}
+
+.live-countdown-figure {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-top: 0.7rem;
 }
 
 .live-countdown-value {
   margin: 0;
-  font-size: clamp(4.2rem, 24vw, 9.5rem);
-  line-height: 0.9;
-  letter-spacing: 0.04em;
-  color: rgba(237, 247, 252, 0.97);
-  text-shadow: 0 0 34px rgba(191, 222, 237, 0.28);
+  font-family: "DIN 1451", "Bahnschrift", "FF DIN", "Avenir Next", "Helvetica Neue", sans-serif;
+  font-size: clamp(3.4rem, 13vw, 5.6rem);
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: rgba(240, 249, 253, 0.98);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 28px rgba(191, 222, 237, 0.2);
+}
+
+.live-countdown-unit {
+  margin: 0;
+  font-size: 0.7rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(184, 210, 224, 0.68);
+}
+
+.live-countdown-progress {
+  margin-top: 0.7rem;
+  height: 2px;
+  background: rgba(170, 198, 214, 0.14);
+  overflow: hidden;
+}
+
+.live-countdown-progress span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(191, 222, 237, 0.4), rgba(237, 247, 252, 0.95));
+  transition: width 1s linear;
+}
+
+.live-countdown-hint {
+  margin: 0.62rem 0 0;
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(196, 218, 231, 0.72);
 }
 
 .live-prompt-card {

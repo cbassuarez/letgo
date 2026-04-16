@@ -341,11 +341,6 @@ export const FixedVideoLayer = ({
     normalizeUrl(payload.showFixedMime);
   const hlsSource = source ? looksLikeHlsSource(source, explicitMimeHint) : false;
   const shouldLoop = hlsSource ? false : boolFromPayload(payload.outputLoop, true);
-  const fallbackLabel = effectiveScene
-    ? effectiveScene.replace(/([A-Z])/g, " $1").toUpperCase()
-    : interstitialActive
-      ? "INTERSTITIAL"
-      : (cue?.showState ?? "preshow").toUpperCase();
   const playbackBindingKey = `${source ?? "none"}::${effectiveScene ?? "none"}::${cueVersion}`;
 
   useEffect(() => {
@@ -473,8 +468,6 @@ export const FixedVideoLayer = ({
     }
   }, [cue, effectiveScene, hlsSource, interstitialActive, logicalNow, source]);
 
-  const showFallbackOverlay = source === null || (!videoReady && !videoFailed);
-
   return (
     <div
       className="fixed-video-layer"
@@ -503,12 +496,6 @@ export const FixedVideoLayer = ({
           onPlaybackErrorChange?.(true);
         }}
       />
-      {showFallbackOverlay ? (
-        <div className="fixed-video-fallback" data-testid="fixed-video-fallback">
-          <div className="fixed-video-fallback-scan" />
-          <p className="fixed-video-fallback-label">{fallbackLabel}</p>
-        </div>
-      ) : null}
     </div>
   );
 };

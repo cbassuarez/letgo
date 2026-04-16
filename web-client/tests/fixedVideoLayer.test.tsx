@@ -20,9 +20,10 @@ describe("FixedVideoLayer", () => {
     expect(view.container.firstChild).toBeNull();
   });
 
-  it("shows fallback until video is ready", () => {
+  it("renders the video surface without a fallback overlay", () => {
     render(<FixedVideoLayer cue={baseCue} logicalNow={0} enabled />);
-    expect(screen.getByTestId("fixed-video-fallback")).toBeTruthy();
+    expect(screen.getByTestId("fixed-video-layer")).toBeTruthy();
+    expect(screen.queryByTestId("fixed-video-fallback")).toBeNull();
   });
 
   it("uses stream-map interstitial source when output mode is interstitial", () => {
