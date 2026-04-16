@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { FixedVideoLayer } from "../src/components/FixedVideoLayer";
 
@@ -169,5 +169,44 @@ describe("FixedVideoLayer", () => {
 
     const layer = screen.getByTestId("fixed-video-layer");
     expect(layer.getAttribute("data-active-source")).toBe("none");
+  });
+
+  it("uses forced source override for recovery playback", () => {
+    render(
+      <FixedVideoLayer
+        cue={baseCue}
+        logicalNow={0}
+        enabled
+        forcedScene="interstitial"
+        forcedSource="https://stream.example.com/interstitial.m3u8"
+      />
+    );
+
+    const layer = screen.getByTestId("fixed-video-layer");
+    expect(layer.getAttribute("data-active-source")).toBe("https://stream.example.com/interstitial.m3u8");
+    expect(layer.getAttribute("data-active-scene")).toBe("interstitial");
+  });
+
+  it("reports playback readiness transitions", () => {
+    const onPlaybackReadyChange = vi.fn();
+    render(
+      <FixedVideoLayer
+        cue={{
+          ...baseCue,
+          payload: { showFixedMediaRef: "https://stream.example.com/preshow.m3u8" }
+        }}
+        logicalNow={0}
+        enabled
+        onPlaybackReadyChange={onPlaybackReadyChange}
+      />
+    );
+
+    const video = screen.getByTestId("fixed-video-layer").querySelector("video");
+    expect(video).toBeTruthy();
+    fireEvent.canPlay(video as HTMLVideoElement);
+    fireEvent.error(video as HTMLVideoElement);
+
+    expect(onPlaybackReadyChange).toHaveBeenCalledWith(true);
+    expect(onPlaybackReadyChange).toHaveBeenCalledWith(false);
   });
 });

@@ -6,7 +6,10 @@ interface FixedVideoLayerProps {
   cue: CueCommand | null;
   logicalNow: number;
   enabled: boolean;
+  forcedSource?: string | null;
+  forcedScene?: ShowSceneKey | null;
   onPlaybackErrorChange?: (hasError: boolean) => void;
+  onPlaybackReadyChange?: (isReady: boolean) => void;
 }
 
 const hlsMimeType = "application/vnd.apple.mpegurl";
@@ -300,6 +303,9 @@ export const FixedVideoLayer = ({
   cue,
   logicalNow,
   enabled,
+  forcedSource = null,
+  forcedScene = null,
+  onPlaybackReadyChange,
   onPlaybackErrorChange
 }: FixedVideoLayerProps): JSX.Element | null => {
   if (!enabled) {
@@ -323,28 +329,43 @@ export const FixedVideoLayer = ({
     () => resolveActiveScene(cue, payload, streamMap, interstitialActive),
     [cue, payload, streamMap, interstitialActive]
   );
+  const effectiveScene = forcedScene ?? activeScene;
   const cueVersion = useMemo(() => resolveCueVersion(cue, payload), [cue, payload]);
-  const source = useMemo(
-    () => resolveSource(cue, payload, interstitialActive, streamMap, activeScene),
-    [cue, payload, interstitialActive, streamMap, activeScene]
+  const resolvedSource = useMemo(
+    () => resolveSource(cue, payload, interstitialActive, streamMap, effectiveScene),
+    [cue, payload, interstitialActive, streamMap, effectiveScene]
   );
+  const source = forcedSource ?? resolvedSource;
   const explicitMimeHint =
     normalizeUrl(payload.showFixedMediaMime) ??
     normalizeUrl(payload.showFixedMime);
   const hlsSource = source ? looksLikeHlsSource(source, explicitMimeHint) : false;
   const shouldLoop = hlsSource ? false : boolFromPayload(payload.outputLoop, true);
-  const fallbackLabel = activeScene
-    ? activeScene.replace(/([A-Z])/g, " $1").toUpperCase()
+  const fallbackLabel = effectiveScene
+    ? effectiveScene.replace(/([A-Z])/g, " $1").toUpperCase()
     : interstitialActive
       ? "INTERSTITIAL"
       : (cue?.showState ?? "preshow").toUpperCase();
-  const playbackBindingKey = `${source ?? "none"}::${activeScene ?? "none"}::${cueVersion}`;
+  const playbackBindingKey = `${source ?? "none"}::${effectiveScene ?? "none"}::${cueVersion}`;
 
   useEffect(() => {
     setVideoReady(false);
     setVideoFailed(false);
+    onPlaybackReadyChange?.(false);
     onPlaybackErrorChange?.(false);
-  }, [onPlaybackErrorChange, playbackBindingKey]);
+  }, [onPlaybackErrorChange, onPlaybackReadyChange, playbackBindingKey]);
+
+  useEffect(() => {
+    if (source === null) {
+      onPlaybackReadyChange?.(false);
+      return;
+    }
+    if (videoFailed) {
+      onPlaybackReadyChange?.(false);
+      return;
+    }
+    onPlaybackReadyChange?.(videoReady);
+  }, [onPlaybackReadyChange, source, videoFailed, videoReady]);
 
   useEffect(() => () => {
     if (hlsRef.current) {
@@ -366,6 +387,7 @@ export const FixedVideoLayer = ({
 
     if (!source) {
       setVideoFailed(true);
+      onPlaybackReadyChange?.(false);
       onPlaybackErrorChange?.(true);
       return;
     }
@@ -386,6 +408,7 @@ export const FixedVideoLayer = ({
 
     if (!Hls.isSupported()) {
       setVideoFailed(true);
+      onPlaybackReadyChange?.(false);
       onPlaybackErrorChange?.(true);
       return;
     }
@@ -409,12 +432,14 @@ export const FixedVideoLayer = ({
         return;
       }
       setVideoFailed(true);
+      onPlaybackReadyChange?.(false);
       onPlaybackErrorChange?.(true);
     });
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       setVideoReady(true);
       setVideoFailed(false);
+      onPlaybackReadyChange?.(true);
       onPlaybackErrorChange?.(false);
       safePlay(video);
     });
@@ -430,7 +455,7 @@ export const FixedVideoLayer = ({
         hlsRef.current = null;
       }
     };
-  }, [hlsSource, onPlaybackErrorChange, playbackBindingKey, source]);
+  }, [hlsSource, onPlaybackErrorChange, onPlaybackReadyChange, playbackBindingKey, source]);
 
   useEffect(() => {
     const video = ref.current;
@@ -438,7 +463,7 @@ export const FixedVideoLayer = ({
       return;
     }
 
-    if (interstitialActive || hlsSource || activeScene === "interstitial") {
+    if (interstitialActive || hlsSource || effectiveScene === "interstitial") {
       return;
     }
 
@@ -446,7 +471,7 @@ export const FixedVideoLayer = ({
     if (Math.abs(video.currentTime - targetTime) > 0.2) {
       video.currentTime = targetTime;
     }
-  }, [activeScene, cue, hlsSource, logicalNow, source, interstitialActive]);
+  }, [cue, effectiveScene, hlsSource, interstitialActive, logicalNow, source]);
 
   const showFallbackOverlay = source === null || (!videoReady && !videoFailed);
 
@@ -455,7 +480,7 @@ export const FixedVideoLayer = ({
       className="fixed-video-layer"
       data-testid="fixed-video-layer"
       data-active-source={source ?? "none"}
-      data-active-scene={activeScene ?? "none"}
+      data-active-scene={effectiveScene ?? "none"}
     >
       <video
         ref={ref}
@@ -469,10 +494,12 @@ export const FixedVideoLayer = ({
         onCanPlay={() => {
           setVideoReady(true);
           setVideoFailed(false);
+          onPlaybackReadyChange?.(true);
           onPlaybackErrorChange?.(false);
         }}
         onError={() => {
           setVideoFailed(true);
+          onPlaybackReadyChange?.(false);
           onPlaybackErrorChange?.(true);
         }}
       />

@@ -13,16 +13,21 @@ let fixedLayerShouldError = false;
 vi.mock("../src/components/FixedVideoLayer", () => ({
   FixedVideoLayer: ({
     enabled,
-    onPlaybackErrorChange
+    forcedSource,
+    onPlaybackErrorChange,
+    onPlaybackReadyChange
   }: {
     enabled: boolean;
+    forcedSource?: string | null;
     onPlaybackErrorChange?: (hasError: boolean) => void;
+    onPlaybackReadyChange?: (isReady: boolean) => void;
   }): JSX.Element | null => {
     useEffect(() => {
       onPlaybackErrorChange?.(enabled && fixedLayerShouldError);
-    }, [enabled, onPlaybackErrorChange]);
+      onPlaybackReadyChange?.(enabled && !fixedLayerShouldError);
+    }, [enabled, onPlaybackErrorChange, onPlaybackReadyChange]);
 
-    return enabled ? <div data-testid="fixed-layer" /> : null;
+    return enabled ? <div data-testid="fixed-layer" data-force-source={forcedSource ?? ""} /> : null;
   }
 }));
 
@@ -103,6 +108,7 @@ const baseSession = (): any => ({
       outputMode: "dynamic",
       showDynamic: true,
       showFixed: false,
+      showStreamInterstitial: "https://stream.example.com/interstitial.m3u8",
       colorPolicy: {
         enabled: true,
         roles: ["audience"],
@@ -253,6 +259,10 @@ const renderLive = () => {
   render(<RouterProvider router={router} />);
 };
 
+const continueIntoLive = () => {
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+};
+
 describe("DeviceRoute minimal live UI", () => {
   beforeEach(() => {
     sessionState = baseSession();
@@ -370,131 +380,176 @@ describe("DeviceRoute minimal live UI", () => {
     expect(screen.getByTestId("live-diagnostics-panel")).toBeTruthy();
   });
 
-  it("shows compact toast when engine is off", () => {
+  it("shows mission-control offline card when engine is off", async () => {
     sessionState.cue.payload.engineRunning = false;
 
     renderLive();
+    continueIntoLive();
 
-    expect(screen.getByTestId("live-status-toast").textContent).toContain("awaiting engine");
+    await waitFor(() => {
+      expect(screen.getByTestId("live-offline-card").textContent).toContain("ENGINE OFFLINE");
+    });
+    expect(screen.queryByTestId("fixed-layer")).toBeNull();
+    expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
+    expect(screen.queryByTestId("live-controls-ribbon")).toBeNull();
   });
 
-  it("shows compact toast when link is down", () => {
+  it("shows mission-control offline card when link is down", async () => {
     sessionState.connected = false;
     sessionState.linkState = "offline";
 
     renderLive();
+    continueIntoLive();
 
-    expect(screen.getByTestId("live-status-toast").textContent).toContain("reconnecting");
+    await waitFor(() => {
+      expect(screen.getByTestId("live-offline-card").textContent).toContain("LINK RECONNECTING");
+    });
+    expect(screen.queryByTestId("live-controls-ribbon")).toBeNull();
   });
 
-  it("keeps fixed output visible in preshow even when engine is off", () => {
-    sessionState.cue.showState = "preshow";
-    sessionState.cue.payload.engineRunning = false;
-    sessionState.cue.payload.showFixed = false;
-    sessionState.cue.payload.showDynamic = false;
-
-    renderLive();
-
-    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
-    expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
-  });
-
-  it("keeps fixed output visible in introduction", () => {
-    sessionState.cue.showState = "introduction";
-    sessionState.cue.payload.engineRunning = false;
-    sessionState.cue.payload.showFixed = false;
-    sessionState.cue.payload.showDynamic = false;
-
-    renderLive();
-
-    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
-    expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
-  });
-
-  it("keeps fixed output visible in ending", () => {
-    sessionState.cue.showState = "ending";
-    sessionState.cue.payload.engineRunning = false;
-    sessionState.cue.payload.showFixed = false;
-    sessionState.cue.payload.showDynamic = false;
-
-    renderLive();
-
-    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
-    expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
-  });
-
-  it("forces fixed output in interstitial mode", () => {
-    sessionState.cue.showState = "main";
-    sessionState.cue.payload.outputMode = "interstitial_loop";
-    sessionState.cue.payload.engineRunning = false;
-    sessionState.cue.payload.showFixed = false;
-    sessionState.cue.payload.showDynamic = true;
-
-    renderLive();
-
-    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
-    expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
-  });
-
-  it("falls back to fixed output when no cue has arrived yet", () => {
+  it("falls back to fixed output when no cue has arrived yet", async () => {
     sessionState.cue = null;
 
     renderLive();
+    continueIntoLive();
 
-    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId("fixed-layer")).toBeTruthy();
+    });
     expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
   });
 
-  it("infers dynamic output for main state when output mode is missing", () => {
+  it("infers dynamic output for main state when output mode is missing", async () => {
     sessionState.cue.showState = "main";
     sessionState.cue.payload = {
-      engineRunning: true
+      engineRunning: true,
+      showStreamInterstitial: "https://stream.example.com/interstitial.m3u8"
     };
 
     renderLive();
+    continueIntoLive();
 
-    expect(screen.queryByTestId("fixed-layer")).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByTestId("fixed-layer")).toBeNull();
+    });
     expect(screen.getByTestId("dynamic-overlay")).toBeTruthy();
   });
 
-  it("renders main dynamic mode on dynamic layer only", () => {
+  it("renders main dynamic mode on dynamic layer only", async () => {
     sessionState.cue.showState = "main";
     sessionState.cue.payload.outputMode = "dynamic";
     sessionState.cue.payload.showFixed = false;
     sessionState.cue.payload.showDynamic = true;
 
     renderLive();
+    continueIntoLive();
 
-    expect(screen.queryByTestId("fixed-layer")).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByTestId("fixed-layer")).toBeNull();
+    });
     expect(screen.getByTestId("dynamic-overlay")).toBeTruthy();
   });
 
-  it("renders main static mode on fixed layer only", () => {
+  it("renders main static mode on fixed layer only", async () => {
     sessionState.cue.showState = "main";
     sessionState.cue.payload.outputMode = "program";
     sessionState.cue.payload.showFixed = true;
     sessionState.cue.payload.showDynamic = false;
 
     renderLive();
+    continueIntoLive();
 
-    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId("fixed-layer")).toBeTruthy();
+    });
     expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
   });
 
-  it("holds fixed output and surfaces stream-hold toast when fixed layer errors", async () => {
-    sessionState.cue.showState = "ending";
-    sessionState.cue.payload.outputMode = "program";
-    sessionState.cue.payload.showFixed = true;
-    sessionState.cue.payload.showDynamic = false;
-    fixedLayerShouldError = true;
+  it("switches to interstitial recovery after stream dropout grace", async () => {
+    vi.useFakeTimers();
+    try {
+      sessionState.cue.showState = "ending";
+      sessionState.cue.payload.outputMode = "program";
+      sessionState.cue.payload.showFixed = true;
+      sessionState.cue.payload.showDynamic = false;
+      fixedLayerShouldError = true;
 
-    renderLive();
+      renderLive();
+      continueIntoLive();
 
-    expect(screen.getByTestId("fixed-layer")).toBeTruthy();
-    await waitFor(() => {
-      expect(screen.queryByTestId("dynamic-overlay")).toBeNull();
-    });
-    expect(screen.getByTestId("live-status-toast").textContent).toContain("stream hold");
+      expect(screen.getByTestId("live-status-toast").textContent).toContain("stream hold");
+
+      act(() => {
+        vi.advanceTimersByTime(3_100);
+        fixedLayerShouldError = false;
+        vi.advanceTimersByTime(300);
+      });
+
+      const layer = screen.getByTestId("fixed-layer");
+      expect(layer.getAttribute("data-force-source")).toContain("interstitial.m3u8");
+      expect(screen.queryByTestId("live-offline-card")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows stream-hold offline card if interstitial recovery is unavailable", async () => {
+    vi.useFakeTimers();
+    try {
+      sessionState.cue.payload.outputMode = "program";
+      sessionState.cue.payload.showFixed = true;
+      sessionState.cue.payload.showDynamic = false;
+      sessionState.cue.payload.showStreamInterstitial = "";
+      fixedLayerShouldError = true;
+
+      renderLive();
+      continueIntoLive();
+
+      act(() => {
+        vi.advanceTimersByTime(8_600);
+      });
+
+      expect(screen.getByTestId("live-offline-card").textContent).toContain("STREAM HOLD");
+      expect(screen.queryByTestId("live-controls-ribbon")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("runs a 3-second countdown before returning from offline to live", async () => {
+    vi.useFakeTimers();
+    try {
+      sessionState.cue.payload.engineRunning = false;
+      sessionState.cue.payload.showFixed = false;
+      sessionState.cue.payload.showDynamic = true;
+      sessionState.cue.payload.outputMode = "dynamic";
+
+      renderLive();
+      continueIntoLive();
+      expect(screen.getByTestId("live-offline-card").textContent).toContain("ENGINE OFFLINE");
+
+      act(() => {
+        sessionState.cue.payload.engineRunning = true;
+        vi.advanceTimersByTime(300);
+      });
+
+      expect(screen.getByTestId("live-reveal-countdown").textContent).toContain("3");
+
+      act(() => {
+        vi.advanceTimersByTime(1_100);
+      });
+      act(() => {
+        vi.advanceTimersByTime(1_100);
+      });
+      act(() => {
+        vi.advanceTimersByTime(1_100);
+      });
+
+      expect(screen.queryByTestId("live-reveal-countdown")).toBeNull();
+      expect(screen.getByTestId("live-controls-ribbon")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows blocking permission modal until onDone completes", async () => {

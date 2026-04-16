@@ -9,7 +9,7 @@ import {
   type CompositorMode,
   type ScriptCandidate
 } from "@conductor/protocol";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { DynamicOverlay } from "../components/DynamicOverlay";
@@ -91,6 +91,46 @@ const defaultOutputModeForShowState = (showState: ShowState | null): "off" | "st
     return "static";
   }
   return "off";
+};
+
+type OfflineReason = "engine_off" | "link_reconnecting" | "stream_hold";
+
+const STREAM_DROPOUT_GRACE_MS = 3_000;
+const STREAM_RECOVERY_FAIL_TIMEOUT_MS = 5_000;
+const LIVE_REVEAL_COUNTDOWN_SECONDS = 3;
+
+const normalizeStreamRef = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const parseMapRecord = (value: unknown): Record<string, unknown> | null => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === "string") {
+    try {
+      return parseMapRecord(JSON.parse(value));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+const resolveInterstitialSourceFromPayload = (payload: Record<string, unknown>): string | null => {
+  const direct = normalizeStreamRef(payload.showStreamInterstitial);
+  if (direct) {
+    return direct;
+  }
+  const map = parseMapRecord(payload.showStreamMap);
+  if (!map) {
+    return null;
+  }
+  return normalizeStreamRef(map.interstitial);
 };
 
 const buildAutoZone = (hashedId: string): { name: string; x: number; y: number; z: number } => {
@@ -207,6 +247,11 @@ export const DeviceRoute = (): JSX.Element => {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [uiVisible, setUiVisible] = useState(true);
   const [fixedLayerErrored, setFixedLayerErrored] = useState(false);
+  const [fixedLayerReady, setFixedLayerReady] = useState(false);
+  const [forceInterstitialRecovery, setForceInterstitialRecovery] = useState(false);
+  const [recoveryStartedAt, setRecoveryStartedAt] = useState<number | null>(null);
+  const [needsRevealCountdown, setNeedsRevealCountdown] = useState(false);
+  const [countdownStep, setCountdownStep] = useState<number | null>(null);
   const [promptDrag, setPromptDrag] = useState({ x: 0, y: 0 });
   const [promptStartAt, setPromptStartAt] = useState<number | null>(null);
   const [dismissedPromptId, setDismissedPromptId] = useState<string | null>(null);
@@ -214,6 +259,7 @@ export const DeviceRoute = (): JSX.Element => {
     promptInfluence: 0,
     directPickInfluence: 0
   });
+  const prefersReducedMotion = useReducedMotion();
   const permissionsSentRef = useRef(false);
   const zoneSentRef = useRef(false);
   const handledPhoneCommandRef = useRef<string>("");
@@ -260,14 +306,51 @@ export const DeviceRoute = (): JSX.Element => {
     cuePayload.engineRunning,
     inferredEngineFromAudioPath || session.cue?.showState !== "idle"
   );
+  const linkOnline = session.connected && session.linkState === "online";
   const rawOutputMode = typeof cuePayload.outputMode === "string" ? cuePayload.outputMode : inferredOutputMode;
   const normalizedOutputMode = rawOutputMode.toLowerCase();
   const interMode = normalizedOutputMode.includes("interstitial") || normalizedOutputMode === "off";
-  const fixedStageState = session.cue?.showState === "preshow" || session.cue?.showState === "introduction" || session.cue?.showState === "ending";
-  const showFixed = boolFromPayload(cuePayload.showFixed, false) || interMode || fixedStageState;
-  const showDynamic = interMode ? false : boolFromPayload(cuePayload.showDynamic, defaultDynamicEnabled);
+  const fixedStageState =
+    session.cue?.showState === "preshow" ||
+    session.cue?.showState === "introduction" ||
+    session.cue?.showState === "ending";
+  const showFixedPlanned = boolFromPayload(cuePayload.showFixed, false) || interMode || fixedStageState;
+  const showDynamicPlanned = interMode ? false : boolFromPayload(cuePayload.showDynamic, defaultDynamicEnabled);
   const outputMode = rawOutputMode;
-  const compositorDisplayMode = showDynamic
+  const interstitialRecoverySource = resolveInterstitialSourceFromPayload(cuePayload);
+  const recoveryAgeMs = recoveryStartedAt === null ? 0 : Math.max(0, clockNow - recoveryStartedAt);
+  const recoveryFallbackAvailable = Boolean(interstitialRecoverySource);
+  const baseOfflineReason: OfflineReason | null = !engineRunning
+    ? "engine_off"
+    : !linkOnline
+      ? "link_reconnecting"
+      : null;
+  const recoveryStreamFailed =
+    forceInterstitialRecovery &&
+    (!recoveryFallbackAvailable ||
+      (fixedLayerErrored && !fixedLayerReady && recoveryAgeMs >= STREAM_RECOVERY_FAIL_TIMEOUT_MS));
+  const offlineReason: OfflineReason | null = baseOfflineReason ?? (recoveryStreamFailed ? "stream_hold" : null);
+  const showRecoveryInterstitial =
+    permissionsDone &&
+    baseOfflineReason === null &&
+    forceInterstitialRecovery &&
+    !recoveryStreamFailed &&
+    recoveryFallbackAvailable;
+  const readyForLiveReveal =
+    permissionsDone &&
+    offlineReason === null &&
+    (forceInterstitialRecovery
+      ? showRecoveryInterstitial && fixedLayerReady && !fixedLayerErrored
+      : !showFixedPlanned || (fixedLayerReady && !fixedLayerErrored));
+  const renderLiveStage =
+    permissionsDone &&
+    offlineReason === null &&
+    !forceInterstitialRecovery &&
+    !needsRevealCountdown &&
+    countdownStep === null;
+  const fixedLayerEnabled = (renderLiveStage && showFixedPlanned) || showRecoveryInterstitial;
+  const showDynamicWithFallback = renderLiveStage && showDynamicPlanned;
+  const compositorDisplayMode = showDynamicWithFallback
     ? compositorMode === "unsupported"
       ? "fallback"
       : compositorMode
@@ -299,6 +382,37 @@ export const DeviceRoute = (): JSX.Element => {
     crowdPickWindow && clockNow >= crowdPickWindow.opensAt && clockNow <= crowdPickWindow.closesAt
   );
   const pickCountdownMs = crowdPickWindow ? Math.max(0, crowdPickWindow.closesAt - clockNow) : 0;
+  const syncHealthy = session.connected && !session.fallbackActive && Math.abs(session.driftMs) <= 350;
+  const streamStatus = (() => {
+    if (offlineReason === "stream_hold") {
+      return "HOLD";
+    }
+    if (showRecoveryInterstitial) {
+      return fixedLayerReady && !fixedLayerErrored ? "RECOVERY READY" : "RECOVERY ARMING";
+    }
+    if (!showFixedPlanned) {
+      return "BYPASS";
+    }
+    if (fixedLayerErrored) {
+      return "UNSTABLE";
+    }
+    if (fixedLayerReady) {
+      return "READY";
+    }
+    return "ARMING";
+  })();
+  const offlineTitle =
+    offlineReason === "engine_off"
+      ? "ENGINE OFFLINE"
+      : offlineReason === "link_reconnecting"
+        ? "LINK RECONNECTING"
+        : "STREAM HOLD";
+  const offlineHint =
+    offlineReason === "engine_off"
+      ? "Operator must start engine to arm live output."
+      : offlineReason === "link_reconnecting"
+        ? "Hold position while control link renegotiates."
+        : "Fallback stream unavailable. Awaiting stable media route.";
   const bumpUiVisibility = useCallback(() => {
     setUiVisible(true);
     if (uiIdleTimerRef.current !== null) {
@@ -398,7 +512,7 @@ export const DeviceRoute = (): JSX.Element => {
   }, [liveZone, permissionsDone, sendZoneUpdate, session.connected]);
 
   useEffect(() => {
-    if (!permissionsDone || !engineRunning) {
+    if (!permissionsDone || !engineRunning || !renderLiveStage) {
       return;
     }
 
@@ -432,6 +546,7 @@ export const DeviceRoute = (): JSX.Element => {
     permissionsDone,
     promptInfluenceState.directPickInfluence,
     promptInfluenceState.promptInfluence,
+    renderLiveStage,
     sendParticipantVector
   ]);
 
@@ -579,15 +694,95 @@ export const DeviceRoute = (): JSX.Element => {
     void handleCommand(session.phoneAudioCommand);
   }, [handleCommand, session.phoneAudioCommand]);
 
+  useEffect(() => {
+    if (!permissionsDone || !fixedLayerEnabled) {
+      setFixedLayerReady(false);
+    }
+  }, [fixedLayerEnabled, permissionsDone]);
+
+  useEffect(() => {
+    if (renderLiveStage) {
+      return;
+    }
+    setControlsOpen(false);
+    setDiagnosticsOpen(false);
+  }, [renderLiveStage]);
+
+  useEffect(() => {
+    if (!permissionsDone) {
+      setForceInterstitialRecovery(false);
+      setRecoveryStartedAt(null);
+      setNeedsRevealCountdown(false);
+      setCountdownStep(null);
+      return;
+    }
+    if (!baseOfflineReason) {
+      return;
+    }
+    setForceInterstitialRecovery(false);
+    setRecoveryStartedAt(null);
+    setNeedsRevealCountdown(true);
+    setCountdownStep(null);
+  }, [baseOfflineReason, permissionsDone]);
+
+  useEffect(() => {
+    if (!permissionsDone || baseOfflineReason !== null || forceInterstitialRecovery || !showFixedPlanned || !fixedLayerErrored) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setForceInterstitialRecovery(true);
+      setRecoveryStartedAt(Date.now());
+      setNeedsRevealCountdown(true);
+    }, STREAM_DROPOUT_GRACE_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [baseOfflineReason, fixedLayerErrored, forceInterstitialRecovery, permissionsDone, showFixedPlanned]);
+
+  useEffect(() => {
+    if (!permissionsDone || !forceInterstitialRecovery || recoveryStartedAt !== null) {
+      return;
+    }
+    setRecoveryStartedAt(Date.now());
+    setNeedsRevealCountdown(true);
+  }, [forceInterstitialRecovery, permissionsDone, recoveryStartedAt]);
+
+  useEffect(() => {
+    if (!permissionsDone || !readyForLiveReveal || !needsRevealCountdown || countdownStep !== null) {
+      return;
+    }
+    setCountdownStep(LIVE_REVEAL_COUNTDOWN_SECONDS);
+  }, [countdownStep, needsRevealCountdown, permissionsDone, readyForLiveReveal]);
+
+  useEffect(() => {
+    if (countdownStep === null) {
+      return;
+    }
+    if (!readyForLiveReveal) {
+      setCountdownStep(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (countdownStep <= 1) {
+        setCountdownStep(null);
+        setNeedsRevealCountdown(false);
+        setForceInterstitialRecovery(false);
+        setRecoveryStartedAt(null);
+        return;
+      }
+      setCountdownStep((current) => (current === null ? null : current - 1));
+    }, 1000);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [countdownStep, readyForLiveReveal]);
+
   const statusToastLabel = !session.connected
     ? "reconnecting"
     : fixedLayerErrored
       ? "stream hold"
-      : !engineRunning
-        ? "awaiting engine"
-        : null;
-  const uiFaded = permissionsDone && !uiVisible && !controlsOpen && !diagnosticsOpen;
-  const showDynamicWithFallback = showDynamic;
+      : null;
+  const uiFaded = renderLiveStage && !uiVisible && !controlsOpen && !diagnosticsOpen;
   const diagnosticLines = [
     session.connected ? "Live Link" : "Field Reconnect",
     `Link ${session.linkState}`,
@@ -751,7 +946,10 @@ export const DeviceRoute = (): JSX.Element => {
       <FixedVideoLayer
         cue={session.cue}
         logicalNow={session.logicalNow}
-        enabled={showFixed}
+        enabled={fixedLayerEnabled}
+        forcedSource={showRecoveryInterstitial ? interstitialRecoverySource : null}
+        forcedScene={showRecoveryInterstitial ? "interstitial" : null}
+        onPlaybackReadyChange={setFixedLayerReady}
         onPlaybackErrorChange={setFixedLayerErrored}
       />
       <DynamicOverlay
@@ -763,7 +961,7 @@ export const DeviceRoute = (): JSX.Element => {
         onCompositorModeChange={setCompositorMode}
       />
 
-      {permissionsDone ? (
+      {renderLiveStage ? (
         <>
           <section className="live-ribbon live-ribbon-top live-ui-layer" data-testid="live-diagnostics-ribbon">
             <button
@@ -1027,7 +1225,7 @@ export const DeviceRoute = (): JSX.Element => {
         </>
       ) : null}
 
-      {statusToastLabel ? (
+      {renderLiveStage && statusToastLabel ? (
         <motion.p
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -1037,6 +1235,48 @@ export const DeviceRoute = (): JSX.Element => {
         >
           {statusToastLabel}
         </motion.p>
+      ) : null}
+
+      {permissionsDone && offlineReason ? (
+        <section className="live-offline-shell" data-testid="live-offline-shell">
+          <motion.article
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: prefersReducedMotion ? 0 : 0.26 }}
+            className="live-offline-card"
+            data-testid="live-offline-card"
+            data-offline-reason={offlineReason}
+          >
+            <p className="live-offline-kicker">Mission Control</p>
+            <h2 className="live-offline-title">{offlineTitle}</h2>
+            <p className="live-offline-hint">{offlineHint}</p>
+            <div className="live-offline-grid">
+              <p>Engine</p>
+              <p>{engineRunning ? "RUNNING" : "OFFLINE"}</p>
+              <p>Link</p>
+              <p>{linkOnline ? "ONLINE" : "RECONNECTING"}</p>
+              <p>Stream</p>
+              <p>{streamStatus}</p>
+              <p>Sync</p>
+              <p>{syncHealthy ? "LOCKED" : "UNSTABLE"}</p>
+              <p>Audience</p>
+              <p>{String(session.audienceVector.participantCount)}</p>
+            </div>
+          </motion.article>
+        </section>
+      ) : null}
+
+      {permissionsDone && countdownStep !== null ? (
+        <motion.section
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: prefersReducedMotion ? 0 : 0.24 }}
+          className="live-countdown-shell"
+          data-testid="live-reveal-countdown"
+        >
+          <p className="live-countdown-label">Live In</p>
+          <p className="live-countdown-value">{countdownStep}</p>
+        </motion.section>
       ) : null}
 
       {!permissionsDone ? (
