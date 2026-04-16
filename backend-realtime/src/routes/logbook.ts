@@ -32,6 +32,14 @@ export const registerLogbookRoutes = async (
   app: FastifyInstance,
   deps: LogbookRouteDependencies
 ): Promise<void> => {
+  const ensureSession = async (hashedId: string): Promise<void> => {
+    const existing = await deps.sessions.get(hashedId);
+    if (existing) {
+      return;
+    }
+    await deps.sessions.upsert(deps.identityService.profileFromHashedId(hashedId));
+  };
+
   app.put("/logbook/:hashedId", async (request, reply) => {
     const hashedId = (request.params as { hashedId: string }).hashedId;
     if (!deps.identityService.validateHashedId(hashedId)) {
@@ -46,13 +54,7 @@ export const registerLogbookRoutes = async (
       });
     }
 
-    const participant = await deps.sessions.get(hashedId);
-    if (!participant) {
-      return reply.status(403).send({
-        error: "non_participant",
-        message: "Only active participants can sign the logbook."
-      });
-    }
+    await ensureSession(hashedId);
 
     const now = Date.now();
     const lastWriteAt = lastWriteByHashedId.get(hashedId) ?? 0;
@@ -95,13 +97,7 @@ export const registerLogbookRoutes = async (
       return reply.status(400).send({ error: "invalid_hashed_id" });
     }
 
-    const participant = await deps.sessions.get(hashedId);
-    if (!participant) {
-      return reply.status(403).send({
-        error: "non_participant",
-        message: "Only active participants can read this participant logbook entry."
-      });
-    }
+    await ensureSession(hashedId);
 
     const entry = await deps.store.getByHashedId(hashedId);
     if (!entry) {

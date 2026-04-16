@@ -97,7 +97,14 @@ type OfflineReason = "engine_off" | "link_reconnecting" | "stream_hold";
 
 const STREAM_DROPOUT_GRACE_MS = 3_000;
 const STREAM_RECOVERY_FAIL_TIMEOUT_MS = 5_000;
-const LIVE_REVEAL_COUNTDOWN_SECONDS = 3;
+const LIVE_REVEAL_COUNTDOWN_SECONDS = 60;
+
+const formatCountdown = (remaining: number): string => {
+  const clamped = Math.max(0, Math.floor(remaining));
+  const minutes = Math.floor(clamped / 60);
+  const seconds = clamped % 60;
+  return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+};
 
 const normalizeStreamRef = (value: unknown): string | null => {
   if (typeof value !== "string") {
@@ -391,6 +398,9 @@ export const DeviceRoute = (): JSX.Element => {
     }
     if (showRecoveryInterstitial) {
       return fixedLayerReady && !fixedLayerErrored ? "RECOVERY READY" : "RECOVERY ARMING";
+    }
+    if (!fixedLayerEnabled) {
+      return "STANDBY";
     }
     if (!showFixedPlanned) {
       return "BYPASS";
@@ -966,6 +976,20 @@ export const DeviceRoute = (): JSX.Element => {
       {renderLiveStage ? (
         <>
           <section className="live-ribbon live-ribbon-top live-ui-layer" data-testid="live-diagnostics-ribbon">
+            <Link
+              to={`/${hashedId}`}
+              className="live-ribbon-button"
+              data-testid="live-home-link"
+            >
+              Home
+            </Link>
+            <Link
+              to={`/${hashedId}/about`}
+              className="live-ribbon-button"
+              data-testid="live-about-link"
+            >
+              About
+            </Link>
             <button
               type="button"
               className="live-ribbon-button"
@@ -1264,6 +1288,14 @@ export const DeviceRoute = (): JSX.Element => {
               <p>Audience</p>
               <p>{String(session.audienceVector.participantCount)}</p>
             </div>
+            <nav className="live-offline-nav" aria-label="Participant navigation">
+              <Link to={`/${hashedId}`} className="live-offline-nav-link">
+                Home
+              </Link>
+              <Link to={`/${hashedId}/about`} className="live-offline-nav-link">
+                About
+              </Link>
+            </nav>
           </motion.article>
         </section>
       ) : null}
@@ -1286,9 +1318,8 @@ export const DeviceRoute = (): JSX.Element => {
             <p className="live-countdown-title">Live Stage In</p>
             <div className="live-countdown-figure">
               <p className="live-countdown-value" aria-live="polite">
-                {String(countdownStep).padStart(2, "0")}
+                {formatCountdown(countdownStep)}
               </p>
-              <p className="live-countdown-unit">sec</p>
             </div>
             <div
               className="live-countdown-progress"
@@ -1311,6 +1342,7 @@ export const DeviceRoute = (): JSX.Element => {
       {!permissionsDone ? (
         <section className="live-permission-overlay" data-testid="live-permission-overlay">
           <PermissionGate
+            hashedId={hashedId}
             onDone={(granted) => {
               permissionsSentRef.current = false;
               zoneSentRef.current = false;

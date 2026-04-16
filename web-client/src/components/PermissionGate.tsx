@@ -1,11 +1,13 @@
 import { motion } from "framer-motion";
+import { Link } from "react-router-dom";
 import { usePermissionFlow } from "../hooks/usePermissionFlow";
 
 interface PermissionGateProps {
+  hashedId: string;
   onDone: (permissions: { audio: boolean; motion: boolean; geolocation: boolean }) => void;
 }
 
-export const PermissionGate = ({ onDone }: PermissionGateProps): JSX.Element => {
+export const PermissionGate = ({ hashedId, onDone }: PermissionGateProps): JSX.Element => {
   const { permissions, completed, enableAudio, enableGeo, enableMotion } = usePermissionFlow();
 
   return (
@@ -55,6 +57,15 @@ export const PermissionGate = ({ onDone }: PermissionGateProps): JSX.Element => 
           Continue
         </motion.button>
       ) : null}
+
+      <nav className="live-permission-nav" aria-label="Participant navigation">
+        <Link to={`/${hashedId}`} className="live-permission-nav-link">
+          Home
+        </Link>
+        <Link to={`/${hashedId}/about`} className="live-permission-nav-link">
+          About
+        </Link>
+      </nav>
     </motion.section>
   );
 };

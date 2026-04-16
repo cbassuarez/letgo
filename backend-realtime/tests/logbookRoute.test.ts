@@ -54,7 +54,7 @@ describe("logbook routes", () => {
     expect(getRes.json().entry.signer).toBe("Ari");
   });
 
-  it("blocks writes for unknown participants", async () => {
+  it("auto-provisions a session for writes with a valid hashed id", async () => {
     const app = Fastify();
     apps.push(app);
     const store = new MemoryLogbookStore();
@@ -72,12 +72,37 @@ describe("logbook routes", () => {
       url: `/logbook/${profile.hashedId}`,
       payload: {
         signer: "Rowan",
-        message: "Unregistered writers should not post."
+        message: "A valid-format key should be able to sign."
       }
     });
 
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error).toBe("non_participant");
+    expect(res.statusCode).toBe(200);
+    expect(await sessions.get(profile.hashedId)).not.toBeNull();
+  });
+
+  it("rejects writes when the hashed id format is invalid", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const store = new MemoryLogbookStore();
+    const sessions = new MemorySessionStore();
+
+    await registerLogbookRoutes(app, {
+      identityService: identity,
+      sessions,
+      store
+    });
+
+    const res = await app.inject({
+      method: "PUT",
+      url: `/logbook/not-a-valid-hash`,
+      payload: {
+        signer: "Rowan",
+        message: "Should not be accepted."
+      }
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("invalid_hashed_id");
   });
 
   it("returns public feed with cursor pagination", async () => {

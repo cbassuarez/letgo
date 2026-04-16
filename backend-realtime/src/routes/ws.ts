@@ -853,6 +853,13 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     }
     publishPhonePoolState(poolAfterConnect);
 
+    const audienceOnConnect = audienceField.update(hashedId, {
+      vector: {},
+      influence: 0,
+      compositorMode: "fallback"
+    });
+    broadcastAudienceVector(audienceOnConnect);
+
     pushInitialSnapshot(socket, "device");
 
     socket.on("close", (code, reason) => {

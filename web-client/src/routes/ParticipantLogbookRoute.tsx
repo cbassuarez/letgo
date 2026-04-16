@@ -1,17 +1,13 @@
 import { motion } from "framer-motion";
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import {
-  fetchIdentity,
-  fetchParticipantLogbookEntry,
-  upsertParticipantLogbookEntry
-} from "../lib/api";
+import { fetchParticipantLogbookEntry, upsertParticipantLogbookEntry } from "../lib/api";
 import { isValidHashedId } from "../lib/identity";
 
 export const ParticipantLogbookRoute = (): JSX.Element => {
   const { hashedId = "" } = useParams();
   const [loading, setLoading] = useState(true);
-  const [allowed, setAllowed] = useState(false);
+  const allowed = isValidHashedId(hashedId);
   const [signer, setSigner] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -19,9 +15,8 @@ export const ParticipantLogbookRoute = (): JSX.Element => {
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!isValidHashedId(hashedId)) {
+    if (!allowed) {
       setLoading(false);
-      setAllowed(false);
       return;
     }
 
@@ -29,23 +24,17 @@ export const ParticipantLogbookRoute = (): JSX.Element => {
     setLoading(true);
     setError(null);
 
-    Promise.all([fetchIdentity(hashedId), fetchParticipantLogbookEntry(hashedId)])
-      .then(([, entry]) => {
-        if (!active) {
+    fetchParticipantLogbookEntry(hashedId)
+      .then((entry) => {
+        if (!active || !entry) {
           return;
         }
-        setAllowed(true);
-        if (entry) {
-          setSigner(entry.signer);
-          setMessage(entry.message);
-          setSavedAt(entry.updatedAt);
-        }
+        setSigner(entry.signer);
+        setMessage(entry.message);
+        setSavedAt(entry.updatedAt);
       })
       .catch(() => {
-        if (!active) {
-          return;
-        }
-        setAllowed(false);
+        // A missing prior entry is fine; the user can still create a new one.
       })
       .finally(() => {
         if (active) {
@@ -56,7 +45,7 @@ export const ParticipantLogbookRoute = (): JSX.Element => {
     return () => {
       active = false;
     };
-  }, [hashedId]);
+  }, [allowed, hashedId]);
 
   const submitEntry = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();

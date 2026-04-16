@@ -305,6 +305,9 @@ body::before {
   left: 50%;
   z-index: 24;
   transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .live-ribbon-top {
@@ -313,6 +316,12 @@ body::before {
 
 .live-ribbon-bottom {
   bottom: 14px;
+}
+
+.live-ribbon-button {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
 }
 
 .live-ribbon-button {
@@ -396,10 +405,12 @@ body::before {
 .live-controls-panel {
   position: absolute;
   left: 50%;
-  bottom: 56px;
+  top: 50%;
   z-index: 22;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   width: min(96vw, 940px);
+  max-height: calc(100dvh - 8rem);
+  overflow-y: auto;
   border: 1px solid rgba(176, 205, 224, 0.28);
   background: rgba(0, 0, 0, 0.76);
   padding: 0.8rem 0.85rem 0.7rem;
@@ -490,6 +501,37 @@ body::before {
   color: rgba(234, 244, 249, 0.98);
 }
 
+.live-offline-nav,
+.live-permission-nav {
+  margin-top: 0.9rem;
+  display: flex;
+  gap: 0.5rem;
+  border-top: 1px solid rgba(171, 202, 219, 0.2);
+  padding-top: 0.72rem;
+  pointer-events: auto;
+}
+
+.live-offline-nav-link,
+.live-permission-nav-link {
+  flex: 1;
+  border: 1px solid rgba(170, 199, 217, 0.34);
+  background: rgba(0, 0, 0, 0.56);
+  color: rgba(227, 239, 247, 0.92);
+  text-decoration: none;
+  text-align: center;
+  padding: 0.46rem 0.62rem;
+  font-size: 0.64rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.live-offline-nav-link:hover,
+.live-permission-nav-link:hover {
+  border-color: rgba(236, 245, 249, 0.7);
+  background: rgba(18, 24, 30, 0.86);
+}
+
 .live-countdown-shell {
   position: absolute;
   inset: 0;
@@ -544,14 +586,6 @@ body::before {
   color: rgba(240, 249, 253, 0.98);
   font-variant-numeric: tabular-nums;
   text-shadow: 0 0 28px rgba(191, 222, 237, 0.2);
-}
-
-.live-countdown-unit {
-  margin: 0;
-  font-size: 0.7rem;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: rgba(184, 210, 224, 0.68);
 }
 
 .live-countdown-progress {

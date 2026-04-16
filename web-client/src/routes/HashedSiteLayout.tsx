@@ -69,7 +69,7 @@ export const HashedSiteLayout = (): JSX.Element => {
           <NavLink to={`/${hashedId}/live`} className="participant-enter-link">
             ENTER
           </NavLink>
-          <NavLink to="/logbook" className="participant-nav-link participant-nav-link-secondary">
+          <NavLink to={`/${hashedId}/logbook`} className="participant-nav-link participant-nav-link-secondary">
             LOGBOOK
           </NavLink>
         </motion.nav>

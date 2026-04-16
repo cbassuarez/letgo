@@ -548,17 +548,13 @@ describe("DeviceRoute minimal live UI", () => {
         vi.advanceTimersByTime(300);
       });
 
-      expect(screen.getByTestId("live-reveal-countdown").textContent).toContain("3");
+      expect(screen.getByTestId("live-reveal-countdown").textContent).toContain("01:00");
 
-      act(() => {
-        vi.advanceTimersByTime(1_100);
-      });
-      act(() => {
-        vi.advanceTimersByTime(1_100);
-      });
-      act(() => {
-        vi.advanceTimersByTime(1_100);
-      });
+      for (let tick = 0; tick < 61; tick += 1) {
+        act(() => {
+          vi.advanceTimersByTime(1_010);
+        });
+      }
 
       expect(screen.queryByTestId("live-reveal-countdown")).toBeNull();
       expect(screen.getByTestId("live-controls-ribbon")).toBeTruthy();
