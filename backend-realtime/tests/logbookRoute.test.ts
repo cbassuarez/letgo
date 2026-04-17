@@ -40,7 +40,7 @@ describe("logbook routes", () => {
       method: "PUT",
       url: `/logbook/${profile.hashedId}`,
       payload: {
-        signer: "Ari",
+        signer: "Ari Nakamura",
         message: "I felt the room drift into one breath."
       }
     });
@@ -51,7 +51,7 @@ describe("logbook routes", () => {
       url: `/logbook/${profile.hashedId}`
     });
     expect(getRes.statusCode).toBe(200);
-    expect(getRes.json().entry.signer).toBe("Ari");
+    expect(getRes.json().entry.signer).toBe("Ari Nakamura");
   });
 
   it("auto-provisions a session for writes with a valid hashed id", async () => {
@@ -71,7 +71,7 @@ describe("logbook routes", () => {
       method: "PUT",
       url: `/logbook/${profile.hashedId}`,
       payload: {
-        signer: "Rowan",
+        signer: "Rowan Bell",
         message: "A valid-format key should be able to sign."
       }
     });
@@ -96,7 +96,7 @@ describe("logbook routes", () => {
       method: "PUT",
       url: `/logbook/not-a-valid-hash`,
       payload: {
-        signer: "Rowan",
+        signer: "Rowan Bell",
         message: "Should not be accepted."
       }
     });
@@ -127,21 +127,21 @@ describe("logbook routes", () => {
     const put1 = await app.inject({
       method: "PUT",
       url: `/logbook/${p1.hashedId}`,
-      payload: { signer: "A1", message: "Entry one." }
+      payload: { signer: "Ava Lin", message: "Entry one." }
     });
     expect(put1.statusCode).toBe(200);
     await wait(8);
     const put2 = await app.inject({
       method: "PUT",
       url: `/logbook/${p2.hashedId}`,
-      payload: { signer: "B2", message: "Entry two." }
+      payload: { signer: "Bo Chen", message: "Entry two." }
     });
     expect(put2.statusCode).toBe(200);
     await wait(8);
     const put3 = await app.inject({
       method: "PUT",
       url: `/logbook/${p3.hashedId}`,
-      payload: { signer: "C3", message: "Entry three." }
+      payload: { signer: "Cam Torres", message: "Entry three." }
     });
     expect(put3.statusCode).toBe(200);
 

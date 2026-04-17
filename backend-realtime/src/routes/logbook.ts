@@ -16,7 +16,14 @@ interface CursorPayload {
 }
 
 const putEntryBody = z.object({
-  signer: z.string().min(2).max(60),
+  signer: z
+    .string()
+    .min(3)
+    .max(60)
+    .refine(
+      (val) => val.trim().split(/\s+/).length >= 2,
+      "First and last name required"
+    ),
   message: z.string().min(4).max(900)
 });
 
@@ -26,7 +33,16 @@ const listQuery = z.object({
 });
 
 const WRITE_COOLDOWN_MS = 4000;
+const EDIT_WINDOW_MS = 60 * 60 * 1000;
 const lastWriteByHashedId = new Map<string, number>();
+
+const formatSignerPublic = (raw: string): string => {
+  const parts = raw.trim().split(/\s+/);
+  if (parts.length < 2) return raw.trim();
+  const first = parts[0].charAt(0).toUpperCase() + parts[0].slice(1).toLowerCase();
+  const lastInitial = parts[parts.length - 1].charAt(0).toUpperCase();
+  return `${first} ${lastInitial}.`;
+};
 
 export const registerLogbookRoutes = async (
   app: FastifyInstance,
@@ -75,6 +91,13 @@ export const registerLogbookRoutes = async (
     }
 
     const current = await deps.store.getByHashedId(hashedId);
+    if (current && (now - current.createdAt) >= EDIT_WINDOW_MS) {
+      return reply.status(403).send({
+        error: "edit_window_closed",
+        message: "Entries are committed after one hour and cannot be changed."
+      });
+    }
+
     const entry: LogbookEntryRecord = {
       hashedId,
       signer,
@@ -153,7 +176,7 @@ const normalizeText = (value: string, maxLength: number): string =>
 
 const toPublicEntry = (entry: LogbookEntryRecord) => ({
   participantTag: `${entry.hashedId.slice(0, 6)}-${entry.hashedId.slice(-4)}`,
-  signer: entry.signer,
+  signer: formatSignerPublic(entry.signer),
   message: entry.message,
   createdAt: entry.createdAt,
   updatedAt: entry.updatedAt

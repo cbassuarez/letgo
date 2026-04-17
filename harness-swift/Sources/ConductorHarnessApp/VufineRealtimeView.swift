@@ -350,12 +350,24 @@ struct VufineRealtimeView: View {
             }
             .buttonStyle(.plain)
 
+            Button {
+                openWindow(id: AppWindowID.videoOut.rawValue)
+                NSApp.activate(ignoringOtherApps: true)
+            } label: {
+                Image(systemName: "display")
+                    .font(.system(size: 11, weight: .bold))
+            }
+            .buttonStyle(.plain)
+
             Menu {
                 Button("Open Inspector") {
                     inspectorPresentation.present(from: .vufine)
                 }
                 Button("Open HOTAS Mapper Studio") {
                     openWindow(id: AppWindowID.hotasMapper.rawValue)
+                }
+                Button("Open Video Out") {
+                    openWindow(id: AppWindowID.videoOut.rawValue)
                 }
                 Button("Startup Chooser") {
                     apply(performanceMode.reopenStartupChooserTransition())

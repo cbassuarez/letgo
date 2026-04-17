@@ -1,4 +1,5 @@
 import { motion, useReducedMotion } from "framer-motion";
+import { Link, useParams } from "react-router-dom";
 
 const fadeConfig = (reducedMotion: boolean, delay = 0): Record<string, unknown> => {
   if (reducedMotion) {
@@ -21,10 +22,18 @@ const fadeConfig = (reducedMotion: boolean, delay = 0): Record<string, unknown> 
 
 export const HashedAboutRoute = (): JSX.Element => {
   const reducedMotion = useReducedMotion() ?? false;
+  const { hashedId = "" } = useParams();
 
   return (
     <section className="mx-auto mt-10 w-full max-w-6xl pb-16 sm:mt-14 sm:pb-24">
-      <motion.p {...fadeConfig(reducedMotion, 0.08)} className="participant-kicker">
+      <motion.div {...fadeConfig(reducedMotion, 0.04)}>
+        <Link to={`/${hashedId}`} className="participant-return-link" aria-label="Return to home">
+          <span aria-hidden="true">←</span>
+          <span>Home</span>
+        </Link>
+      </motion.div>
+
+      <motion.p {...fadeConfig(reducedMotion, 0.08)} className="participant-kicker mt-4">
         ABOUT · CONTEXT
       </motion.p>
 

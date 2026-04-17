@@ -234,17 +234,18 @@ public final class AudioRouter {
             mScope: scope,
             mElement: kAudioObjectPropertyElementMain
         )
-        var cfString: CFString = "" as CFString
-        var dataSize = UInt32(MemoryLayout<CFString>.size)
+        var unmanagedString: Unmanaged<CFString>?
+        var dataSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         let status = AudioObjectGetPropertyData(
             deviceID,
             &address,
             0,
             nil,
             &dataSize,
-            &cfString
+            &unmanagedString
         )
         guard status == noErr else { return nil }
-        return cfString as String
+        guard let unmanagedString else { return nil }
+        return unmanagedString.takeRetainedValue() as String
     }
 }

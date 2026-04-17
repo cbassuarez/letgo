@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import SwiftUI
 
 @main
@@ -6,6 +7,7 @@ struct ConductorHarnessApp: App {
     @StateObject private var model = ConductorHarnessViewModel()
     @StateObject private var performanceMode = PerformanceModeState(mode: .performancePrimary)
     @StateObject private var vufineDisplayCoordinator = VufineDisplayCoordinator()
+    @StateObject private var videoOutDisplayCoordinator = VideoOutDisplayCoordinator()
     @StateObject private var inspectorPresentation = InspectorPresentationState()
 
     var body: some Scene {
@@ -20,6 +22,8 @@ struct ConductorHarnessApp: App {
         .commands {
             PerformanceModeCommands(
                 performanceMode: performanceMode,
+                vufineDisplayCoordinator: vufineDisplayCoordinator,
+                videoOutDisplayCoordinator: videoOutDisplayCoordinator,
                 inspectorPresentation: inspectorPresentation
             )
         }
@@ -29,6 +33,7 @@ struct ConductorHarnessApp: App {
                 model: model,
                 performanceMode: performanceMode,
                 displayCoordinator: vufineDisplayCoordinator,
+                videoOutDisplayCoordinator: videoOutDisplayCoordinator,
                 inspectorPresentation: inspectorPresentation
             )
         }
@@ -42,7 +47,18 @@ struct ConductorHarnessApp: App {
                 inspectorPresentation: inspectorPresentation
             )
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.automatic)
+        .defaultSize(width: 1280, height: 720)
+
+        WindowGroup("Video Out", id: AppWindowID.videoOut.rawValue) {
+            VideoOutView(
+                model: model,
+                displayCoordinator: videoOutDisplayCoordinator,
+                vufineDisplayCoordinator: vufineDisplayCoordinator
+            )
+        }
+        .windowResizability(.automatic)
+        .defaultSize(width: 1280, height: 720)
 
         WindowGroup("Conductor Harness", id: AppWindowID.fullConsole.rawValue) {
             ConductorSurfaceView(
@@ -61,6 +77,8 @@ struct ConductorHarnessApp: App {
 
 private struct PerformanceModeCommands: Commands {
     let performanceMode: PerformanceModeState
+    let vufineDisplayCoordinator: VufineDisplayCoordinator
+    let videoOutDisplayCoordinator: VideoOutDisplayCoordinator
     let inspectorPresentation: InspectorPresentationState
 
     @Environment(\.openWindow) private var openWindow
@@ -87,6 +105,11 @@ private struct PerformanceModeCommands: Commands {
                 openWindow(id: AppWindowID.fullConsole.rawValue)
             }
             .keyboardShortcut("3", modifiers: [.command, .shift])
+
+            Button("Open Video Out Window") {
+                openVideoOutWindowAndRoute()
+            }
+            .keyboardShortcut("4", modifiers: [.command, .shift])
         }
 
         CommandMenu("View") {
@@ -110,6 +133,25 @@ private struct PerformanceModeCommands: Commands {
                 NSApp.activate(ignoringOtherApps: true)
             }
             .keyboardShortcut("m", modifiers: [.command, .shift])
+
+            Divider()
+
+            Button("Route Vufine To Preferred Display") {
+                vufineDisplayCoordinator.refreshPlacement()
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            .keyboardShortcut("v", modifiers: [.command, .option])
+
+            Button("Route Video Out To House Display") {
+                openVideoOutWindowAndRoute()
+            }
+            .keyboardShortcut("h", modifiers: [.command, .option])
+
+            Button("Toggle Video Out Full Screen") {
+                videoOutDisplayCoordinator.toggleFullScreen()
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            .keyboardShortcut("f", modifiers: [.command, .option])
         }
     }
 
@@ -121,5 +163,13 @@ private struct PerformanceModeCommands: Commands {
             openWindow(id: id.rawValue)
         }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func openVideoOutWindowAndRoute() {
+        openWindow(id: AppWindowID.videoOut.rawValue)
+        DispatchQueue.main.async {
+            videoOutDisplayCoordinator.refreshPlacement(avoidingScreenID: vufineDisplayCoordinator.activeScreenID)
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 }

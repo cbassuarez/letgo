@@ -21,6 +21,7 @@
 		2DF9007303965AB79462DCEE /* ConductorCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C70A25D9325FCC5D8DB42E33 /* ConductorCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		2F4934232CAE07BD03F62A71 /* AudioOpsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FF5F7677A55DC7E1BFE49DB /* AudioOpsModels.swift */; };
 		30EB6D3990835901B7FFA826 /* IlluminatedButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90C19BBCB1848B74F589AF39 /* IlluminatedButton.swift */; };
+		33342D56CFF06FC8DB50B3FA /* VideoOutDisplayCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6176C46921BF3E4D596C8B0 /* VideoOutDisplayCoordinator.swift */; };
 		375474312AAACD8310176CD7 /* ConsoleTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12A13DD2201E6B50411C40C /* ConsoleTheme.swift */; };
 		375C11060EADAE481F675186 /* ReplayRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FAB7954B05948384D635096 /* ReplayRecorder.swift */; };
 		381EA17FEECB9860750DB15B /* IBMPlexMono-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 8AF72F51F31076855E881E7C /* IBMPlexMono-SemiBold.ttf */; };
@@ -46,6 +47,7 @@
 		9DCFF92465B04D57A7CA99C7 /* ControlActionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A9A0633AA0F280514570416 /* ControlActionRouter.swift */; };
 		A0B3B9452C3F7CD9D72EC668 /* SafetyMonitorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0B0C206605B1BEF659B7D6 /* SafetyMonitorView.swift */; };
 		A1512DD9525CE8FE8D3C2165 /* ConductorHarnessViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD918E63BA355AEB23BC9CED /* ConductorHarnessViewModel.swift */; };
+		A2F1E64B01471D0D83509057 /* VideoOutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 475E84A1AAE7DF014BD33ABB /* VideoOutView.swift */; };
 		A39D1D82EE0658F7A1C5F78D /* ProgramPreviewBus.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAFF4C68423681C56F33B681 /* ProgramPreviewBus.swift */; };
 		A3AA1081A741ABDEA37969F4 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9BDF727C34F8CF4F49035F8 /* Models.swift */; };
 		A4509A6C724CB59470F74955 /* SegmentedCountdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAE2003BB3E2DD1D81C0A32B /* SegmentedCountdown.swift */; };
@@ -113,6 +115,7 @@
 		333F4E6DF516A146C08DBAC1 /* ControlProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlProfile.swift; sourceTree = "<group>"; };
 		33F8F7062B180BBC20FB1F93 /* PushDeckModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushDeckModels.swift; sourceTree = "<group>"; };
 		3FAB7954B05948384D635096 /* ReplayRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplayRecorder.swift; sourceTree = "<group>"; };
+		475E84A1AAE7DF014BD33ABB /* VideoOutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoOutView.swift; sourceTree = "<group>"; };
 		56C926477647D701DA7EFC75 /* ControlSources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlSources.swift; sourceTree = "<group>"; };
 		5805F38E6A2108591D11869E /* IBMPlexMono-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "IBMPlexMono-Bold.ttf"; sourceTree = "<group>"; };
 		5F1784CD907BC515895336F4 /* MIDIEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIEngine.swift; sourceTree = "<group>"; };
@@ -154,6 +157,7 @@
 		DD918E63BA355AEB23BC9CED /* ConductorHarnessViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConductorHarnessViewModel.swift; sourceTree = "<group>"; };
 		DF2731A008E2FD07B56DD084 /* ConductorSurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConductorSurfaceView.swift; sourceTree = "<group>"; };
 		E0BCAE9795F970AA4D34F5BC /* WindowChromeCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowChromeCoordinator.swift; sourceTree = "<group>"; };
+		E6176C46921BF3E4D596C8B0 /* VideoOutDisplayCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoOutDisplayCoordinator.swift; sourceTree = "<group>"; };
 		EAE2003BB3E2DD1D81C0A32B /* SegmentedCountdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentedCountdown.swift; sourceTree = "<group>"; };
 		ED4D001665D61DE2C051E3E8 /* OutputLatchController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputLatchController.swift; sourceTree = "<group>"; };
 		F0F98F8E5504303A653CBF14 /* TimelineTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineTransport.swift; sourceTree = "<group>"; };
@@ -229,6 +233,8 @@
 				F706A9FE1F373A0222D6FD63 /* PushControllerTrustState.swift */,
 				2730F154CFFACF316BE9F215 /* PushDeckEventRouter.swift */,
 				DA0B0C206605B1BEF659B7D6 /* SafetyMonitorView.swift */,
+				E6176C46921BF3E4D596C8B0 /* VideoOutDisplayCoordinator.swift */,
+				475E84A1AAE7DF014BD33ABB /* VideoOutView.swift */,
 				9D3D3C6EF7CE6A66E78E4341 /* VufineDisplayCoordinator.swift */,
 				9942EED02F23A1C81DE05E3F /* VufineHUDSnapshot.swift */,
 				104BCAA5060AD3B9079D6929 /* VufineRealtimeView.swift */,
@@ -425,6 +431,8 @@
 				A0B3B9452C3F7CD9D72EC668 /* SafetyMonitorView.swift in Sources */,
 				A4509A6C724CB59470F74955 /* SegmentedCountdown.swift in Sources */,
 				3F231A171B25774127F6E1A3 /* StatusLamp.swift in Sources */,
+				33342D56CFF06FC8DB50B3FA /* VideoOutDisplayCoordinator.swift in Sources */,
+				A2F1E64B01471D0D83509057 /* VideoOutView.swift in Sources */,
 				BCCF2230A09705CA652BCAA3 /* VufineDisplayCoordinator.swift in Sources */,
 				8AB684B10B776F4677CF14FC /* VufineHUDSnapshot.swift in Sources */,
 				0B099340F33CC06BF5499DEB /* VufineRealtimeView.swift in Sources */,

@@ -10,8 +10,8 @@ vi.mock("../src/routes/ParticipantLogbookRoute", () => ({
   ParticipantLogbookRoute: (): JSX.Element => <main>Mock Participant Logbook</main>
 }));
 
-vi.mock("../src/components/FixedVideoLayer", () => ({
-  FixedVideoLayer: (): JSX.Element | null => null
+vi.mock("../src/components/ParticleMesh", () => ({
+  ParticleMesh: (): JSX.Element | null => null
 }));
 
 vi.mock("../src/lib/api", () => ({
@@ -106,10 +106,22 @@ describe("participant editorial routing", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders hashed HOME at /:hashedId", () => {
+  it("renders hashed HOME at /:hashedId with landing CTAs", () => {
     renderAt(`/${validHash}`);
 
-    expect(screen.getByRole("heading", { name: /I keep this film open/i })).toBeTruthy();
+    expect(screen.getByTestId("home-stage")).toBeTruthy();
+    expect(screen.getByTestId("home-enter-link")).toBeTruthy();
+    expect(screen.getByTestId("home-more-button")).toBeTruthy();
+  });
+
+  it("opens the More menu with About and Logbook items", async () => {
+    renderAt(`/${validHash}`);
+
+    expect(screen.queryByTestId("home-more-menu")).toBeNull();
+    fireEvent.click(screen.getByTestId("home-more-button"));
+    await waitFor(() => expect(screen.getByTestId("home-more-menu")).toBeTruthy());
+    expect(screen.getByRole("menuitem", { name: "About" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Logbook" })).toBeTruthy();
   });
 
   it("renders hashed ABOUT at /:hashedId/about", () => {
@@ -119,20 +131,22 @@ describe("participant editorial routing", () => {
     expect(screen.getByText("Participation Ethic")).toBeTruthy();
   });
 
-  it("keeps hash context when navigating HOME and ABOUT", async () => {
+  it("keeps hash context when navigating to About via More and back Home", async () => {
     const router = renderAt(`/${validHash}`);
 
-    fireEvent.click(screen.getByRole("link", { name: "ABOUT" }));
+    fireEvent.click(screen.getByTestId("home-more-button"));
+    await waitFor(() => expect(screen.getByTestId("home-more-menu")).toBeTruthy());
+    fireEvent.click(screen.getByRole("menuitem", { name: "About" }));
     await waitFor(() => expect(router.state.location.pathname).toBe(`/${validHash}/about`));
 
-    fireEvent.click(screen.getByRole("link", { name: "HOME" }));
+    fireEvent.click(screen.getByRole("link", { name: /Return to home/i }));
     await waitFor(() => expect(router.state.location.pathname).toBe(`/${validHash}`));
   });
 
-  it("routes ENTER nav action to /:hashedId/live", async () => {
+  it("routes Enter Film CTA to /:hashedId/live", async () => {
     const router = renderAt(`/${validHash}`);
 
-    fireEvent.click(screen.getByRole("link", { name: "ENTER" }));
+    fireEvent.click(screen.getByTestId("home-enter-link"));
 
     await waitFor(() => expect(router.state.location.pathname).toBe(`/${validHash}/live`));
     expect(screen.getByText("Mock Live Route")).toBeTruthy();

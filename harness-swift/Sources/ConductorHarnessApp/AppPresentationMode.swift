@@ -5,6 +5,7 @@ enum AppWindowID: String, CaseIterable, Sendable {
     case launchGate = "launch-gate"
     case safetyMonitor = "safety-monitor"
     case vufineRealtime = "vufine-realtime"
+    case videoOut = "video-out"
     case fullConsole = "full-console"
     case hotasMapper = "hotas-mapper"
 }

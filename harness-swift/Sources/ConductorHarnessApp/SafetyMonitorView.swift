@@ -6,6 +6,7 @@ struct SafetyMonitorView: View {
     @ObservedObject var model: ConductorHarnessViewModel
     @ObservedObject var performanceMode: PerformanceModeState
     @ObservedObject var displayCoordinator: VufineDisplayCoordinator
+    @ObservedObject var videoOutDisplayCoordinator: VideoOutDisplayCoordinator
     @ObservedObject var inspectorPresentation: InspectorPresentationState
 
     @Environment(\.openWindow) private var openWindow
@@ -49,6 +50,7 @@ struct SafetyMonitorView: View {
 
             Group {
                 statusLine("Vufine", displayCoordinator.route.summary)
+                statusLine("Video Out", videoOutDisplayCoordinator.route.summary)
                 statusLine("Link", model.connectionStatus)
                 statusLine("Engine", model.engineRunning ? "RUNNING" : "STOPPED")
                 statusLine("Arm", model.masterArmKey == .armed ? "ARMED" : "SAFE")
@@ -147,6 +149,11 @@ struct SafetyMonitorView: View {
                     NSApp.activate(ignoringOtherApps: true)
                 }
                 .buttonStyle(.bordered)
+
+                Button("OPEN VIDEO OUT") {
+                    openVideoOutWindowAndRoute()
+                }
+                .buttonStyle(.bordered)
             }
         }
         .padding(12)
@@ -241,6 +248,11 @@ struct SafetyMonitorView: View {
             }
             .buttonStyle(.bordered)
 
+            Button("VIDEO OUT") {
+                openVideoOutWindowAndRoute()
+            }
+            .buttonStyle(.bordered)
+
             Button("MAC ONLY") {
                 apply(performanceMode.transitionToLayout(.safetyOnly))
             }
@@ -261,6 +273,9 @@ struct SafetyMonitorView: View {
                 }
                 Button("Open Vufine Realtime") {
                     openWindow(id: AppWindowID.vufineRealtime.rawValue)
+                }
+                Button("Open Video Out") {
+                    openVideoOutWindowAndRoute()
                 }
             }
             .menuStyle(.borderlessButton)
@@ -290,6 +305,14 @@ struct SafetyMonitorView: View {
             openWindow(id: id.rawValue)
         }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func openVideoOutWindowAndRoute() {
+        openWindow(id: AppWindowID.videoOut.rawValue)
+        DispatchQueue.main.async {
+            videoOutDisplayCoordinator.refreshPlacement(avoidingScreenID: displayCoordinator.activeScreenID)
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     private func runSoundImport(_ kind: SoundImportKind) {

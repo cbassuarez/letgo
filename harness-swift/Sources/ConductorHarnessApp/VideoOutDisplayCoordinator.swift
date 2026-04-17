@@ -1,34 +1,29 @@
 import AppKit
 import Foundation
-import SwiftUI
 
-struct VufineScreenDescriptor: Equatable, Sendable {
-    let id: String
-    let name: String
-    let frame: CGRect
-    let isPrimary: Bool
-}
-
-enum VufineDisplayRoute: Equatable, Sendable {
+enum VideoOutDisplayRoute: Equatable, Sendable {
     case external(name: String)
+    case externalShared(name: String)
     case primaryFallback(name: String)
     case unavailable
 
     var summary: String {
         switch self {
         case .external(let name):
-            return "VUFINE: EXTERNAL (\(name))"
+            return "VIDEO OUT: EXTERNAL (\(name))"
+        case .externalShared(let name):
+            return "VIDEO OUT: SHARED EXTERNAL (\(name))"
         case .primaryFallback(let name):
-            return "VUFINE: PRIMARY FALLBACK (\(name))"
+            return "VIDEO OUT: PRIMARY FALLBACK (\(name))"
         case .unavailable:
-            return "VUFINE: NO DISPLAY"
+            return "VIDEO OUT: NO DISPLAY"
         }
     }
 }
 
 @MainActor
-final class VufineDisplayCoordinator: ObservableObject {
-    @Published private(set) var route: VufineDisplayRoute = .unavailable
+final class VideoOutDisplayCoordinator: ObservableObject {
+    @Published private(set) var route: VideoOutDisplayRoute = .unavailable
     @Published private(set) var activeScreenID: String?
 
     private weak var window: NSWindow?
@@ -42,9 +37,8 @@ final class VufineDisplayCoordinator: ObservableObject {
 
     func attach(window: NSWindow) {
         self.window = window
-        configureVufineWindow(window)
+        configureVideoOutWindow(window)
         observeScreenChangesIfNeeded()
-        refreshPlacement()
     }
 
     func detach() {
@@ -57,20 +51,23 @@ final class VufineDisplayCoordinator: ObservableObject {
         }
     }
 
-    func refreshPlacement() {
+    func refreshPlacement(avoidingScreenID: String? = nil) {
         guard let window else {
             route = .unavailable
             activeScreenID = nil
             return
         }
 
-        let descriptors = Self.currentScreens()
-        let preferredRoute = Self.preferredRoute(for: descriptors)
+        let descriptors = currentScreens()
+        let preferredRoute = Self.preferredRoute(for: descriptors, avoidingScreenID: avoidingScreenID)
         route = preferredRoute
 
-        guard let targetDescriptor = Self.targetDescriptor(for: preferredRoute),
-              let targetScreen = NSScreen.screens.first(where: { Self.screenID(for: $0) == targetDescriptor.id }) else {
-            activeScreenID = window.screen.map(Self.screenID(for:))
+        guard let targetDescriptor = targetDescriptor(
+            for: preferredRoute,
+            in: descriptors,
+            avoidingScreenID: avoidingScreenID
+        ), let targetScreen = NSScreen.screens.first(where: { screenID(for: $0) == targetDescriptor.id }) else {
+            activeScreenID = window.screen.map(screenID(for:))
             return
         }
 
@@ -79,23 +76,8 @@ final class VufineDisplayCoordinator: ObservableObject {
         window.orderFrontRegardless()
     }
 
-    nonisolated static func preferredRoute(for screens: [VufineScreenDescriptor]) -> VufineDisplayRoute {
-        if let external = screens.first(where: { !$0.isPrimary }) {
-            return .external(name: external.name)
-        }
-        if let primary = screens.first(where: \.isPrimary) ?? screens.first {
-            return .primaryFallback(name: primary.name)
-        }
-        return .unavailable
-    }
-
-    nonisolated static func hasExternalDisplay(_ screens: [VufineScreenDescriptor]) -> Bool {
-        screens.contains(where: { !$0.isPrimary })
-    }
-
-    @MainActor
-    func externalDisplayCurrentlyAvailable() -> Bool {
-        Self.hasExternalDisplay(Self.currentScreens())
+    func toggleFullScreen() {
+        window?.toggleFullScreen(nil)
     }
 
     private func observeScreenChangesIfNeeded() {
@@ -111,29 +93,58 @@ final class VufineDisplayCoordinator: ObservableObject {
         }
     }
 
-    private func configureVufineWindow(_ window: NSWindow) {
+    private func configureVideoOutWindow(_ window: NSWindow) {
         var style = window.styleMask
         style.remove(.borderless)
         style.remove(.fullSizeContentView)
         style.insert([.titled, .miniaturizable, .closable, .resizable])
         window.styleMask = style
-        window.collectionBehavior = [.managed, .fullScreenPrimary, .fullScreenAuxiliary]
+        window.collectionBehavior = [.managed, .fullScreenPrimary]
         window.level = .normal
         window.backgroundColor = .black
         window.isOpaque = true
         window.hasShadow = true
         window.isMovable = true
         window.isMovableByWindowBackground = false
-        window.title = "Vufine Realtime"
+        window.title = "Video Out"
         window.titleVisibility = .visible
         window.titlebarAppearsTransparent = false
         window.sharingType = .readWrite
     }
 
-    private static func targetDescriptor(for route: VufineDisplayRoute) -> VufineScreenDescriptor? {
-        let screens = currentScreens()
+    nonisolated static func preferredRoute(
+        for screens: [VufineScreenDescriptor],
+        avoidingScreenID: String?
+    ) -> VideoOutDisplayRoute {
+        let nonPrimary = screens.filter { !$0.isPrimary }
+
+        if let avoidingScreenID,
+           let dedicated = nonPrimary.first(where: { $0.id != avoidingScreenID }) {
+            return .external(name: dedicated.name)
+        }
+
+        if let shared = nonPrimary.first {
+            return .externalShared(name: shared.name)
+        }
+
+        if let primary = screens.first(where: \.isPrimary) ?? screens.first {
+            return .primaryFallback(name: primary.name)
+        }
+
+        return .unavailable
+    }
+
+    private func targetDescriptor(
+        for route: VideoOutDisplayRoute,
+        in screens: [VufineScreenDescriptor],
+        avoidingScreenID: String?
+    ) -> VufineScreenDescriptor? {
         switch route {
         case .external(let name):
+            return screens.first(where: { !$0.isPrimary && $0.name == name && $0.id != avoidingScreenID })
+                ?? screens.first(where: { !$0.isPrimary && $0.id != avoidingScreenID })
+                ?? screens.first(where: { !$0.isPrimary })
+        case .externalShared(let name):
             return screens.first(where: { !$0.isPrimary && $0.name == name })
                 ?? screens.first(where: { !$0.isPrimary })
         case .primaryFallback(let name):
@@ -145,7 +156,7 @@ final class VufineDisplayCoordinator: ObservableObject {
         }
     }
 
-    private static func currentScreens() -> [VufineScreenDescriptor] {
+    private func currentScreens() -> [VufineScreenDescriptor] {
         let mainID = NSScreen.main.map(screenID(for:))
         return NSScreen.screens.enumerated().map { index, screen in
             let id = screenID(for: screen)
@@ -159,7 +170,7 @@ final class VufineDisplayCoordinator: ObservableObject {
         }
     }
 
-    private static func screenID(for screen: NSScreen) -> String {
+    private func screenID(for screen: NSScreen) -> String {
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         if let number = screen.deviceDescription[key] as? NSNumber {
             return number.stringValue

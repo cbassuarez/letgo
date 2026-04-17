@@ -45,6 +45,12 @@ struct PerformanceLaunchView: View {
                 }
                 .buttonStyle(.bordered)
 
+                Button("Open Video Out") {
+                    openWindow(id: AppWindowID.videoOut.rawValue)
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                .buttonStyle(.bordered)
+
                 Button("Cancel") {
                     dismissWindow(id: AppWindowID.launchGate.rawValue)
                 }
