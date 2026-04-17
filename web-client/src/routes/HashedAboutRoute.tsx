@@ -47,7 +47,7 @@ export const HashedAboutRoute = (): JSX.Element => {
       <motion.section {...fadeConfig(reducedMotion, 0.2)} className="participant-card mt-10">
         <p className="participant-kicker">Plot</p>
         <p className="mt-4 max-w-4xl text-lg leading-relaxed text-participant-smoke/88">
-          a reflection on the rejection of letting go as a formalized concept; this variable length work
+          a reflection on the rejection of letting go as a formalized concept; this variable length work explores representations of loss through a literal loss of directorial and temporal control as audience members govern and steer the work live. an ode to persistent ephemerality, this work applies aleatoric and improvisatory concepts to live video compositing. a script appears as text overlay, repeating from a tight set of phrases that mirror the repetitions of loss itself; the musical material does the same, cycling through a narrow sample bank. these function as constant reminders, mirroring the strictures by which nostalgia and the ruminant reminders of what once was come to mind. things pass through us regardless of what we do for or against that; they don't lodge so much as circulate, pass through us.
         </p>
       </motion.section>
 
