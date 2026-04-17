@@ -425,6 +425,13 @@ export type PhoneAudioCommandKind =
   | "stop_all";
 
 export type PhoneAudioPriority = "high" | "medium" | "low";
+export type VoiceStreamCodec = "opus" | "aac" | "pcm";
+export type StreamLifecycleStatus =
+  | "subscribed"
+  | "unsubscribed"
+  | "underrun"
+  | "track_lost"
+  | "fallback_group";
 
 export interface PhoneAudioRenderHints {
   zoneId?: string;
@@ -433,6 +440,26 @@ export interface PhoneAudioRenderHints {
   grainMix?: number;
   motionEnergy?: number;
   priority?: PhoneAudioPriority;
+}
+
+export interface VoiceStreamDescriptor {
+  voiceId: string;
+  trackId: string;
+  sessionId: string;
+  token?: string;
+  codec: VoiceStreamCodec;
+  expiresAt: number;
+  streamUrl?: string;
+  fallbackGroup?: string;
+}
+
+export interface GroupStemDescriptor {
+  groupId: string;
+  sessionId: string;
+  token?: string;
+  codec: VoiceStreamCodec;
+  expiresAt: number;
+  streamUrl?: string;
 }
 
 export interface PhoneAudioCommandPayload {
@@ -446,6 +473,9 @@ export interface PhoneAudioCommandPayload {
   seed?: number;
   renderHints?: PhoneAudioRenderHints;
   renderHintsByTarget?: Record<string, PhoneAudioRenderHints>;
+  stream?: VoiceStreamDescriptor;
+  streamByTarget?: Record<string, VoiceStreamDescriptor>;
+  fallbackGroup?: GroupStemDescriptor;
   issuedAt: number;
 }
 
@@ -454,7 +484,81 @@ export interface PhoneAudioAckPayload {
   hashedId: string;
   ok: boolean;
   detail?: string;
+  streamStatus?: StreamLifecycleStatus;
+  streamReason?: string;
+  voiceId?: string;
+  trackId?: string;
   receivedAt: number;
+}
+
+export type KeyboardHostLinkState = "offline" | "connecting" | "online" | "degraded";
+
+export interface KeyboardPatchSnapshot {
+  patchId: string;
+  patchName?: string;
+  bank: number;
+  program: number;
+  updatedAt: number;
+}
+
+export interface KeyboardStatePayload {
+  profileId: string;
+  profileName: string;
+  page: number;
+  pageName: string;
+  hostLink: KeyboardHostLinkState;
+  clockMaster: boolean;
+  clockBpm: number;
+  transportRunning: boolean;
+  patch: KeyboardPatchSnapshot;
+  cueVersion?: number;
+  activeScene?: ShowSceneKey;
+  updatedAt: number;
+}
+
+export interface KeyboardPatchChangePayload {
+  patchId: string;
+  patchName?: string;
+  bank: number;
+  program: number;
+  source: "operator";
+  updatedAt: number;
+}
+
+export interface VoiceStreamStartPayload {
+  commandId: string;
+  hashedId: string;
+  note?: number;
+  velocity?: number;
+  renderHints?: PhoneAudioRenderHints;
+  stream: VoiceStreamDescriptor;
+  issuedAt: number;
+}
+
+export interface VoiceStreamStopPayload {
+  commandId: string;
+  hashedId: string;
+  voiceId: string;
+  trackId: string;
+  note?: number;
+  reason?: "note_off" | "stop_all" | "failover" | "expired";
+  issuedAt: number;
+}
+
+export interface GroupStemStartPayload {
+  commandId: string;
+  hashedIds: string[];
+  group: GroupStemDescriptor;
+  reason?: "voice_cap" | "stream_unstable" | "manual_recovery";
+  issuedAt: number;
+}
+
+export interface GroupStemStopPayload {
+  commandId: string;
+  hashedIds: string[];
+  groupId: string;
+  reason?: "voice_capacity_recovered" | "manual" | "show_stop";
+  issuedAt: number;
 }
 
 export interface CrowdPickWindowPayload {
@@ -650,6 +754,12 @@ export interface WireEnvelope<T = unknown> {
     | "audio_features"
     | "phone_audio_command"
     | "phone_audio_ack"
+    | "keyboard_state"
+    | "keyboard_patch_change"
+    | "voice_stream_start"
+    | "voice_stream_stop"
+    | "group_stem_start"
+    | "group_stem_stop"
     | "crowd_pick_window"
     | "crowd_pick_vote"
     | "crowd_pick_result"

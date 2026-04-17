@@ -505,6 +505,18 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     @Published var selectedMIDIInputID: String = ""
     @Published private(set) var midiInputActive = false
     @Published private(set) var midiInputStatus = "MIDI OFF"
+    @Published private(set) var keyboardProfileID = "minilab3"
+    @Published private(set) var keyboardProfileName = "MiniLab 3"
+    @Published private(set) var keyboardPage = 0
+    @Published private(set) var keyboardPageName = "A"
+    @Published private(set) var keyboardHostLink = "degraded"
+    @Published private(set) var keyboardClockMaster = true
+    @Published private(set) var keyboardClockBPM: Double = 120
+    @Published private(set) var keyboardTransportRunning = false
+    @Published private(set) var keyboardPatchID = "default"
+    @Published private(set) var keyboardPatchName = "Default"
+    @Published private(set) var keyboardPatchBank = 0
+    @Published private(set) var keyboardPatchProgram = 0
     @Published private(set) var hotasInputActive = false
     @Published private(set) var hotasInputStatus = "HOTAS OFF"
     @Published private(set) var hotasControlsEnabled = false
@@ -1067,6 +1079,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 self?.publishPhoneAudioPoolState()
                 self?.publishLatestAudioFeatures()
                 self?.publishProceduralState(force: true)
+                self?.publishKeyboardState()
                 self?.publishPushPadLabelsForActiveMainBank(force: true)
                 self?.publishCurrentCueSnapshot(reason: "ws_open")
                 self?.pushStatus(StatusLineEvent(
@@ -1778,6 +1791,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
 
             latestCue = cue
             state = cue.showState
+            publishKeyboardState()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 guard self.latestCue?.cueId == cue.cueId else { return }
@@ -2103,6 +2117,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             textureSend: staticAudioMacroState.textureSend
         ))
         publishPhoneAudioPoolState()
+        publishKeyboardState()
         startAudioFeaturePump()
         resetCognitiveProposalState(reason: "engine_start")
 
@@ -2165,6 +2180,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         updateEffectsPresetForActiveBank()
         stopMIDIInput(notify: false)
         publishPhoneAudioPoolState()
+        publishKeyboardState()
         ingestAudioFeatures(.zero, forceUI: true)
         publishLatestAudioFeatures(forceZero: true)
         resetCognitiveProposalState(reason: "engine_stop")
@@ -2963,6 +2979,81 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         Task {
             do {
                 try await websocket.sendEnvelope(kind: "phone_audio_pool_state", data: payload)
+            } catch {
+                await MainActor.run {
+                    self.lastLinkError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func activeSceneKeyForKeyboardState() -> String {
+        switch state {
+        case .preshow:
+            return "preshow"
+        case .introduction:
+            return "introduction"
+        case .ending:
+            return "ending"
+        case .main:
+            return effectiveOutputMode == .dynamic ? "mainDynamic" : "mainStatic"
+        case .idle, .hold, .aborted, .recovery:
+            return "interstitial"
+        }
+    }
+
+    private func publishKeyboardState() {
+        guard linkState == .online || linkState == .degraded else { return }
+        let nowMs = Date().timeIntervalSince1970 * 1000
+        keyboardHostLink = linkState == .online ? "online" : "degraded"
+        keyboardTransportRunning = engineRunning
+        keyboardPatchName = sampleLabelByID[selectedSampleID] ?? keyboardPatchName
+        let payload = HarnessKeyboardStatePayload(
+            profileId: keyboardProfileID,
+            profileName: keyboardProfileName,
+            page: keyboardPage,
+            pageName: keyboardPageName,
+            hostLink: keyboardHostLink,
+            clockMaster: keyboardClockMaster,
+            clockBpm: keyboardClockBPM,
+            transportRunning: keyboardTransportRunning,
+            patch: HarnessKeyboardPatchSnapshot(
+                patchId: keyboardPatchID,
+                patchName: keyboardPatchName,
+                bank: keyboardPatchBank,
+                program: keyboardPatchProgram,
+                updatedAt: nowMs
+            ),
+            cueVersion: latestCue?.version,
+            activeScene: activeSceneKeyForKeyboardState(),
+            updatedAt: nowMs
+        )
+        Task {
+            do {
+                try await websocket.sendEnvelope(kind: "keyboard_state", data: payload)
+            } catch {
+                await MainActor.run {
+                    self.lastLinkError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func publishKeyboardPatchChange() {
+        guard linkState == .online || linkState == .degraded else { return }
+        let nowMs = Date().timeIntervalSince1970 * 1000
+        let patchName = sampleLabelByID[selectedSampleID] ?? keyboardPatchName
+        let payload = HarnessKeyboardPatchChangePayload(
+            patchId: keyboardPatchID,
+            patchName: patchName,
+            bank: keyboardPatchBank,
+            program: keyboardPatchProgram,
+            source: "operator",
+            updatedAt: nowMs
+        )
+        Task {
+            do {
+                try await websocket.sendEnvelope(kind: "keyboard_patch_change", data: payload)
             } catch {
                 await MainActor.run {
                     self.lastLinkError = error.localizedDescription
@@ -5039,6 +5130,12 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         if let firstExisting = preferredIDs.first(where: { samplePackEntries[$0] != nil }) {
             selectedSampleID = firstExisting
         }
+        let domainLabel = domain == .choir ? "choir" : "main"
+        let patchProgramIndex = max(0, preferredIDs.firstIndex(of: selectedSampleID) ?? 0)
+        keyboardPatchBank = clampedBank
+        keyboardPatchProgram = min(127, patchProgramIndex)
+        keyboardPatchID = "\(domainLabel)-bank-\(clampedBank)-\(selectedSampleID)"
+        keyboardPatchName = sampleLabelByID[selectedSampleID] ?? selectedSampleID
         if domain == .main {
             applyStaticSampleMorphSelection()
             updateEffectsPresetForActiveBank()
@@ -5052,10 +5149,12 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         )
 
         refreshProgramAudioState(nowMs: ConductorHarnessViewModel.nowMilliseconds())
+        publishKeyboardPatchChange()
+        publishKeyboardState()
         guard emitStatus else { return }
-        let domainLabel = domain == .choir ? "Choir" : "Main"
+        let domainStatusLabel = domain == .choir ? "Choir" : "Main"
         pushStatus(StatusLineEvent(
-            message: "\(domainLabel) sample bank selected: \(clampedBank)",
+            message: "\(domainStatusLabel) sample bank selected: \(clampedBank)",
             severity: .info,
             timestamp: Date()
         ))
@@ -7541,6 +7640,36 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                     timestamp: Date()
                 ))
             }
+            return
+        }
+
+        if kind == "keyboard_state",
+           let payload = json["data"],
+           let data = try? JSONSerialization.data(withJSONObject: payload),
+           let decoded = try? JSONDecoder().decode(HarnessKeyboardStatePayload.self, from: data) {
+            keyboardProfileID = decoded.profileId
+            keyboardProfileName = decoded.profileName
+            keyboardPage = decoded.page
+            keyboardPageName = decoded.pageName
+            keyboardHostLink = decoded.hostLink
+            keyboardClockMaster = decoded.clockMaster
+            keyboardClockBPM = decoded.clockBpm
+            keyboardTransportRunning = decoded.transportRunning
+            keyboardPatchID = decoded.patch.patchId
+            keyboardPatchName = decoded.patch.patchName ?? keyboardPatchName
+            keyboardPatchBank = decoded.patch.bank
+            keyboardPatchProgram = decoded.patch.program
+            return
+        }
+
+        if kind == "keyboard_patch_change",
+           let payload = json["data"],
+           let data = try? JSONSerialization.data(withJSONObject: payload),
+           let decoded = try? JSONDecoder().decode(HarnessKeyboardPatchChangePayload.self, from: data) {
+            keyboardPatchID = decoded.patchId
+            keyboardPatchName = decoded.patchName ?? keyboardPatchName
+            keyboardPatchBank = decoded.bank
+            keyboardPatchProgram = decoded.program
             return
         }
 

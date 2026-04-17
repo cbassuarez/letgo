@@ -18,11 +18,17 @@ import {
   type PhoneAudioAckPayload,
   type PhoneAudioCommandPayload,
   type PhoneAudioPoolStatePayload,
+  type GroupStemStartPayload,
+  type GroupStemStopPayload,
+  type KeyboardPatchChangePayload,
+  type KeyboardStatePayload,
   type PromptOfferPayload,
   type PromptResponsePayload,
   type ProgramProceduralState,
   type SyncPacket,
   type TextScenePayload,
+  type VoiceStreamStartPayload,
+  type VoiceStreamStopPayload,
   type WireEnvelope
 } from "@conductor/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -51,6 +57,12 @@ interface SessionState {
   proceduralState: ProgramProceduralState;
   textScene: TextScenePayload;
   phoneAudioCommand: PhoneAudioCommandPayload | null;
+  keyboardState: KeyboardStatePayload | null;
+  keyboardPatchChange: KeyboardPatchChangePayload | null;
+  voiceStreamStart: VoiceStreamStartPayload | null;
+  voiceStreamStop: VoiceStreamStopPayload | null;
+  groupStemStart: GroupStemStartPayload | null;
+  groupStemStop: GroupStemStopPayload | null;
   promptOffer: PromptOfferPayload | null;
   sendPermissions: (permissions: DevicePermissions) => void;
   sendZoneUpdate: (zone: DeviceZone) => void;
@@ -410,6 +422,12 @@ export const useConductorSession = (hashedId: string): SessionState => {
   const [proceduralState, setProceduralState] = useState<ProgramProceduralState>(defaultProceduralState);
   const [textScene, setTextScene] = useState<TextScenePayload>(defaultTextScene);
   const [phoneAudioCommand, setPhoneAudioCommand] = useState<PhoneAudioCommandPayload | null>(null);
+  const [keyboardState, setKeyboardState] = useState<KeyboardStatePayload | null>(null);
+  const [keyboardPatchChange, setKeyboardPatchChange] = useState<KeyboardPatchChangePayload | null>(null);
+  const [voiceStreamStart, setVoiceStreamStart] = useState<VoiceStreamStartPayload | null>(null);
+  const [voiceStreamStop, setVoiceStreamStop] = useState<VoiceStreamStopPayload | null>(null);
+  const [groupStemStart, setGroupStemStart] = useState<GroupStemStartPayload | null>(null);
+  const [groupStemStop, setGroupStemStop] = useState<GroupStemStopPayload | null>(null);
   const [promptOffer, setPromptOffer] = useState<PromptOfferPayload | null>(null);
 
   const clockRef = useRef(new SyncClock());
@@ -700,6 +718,30 @@ export const useConductorSession = (hashedId: string): SessionState => {
           setPhoneAudioCommand(envelope.data as PhoneAudioCommandPayload);
         }
 
+        if (envelope.kind === "keyboard_state") {
+          setKeyboardState(envelope.data as KeyboardStatePayload);
+        }
+
+        if (envelope.kind === "keyboard_patch_change") {
+          setKeyboardPatchChange(envelope.data as KeyboardPatchChangePayload);
+        }
+
+        if (envelope.kind === "voice_stream_start") {
+          setVoiceStreamStart(envelope.data as VoiceStreamStartPayload);
+        }
+
+        if (envelope.kind === "voice_stream_stop") {
+          setVoiceStreamStop(envelope.data as VoiceStreamStopPayload);
+        }
+
+        if (envelope.kind === "group_stem_start") {
+          setGroupStemStart(envelope.data as GroupStemStartPayload);
+        }
+
+        if (envelope.kind === "group_stem_stop") {
+          setGroupStemStop(envelope.data as GroupStemStopPayload);
+        }
+
         if (envelope.kind === "prompt_offer") {
           setPromptOffer(envelope.data as PromptOfferPayload);
         }
@@ -808,6 +850,12 @@ export const useConductorSession = (hashedId: string): SessionState => {
     proceduralState,
     textScene,
     phoneAudioCommand,
+    keyboardState,
+    keyboardPatchChange,
+    voiceStreamStart,
+    voiceStreamStop,
+    groupStemStart,
+    groupStemStop,
     promptOffer,
     sendPermissions,
     sendZoneUpdate,

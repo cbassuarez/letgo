@@ -290,7 +290,13 @@ export const DeviceRoute = (): JSX.Element => {
   const colorLayerActive = isColorPolicyActive(colorPolicy, participantRole, session.cue?.showState ?? null);
   const colorBias = useColorBiasField(permissionsDone && colorLayerActive);
   const deviceTextVariance = useDeviceTextVariance(session.textScene, hashedId);
-  const { handleCommand } = usePhoneVoiceEngine({
+  const {
+    handleCommand,
+    handleVoiceStreamStart,
+    handleVoiceStreamStop,
+    handleGroupStemStart,
+    handleGroupStemStop
+  } = usePhoneVoiceEngine({
     enabled: permissionsDone && session.phoneAudioPoolState.gateCommitted,
     hashedId,
     onAck: sendPhoneAudioAck
@@ -392,6 +398,10 @@ export const DeviceRoute = (): JSX.Element => {
   );
   const pickCountdownMs = crowdPickWindow ? Math.max(0, crowdPickWindow.closesAt - clockNow) : 0;
   const syncHealthy = session.connected && !session.fallbackActive && Math.abs(session.driftMs) <= 350;
+  const compositorReady = compositorDisplayMode === "html-in-canvas" || compositorDisplayMode === "fallback";
+  const compositorRequired = showDynamicWithFallback;
+  const phoneAudioReady =
+    session.phoneAudioPoolState.quadRouteReady && session.phoneAudioPoolState.availableDevices.length > 0;
   const streamStatus = (() => {
     if (offlineReason === "stream_hold") {
       return "HOLD";
@@ -450,7 +460,7 @@ export const DeviceRoute = (): JSX.Element => {
     },
     {
       label: "COMPOSITOR",
-      go: compositorDisplayMode === "html-in-canvas" || compositorDisplayMode === "fallback"
+      go: !compositorRequired || compositorReady
     },
     {
       label: "ENGINE",
@@ -462,7 +472,7 @@ export const DeviceRoute = (): JSX.Element => {
     },
     {
       label: "PHONE AUDIO",
-      go: session.phoneAudioPoolState.gateCommitted && session.phoneAudioPoolState.quadRouteReady
+      go: phoneAudioReady
     },
     {
       label: "CROWD PICK",
@@ -705,6 +715,34 @@ export const DeviceRoute = (): JSX.Element => {
     handledPhoneCommandRef.current = session.phoneAudioCommand.commandId;
     void handleCommand(session.phoneAudioCommand);
   }, [handleCommand, session.phoneAudioCommand]);
+
+  useEffect(() => {
+    if (!session.voiceStreamStart) {
+      return;
+    }
+    void handleVoiceStreamStart(session.voiceStreamStart);
+  }, [handleVoiceStreamStart, session.voiceStreamStart]);
+
+  useEffect(() => {
+    if (!session.voiceStreamStop) {
+      return;
+    }
+    handleVoiceStreamStop(session.voiceStreamStop);
+  }, [handleVoiceStreamStop, session.voiceStreamStop]);
+
+  useEffect(() => {
+    if (!session.groupStemStart) {
+      return;
+    }
+    void handleGroupStemStart(session.groupStemStart);
+  }, [handleGroupStemStart, session.groupStemStart]);
+
+  useEffect(() => {
+    if (!session.groupStemStop) {
+      return;
+    }
+    handleGroupStemStop(session.groupStemStop);
+  }, [handleGroupStemStop, session.groupStemStop]);
 
   useEffect(() => {
     if (!permissionsDone || !fixedLayerEnabled) {

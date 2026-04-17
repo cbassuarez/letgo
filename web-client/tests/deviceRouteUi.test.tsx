@@ -89,7 +89,11 @@ vi.mock("../src/hooks/useDeviceTextVariance", () => ({
 
 vi.mock("../src/hooks/usePhoneVoiceEngine", () => ({
   usePhoneVoiceEngine: () => ({
-    handleCommand: () => undefined
+    handleCommand: () => undefined,
+    handleVoiceStreamStart: () => undefined,
+    handleVoiceStreamStop: () => undefined,
+    handleGroupStemStart: () => undefined,
+    handleGroupStemStop: () => undefined
   })
 }));
 
@@ -263,6 +267,11 @@ const continueIntoLive = () => {
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 };
 
+const goNoGoValueFor = (label: string): string => {
+  const row = screen.getByText(label).closest(".live-gng-row");
+  return row?.lastElementChild?.textContent?.trim() ?? "";
+};
+
 describe("DeviceRoute minimal live UI", () => {
   beforeEach(() => {
     sessionState = baseSession();
@@ -378,6 +387,28 @@ describe("DeviceRoute minimal live UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
 
     expect(screen.getByTestId("live-diagnostics-panel")).toBeTruthy();
+  });
+
+  it("treats compositor standby and route-ready phone audio as GO", async () => {
+    sessionState.cue.showState = "introduction";
+    sessionState.cue.payload.outputMode = "program";
+    sessionState.cue.payload.showFixed = true;
+    sessionState.cue.payload.showDynamic = false;
+    sessionState.phoneAudioPoolState = {
+      ...sessionState.phoneAudioPoolState,
+      gateArmed: false,
+      gateCommitted: false,
+      quadRouteReady: true,
+      availableDevices: ["device-1"]
+    };
+
+    renderLive();
+    continueIntoLive();
+
+    fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
+    expect(screen.getByTestId("live-diagnostics-panel")).toBeTruthy();
+    expect(goNoGoValueFor("COMPOSITOR")).toBe("GO");
+    expect(goNoGoValueFor("PHONE AUDIO")).toBe("GO");
   });
 
   it("shows mission-control offline card when engine is off", async () => {

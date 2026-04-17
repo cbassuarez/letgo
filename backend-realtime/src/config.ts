@@ -21,7 +21,15 @@ const envSchema = z.object({
   CONDUCTOR_HLS_INTRODUCTION_URL: z.string().optional(),
   CONDUCTOR_HLS_MAIN_STATIC_URL: z.string().optional(),
   CONDUCTOR_HLS_MAIN_DYNAMIC_URL: z.string().optional(),
-  CONDUCTOR_HLS_ENDING_URL: z.string().optional()
+  CONDUCTOR_HLS_ENDING_URL: z.string().optional(),
+  CONDUCTOR_MANAGED_SFU_BASE_URL: z.string().optional(),
+  CONDUCTOR_GROUP_STEM_BASE_URL: z.string().optional(),
+  CONDUCTOR_VOICE_STREAM_CODEC: z.enum(["opus", "aac", "pcm"]).default("opus"),
+  CONDUCTOR_GROUP_STREAM_CODEC: z.enum(["opus", "aac", "pcm"]).default("aac"),
+  CONDUCTOR_VOICE_STREAM_TTL_MS: z.coerce.number().default(30_000),
+  CONDUCTOR_VOICE_STREAM_MAX_CONCURRENT: z.coerce.number().default(16),
+  CONDUCTOR_MANAGED_SFU_SESSION_PREFIX: z.string().default("letgo"),
+  CONDUCTOR_MANAGED_SFU_TOKEN_SECRET: z.string().default("managed-sfu-token")
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

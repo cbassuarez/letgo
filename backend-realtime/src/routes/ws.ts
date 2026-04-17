@@ -29,6 +29,11 @@ import {
   stableHashToSeed,
   type EchoCapsByStem,
   type EchoStem,
+  type GroupStemDescriptor,
+  type GroupStemStartPayload,
+  type GroupStemStopPayload,
+  type KeyboardPatchChangePayload,
+  type KeyboardStatePayload,
   type PushDeckMLParamKey,
   type TextBlendState,
   type SyncPacket,
@@ -36,6 +41,9 @@ import {
   type TransitionMode,
   type CompositorPreset,
   type SplitLayout,
+  type VoiceStreamStartPayload,
+  type VoiceStreamStopPayload,
+  type VoiceStreamDescriptor,
   type WireEnvelope
 } from "@conductor/protocol";
 import type { FastifyInstance } from "fastify";
@@ -55,6 +63,7 @@ import type { TextSceneComposerService } from "../services/textSceneComposer";
 import { PromptOrchestrator } from "../services/promptOrchestrator";
 import type { SessionStore } from "../stores/sessionStore";
 import { logger } from "../utils/logger";
+import { ManagedSFUCoordinator } from "../services/managedSfuCoordinator";
 
 interface WsDependencies {
   config: AppConfig;
@@ -85,6 +94,8 @@ type HarnessInbound =
   | { kind: "audio_features"; data: Partial<AudioFeaturePayload> }
   | { kind: "phone_audio_pool_state"; data: Partial<PhoneAudioPoolStatePayload> }
   | { kind: "phone_audio_command"; data: Partial<PhoneAudioCommandPayload> }
+  | { kind: "keyboard_state"; data: Partial<KeyboardStatePayload> }
+  | { kind: "keyboard_patch_change"; data: Partial<KeyboardPatchChangePayload> }
   | { kind: "push_pad_labels"; data: Partial<PushPadLabelsPayload> }
   | { kind: "text_scene"; data: Partial<TextScenePayload> & { cueId?: string } }
   | { kind: "procedural_state"; data: Partial<ProgramProceduralState> };
@@ -128,6 +139,18 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       failoverAttempts: number;
     }
   >();
+  const managedSfuCoordinator = new ManagedSFUCoordinator({
+    baseUrl: deps.config.CONDUCTOR_MANAGED_SFU_BASE_URL,
+    groupStemBaseUrl: deps.config.CONDUCTOR_GROUP_STEM_BASE_URL ?? deps.config.CONDUCTOR_MANAGED_SFU_BASE_URL,
+    voiceCodec: deps.config.CONDUCTOR_VOICE_STREAM_CODEC,
+    groupCodec: deps.config.CONDUCTOR_GROUP_STREAM_CODEC,
+    streamTtlMs: deps.config.CONDUCTOR_VOICE_STREAM_TTL_MS,
+    sessionPrefix: deps.config.CONDUCTOR_MANAGED_SFU_SESSION_PREFIX,
+    tokenSecret: deps.config.CONDUCTOR_MANAGED_SFU_TOKEN_SECRET
+  });
+  const maxConcurrentVoiceStreams = Math.max(1, Math.min(64, deps.config.CONDUCTOR_VOICE_STREAM_MAX_CONCURRENT));
+  const activeVoiceStreamsByNote = new Map<number, Map<string, VoiceStreamDescriptor>>();
+  const activeGroupStemByTarget = new Map<string, GroupStemDescriptor>();
   const pushContinuousThrottleMs = 24;
   const pushLastForwardAt = new Map<string, number>();
   const pushPendingContinuousEvents = new Map<
@@ -146,6 +169,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     fx: 0
   };
   let globalEchoProbability = 0;
+  let latestKeyboardState: KeyboardStatePayload | null = null;
   const wsApp = app as unknown as {
     get: (
       path: string,
@@ -798,6 +822,58 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         return;
       }
 
+      if (inbound.kind === "keyboard_state") {
+        const keyboardState = normalizeKeyboardStatePayload(inbound.data, latestKeyboardState);
+        latestKeyboardState = keyboardState;
+        const envelope = {
+          kind: "keyboard_state",
+          data: keyboardState,
+          sentAt: Date.now()
+        } satisfies WireEnvelope<KeyboardStatePayload>;
+        broadcastToDevices(envelope);
+        broadcastToHarness(envelope);
+        return;
+      }
+
+      if (inbound.kind === "keyboard_patch_change") {
+        const keyboardPatch = normalizeKeyboardPatchChangePayload(inbound.data, latestKeyboardState);
+        const patchSnapshot: KeyboardStatePayload["patch"] = {
+          patchId: keyboardPatch.patchId,
+          patchName: keyboardPatch.patchName,
+          bank: keyboardPatch.bank,
+          program: keyboardPatch.program,
+          updatedAt: keyboardPatch.updatedAt
+        };
+        if (latestKeyboardState) {
+          latestKeyboardState = {
+            ...latestKeyboardState,
+            patch: patchSnapshot,
+            updatedAt: keyboardPatch.updatedAt
+          };
+        } else {
+          latestKeyboardState = {
+            profileId: "minilab3",
+            profileName: "MiniLab 3",
+            page: 0,
+            pageName: "A",
+            hostLink: "degraded",
+            clockMaster: true,
+            clockBpm: 120,
+            transportRunning: false,
+            patch: patchSnapshot,
+            updatedAt: keyboardPatch.updatedAt
+          };
+        }
+        const envelope = {
+          kind: "keyboard_patch_change",
+          data: keyboardPatch,
+          sentAt: Date.now()
+        } satisfies WireEnvelope<KeyboardPatchChangePayload>;
+        broadcastToDevices(envelope);
+        broadcastToHarness(envelope);
+        return;
+      }
+
       if (inbound.kind === "push_pad_labels") {
         const labels = normalizePushPadLabelsPayload(inbound.data);
         if (!labels) {
@@ -878,6 +954,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       broadcastLightingState(lighting);
       const pool = deps.phoneAudioPool.removeDevice(hashedId);
       choirAllocator.removeDevice(hashedId);
+      clearVoiceStreamsForDevice(hashedId);
       clearPendingPushEventsForDevice(hashedId);
       publishPhonePoolState(pool);
     });
@@ -1174,6 +1251,10 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
           hashedId,
           ok: inbound.data.ok === true,
           detail: typeof inbound.data.detail === "string" ? inbound.data.detail : undefined,
+          streamStatus: toStreamLifecycleStatus(inbound.data.streamStatus),
+          streamReason: typeof inbound.data.streamReason === "string" ? inbound.data.streamReason : undefined,
+          voiceId: typeof inbound.data.voiceId === "string" ? inbound.data.voiceId : undefined,
+          trackId: typeof inbound.data.trackId === "string" ? inbound.data.trackId : undefined,
           receivedAt: typeof inbound.data.receivedAt === "number" ? inbound.data.receivedAt : Date.now()
         };
 
@@ -1396,6 +1477,14 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       sentAt: Date.now()
     } satisfies WireEnvelope);
 
+    if (latestKeyboardState) {
+      send(socket, {
+        kind: "keyboard_state",
+        data: latestKeyboardState,
+        sentAt: Date.now()
+      } satisfies WireEnvelope<KeyboardStatePayload>);
+    }
+
     // Always provide a cue envelope at connection time so clients have an
     // immediately renderable output mode/layer state.
     send(socket, {
@@ -1470,6 +1559,12 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     const pool = deps.phoneAudioPool.snapshot();
     let targets = command.targetHashedIds.filter((id) => deviceSockets.has(id));
     let renderHintsByTarget: Record<string, NonNullable<PhoneAudioCommandPayload["renderHints"]>> = {};
+    let streamByTarget: Record<string, VoiceStreamDescriptor> = {};
+    let fallbackGroup: GroupStemDescriptor | undefined;
+    const voiceStreamStarts: VoiceStreamStartPayload[] = [];
+    const voiceStreamStops: VoiceStreamStopPayload[] = [];
+    const groupStemStarts: GroupStemStartPayload[] = [];
+    const groupStemStops: GroupStemStopPayload[] = [];
 
     switch (command.kind) {
       case "note_on": {
@@ -1483,9 +1578,80 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
           }
           return acc;
         }, {});
+
+        const activeVoiceCount = [...activeVoiceStreamsByNote.values()].reduce((sum, map) => sum + map.size, 0);
+        const availableVoiceSlots = Math.max(0, maxConcurrentVoiceStreams - activeVoiceCount);
+        const voiceTargets = targets.slice(0, availableVoiceSlots);
+        const overflowTargets = targets.slice(availableVoiceSlots);
+        const noteStreamMap = activeVoiceStreamsByNote.get(note) ?? new Map<string, VoiceStreamDescriptor>();
+
+        for (const targetHashedId of voiceTargets) {
+          const descriptor = managedSfuCoordinator.buildVoiceDescriptor({
+            hashedId: targetHashedId,
+            note,
+            commandId: command.commandId
+          });
+          noteStreamMap.set(targetHashedId, descriptor);
+          streamByTarget[targetHashedId] = descriptor;
+          voiceStreamStarts.push({
+            commandId: command.commandId,
+            hashedId: targetHashedId,
+            note,
+            velocity: command.velocity,
+            renderHints: plan.renderHintsByTarget[targetHashedId],
+            stream: descriptor,
+            issuedAt: Date.now()
+          });
+        }
+        activeVoiceStreamsByNote.set(note, noteStreamMap);
+
+        if (overflowTargets.length > 0) {
+          fallbackGroup = managedSfuCoordinator.buildGroupDescriptor({
+            groupId: "phone-choir-group",
+            commandId: command.commandId
+          });
+          for (const targetHashedId of overflowTargets) {
+            activeGroupStemByTarget.set(targetHashedId, fallbackGroup);
+          }
+          groupStemStarts.push({
+            commandId: command.commandId,
+            hashedIds: overflowTargets,
+            group: fallbackGroup,
+            reason: "voice_cap",
+            issuedAt: Date.now()
+          });
+        }
         break;
       }
       case "note_off": {
+        const note = typeof command.note === "number" ? command.note : undefined;
+        if (typeof note === "number") {
+          const noteStreamMap = activeVoiceStreamsByNote.get(note);
+          if (noteStreamMap) {
+            for (const targetHashedId of targets) {
+              const descriptor = noteStreamMap.get(targetHashedId);
+              if (!descriptor) {
+                continue;
+              }
+              noteStreamMap.delete(targetHashedId);
+              voiceStreamStops.push({
+                commandId: command.commandId,
+                hashedId: targetHashedId,
+                note,
+                voiceId: descriptor.voiceId,
+                trackId: descriptor.trackId,
+                reason: "note_off",
+                issuedAt: Date.now()
+              });
+            }
+            if (noteStreamMap.size === 0) {
+              activeVoiceStreamsByNote.delete(note);
+            } else {
+              activeVoiceStreamsByNote.set(note, noteStreamMap);
+            }
+          }
+        }
+
         targets = deps.phoneAudioPool.releaseVoice(command.note, targets);
         if (typeof command.note === "number") {
           for (const [commandId, pending] of pendingVoiceAcks.entries()) {
@@ -1494,6 +1660,21 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
               pendingVoiceAcks.delete(commandId);
             }
           }
+        }
+
+        for (const targetHashedId of targets) {
+          const group = activeGroupStemByTarget.get(targetHashedId);
+          if (!group) {
+            continue;
+          }
+          activeGroupStemByTarget.delete(targetHashedId);
+          groupStemStops.push({
+            commandId: command.commandId,
+            hashedIds: [targetHashedId],
+            groupId: group.groupId,
+            reason: "manual",
+            issuedAt: Date.now()
+          });
         }
         break;
       }
@@ -1505,6 +1686,32 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         }
         pendingVoiceAcks.clear();
         targets = before;
+
+        for (const [note, noteStreamMap] of activeVoiceStreamsByNote.entries()) {
+          for (const [targetHashedId, descriptor] of noteStreamMap.entries()) {
+            voiceStreamStops.push({
+              commandId: command.commandId,
+              hashedId: targetHashedId,
+              note,
+              voiceId: descriptor.voiceId,
+              trackId: descriptor.trackId,
+              reason: "stop_all",
+              issuedAt: Date.now()
+            });
+          }
+        }
+        activeVoiceStreamsByNote.clear();
+
+        for (const [targetHashedId, descriptor] of activeGroupStemByTarget.entries()) {
+          groupStemStops.push({
+            commandId: command.commandId,
+            hashedIds: [targetHashedId],
+            groupId: descriptor.groupId,
+            reason: "show_stop",
+            issuedAt: Date.now()
+          });
+        }
+        activeGroupStemByTarget.clear();
         break;
       }
       case "sample_trigger": {
@@ -1530,12 +1737,27 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     const dispatched: PhoneAudioCommandPayload = {
       ...command,
       targetHashedIds: targets,
+      stream: streamByTarget[targets[0]] ?? command.stream,
+      streamByTarget: Object.keys(streamByTarget).length > 0 ? streamByTarget : command.streamByTarget,
+      fallbackGroup: fallbackGroup ?? command.fallbackGroup,
       renderHints: Object.values(renderHintsByTarget)[0] ?? command.renderHints,
       renderHintsByTarget: Object.keys(renderHintsByTarget).length > 0 ? renderHintsByTarget : command.renderHintsByTarget,
       issuedAt: Date.now()
     };
 
     dispatchPhoneCommandToTargets(dispatched);
+    for (const payload of voiceStreamStarts) {
+      dispatchVoiceStreamStart(payload);
+    }
+    for (const payload of groupStemStarts) {
+      dispatchGroupStemStart(payload);
+    }
+    for (const payload of voiceStreamStops) {
+      dispatchVoiceStreamStop(payload);
+    }
+    for (const payload of groupStemStops) {
+      dispatchGroupStemStop(payload);
+    }
     publishPhonePoolState(deps.phoneAudioPool.snapshot());
 
     if (dispatched.kind === "note_on" && typeof dispatched.note === "number" && dispatched.targetHashedIds.length > 0) {
@@ -1574,6 +1796,58 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     } satisfies WireEnvelope<PhoneAudioCommandPayload>);
   }
 
+  function dispatchVoiceStreamStart(payload: VoiceStreamStartPayload): void {
+    broadcastToSpecificDevices([payload.hashedId], {
+      kind: "voice_stream_start",
+      data: payload,
+      sentAt: Date.now()
+    } satisfies WireEnvelope<VoiceStreamStartPayload>);
+    broadcastToHarness({
+      kind: "voice_stream_start",
+      data: payload,
+      sentAt: Date.now()
+    } satisfies WireEnvelope<VoiceStreamStartPayload>);
+  }
+
+  function dispatchVoiceStreamStop(payload: VoiceStreamStopPayload): void {
+    broadcastToSpecificDevices([payload.hashedId], {
+      kind: "voice_stream_stop",
+      data: payload,
+      sentAt: Date.now()
+    } satisfies WireEnvelope<VoiceStreamStopPayload>);
+    broadcastToHarness({
+      kind: "voice_stream_stop",
+      data: payload,
+      sentAt: Date.now()
+    } satisfies WireEnvelope<VoiceStreamStopPayload>);
+  }
+
+  function dispatchGroupStemStart(payload: GroupStemStartPayload): void {
+    broadcastToSpecificDevices(payload.hashedIds, {
+      kind: "group_stem_start",
+      data: payload,
+      sentAt: Date.now()
+    } satisfies WireEnvelope<GroupStemStartPayload>);
+    broadcastToHarness({
+      kind: "group_stem_start",
+      data: payload,
+      sentAt: Date.now()
+    } satisfies WireEnvelope<GroupStemStartPayload>);
+  }
+
+  function dispatchGroupStemStop(payload: GroupStemStopPayload): void {
+    broadcastToSpecificDevices(payload.hashedIds, {
+      kind: "group_stem_stop",
+      data: payload,
+      sentAt: Date.now()
+    } satisfies WireEnvelope<GroupStemStopPayload>);
+    broadcastToHarness({
+      kind: "group_stem_stop",
+      data: payload,
+      sentAt: Date.now()
+    } satisfies WireEnvelope<GroupStemStopPayload>);
+  }
+
   function dispatchVoiceFailover(
     pending: {
       note: number;
@@ -1584,6 +1858,23 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     reason: string
   ): void {
     deps.phoneAudioPool.releaseVoice(pending.note, [pending.targetHashedId]);
+    const priorStreamMap = activeVoiceStreamsByNote.get(pending.note);
+    const priorDescriptor = priorStreamMap?.get(pending.targetHashedId);
+    if (priorDescriptor) {
+      priorStreamMap?.delete(pending.targetHashedId);
+      dispatchVoiceStreamStop({
+        commandId: pending.command.commandId,
+        hashedId: pending.targetHashedId,
+        note: pending.note,
+        voiceId: priorDescriptor.voiceId,
+        trackId: priorDescriptor.trackId,
+        reason: "failover",
+        issuedAt: Date.now()
+      });
+      if (priorStreamMap && priorStreamMap.size === 0) {
+        activeVoiceStreamsByNote.delete(pending.note);
+      }
+    }
     const pool = deps.phoneAudioPool.snapshot();
     const plan = choirAllocator.planFailover(
       pending.targetHashedId,
@@ -1604,10 +1895,38 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       ...pending.command,
       commandId: `${pending.command.commandId}-fo-${Date.now()}`,
       targetHashedIds,
+      stream: undefined,
+      streamByTarget: undefined,
       renderHints: plan.renderHintsByTarget[targetHashedIds[0]],
       renderHintsByTarget: plan.renderHintsByTarget,
       issuedAt: Date.now()
     };
+
+    if (targetHashedIds.length > 0) {
+      const nextTarget = targetHashedIds[0];
+      const descriptor = managedSfuCoordinator.buildVoiceDescriptor({
+        hashedId: nextTarget,
+        note: pending.note,
+        commandId: command.commandId
+      });
+      const map = activeVoiceStreamsByNote.get(pending.note) ?? new Map<string, VoiceStreamDescriptor>();
+      map.set(nextTarget, descriptor);
+      activeVoiceStreamsByNote.set(pending.note, map);
+      command.stream = descriptor;
+      command.streamByTarget = {
+        [nextTarget]: descriptor
+      };
+      dispatchVoiceStreamStart({
+        commandId: command.commandId,
+        hashedId: nextTarget,
+        note: pending.note,
+        velocity: command.velocity,
+        renderHints: command.renderHintsByTarget?.[nextTarget] ?? command.renderHints,
+        stream: descriptor,
+        issuedAt: Date.now()
+      });
+    }
+
     dispatchPhoneCommandToTargets(command);
     publishPhonePoolState(deps.phoneAudioPool.snapshot());
     broadcastToHarness({
@@ -1622,6 +1941,49 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       },
       sentAt: Date.now()
     } satisfies WireEnvelope);
+  }
+
+  function clearVoiceStreamsForDevice(hashedId: string): void {
+    const commandId = `disconnect-${Date.now()}`;
+    for (const [note, noteStreamMap] of activeVoiceStreamsByNote.entries()) {
+      const descriptor = noteStreamMap.get(hashedId);
+      if (!descriptor) {
+        continue;
+      }
+      noteStreamMap.delete(hashedId);
+      dispatchVoiceStreamStop({
+        commandId,
+        hashedId,
+        note,
+        voiceId: descriptor.voiceId,
+        trackId: descriptor.trackId,
+        reason: "expired",
+        issuedAt: Date.now()
+      });
+      if (noteStreamMap.size === 0) {
+        activeVoiceStreamsByNote.delete(note);
+      }
+    }
+
+    const group = activeGroupStemByTarget.get(hashedId);
+    if (group) {
+      activeGroupStemByTarget.delete(hashedId);
+      dispatchGroupStemStop({
+        commandId,
+        hashedIds: [hashedId],
+        groupId: group.groupId,
+        reason: "manual",
+        issuedAt: Date.now()
+      });
+    }
+
+    for (const [pendingCommandId, pending] of pendingVoiceAcks.entries()) {
+      if (pending.targetHashedId !== hashedId) {
+        continue;
+      }
+      clearTimeout(pending.timeout);
+      pendingVoiceAcks.delete(pendingCommandId);
+    }
   }
 
   function clearPendingPushEventsForDevice(hashedId: string): void {
@@ -1868,6 +2230,73 @@ const normalizeAudioFeatures = (value: Partial<AudioFeaturePayload>): AudioFeatu
   updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : Date.now()
 });
 
+const normalizeVoiceStreamCodec = (value: unknown): VoiceStreamDescriptor["codec"] => {
+  if (value === "aac" || value === "pcm" || value === "opus") {
+    return value;
+  }
+  return "opus";
+};
+
+const normalizeVoiceStreamDescriptor = (value: unknown): VoiceStreamDescriptor | undefined => {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const payload = value as Record<string, unknown>;
+  const voiceId = typeof payload.voiceId === "string" && payload.voiceId.length > 0 ? payload.voiceId : "";
+  const trackId = typeof payload.trackId === "string" && payload.trackId.length > 0 ? payload.trackId : "";
+  const sessionId = typeof payload.sessionId === "string" && payload.sessionId.length > 0 ? payload.sessionId : "";
+  if (!voiceId || !trackId || !sessionId) {
+    return undefined;
+  }
+  return {
+    voiceId,
+    trackId,
+    sessionId,
+    token: typeof payload.token === "string" ? payload.token : "",
+    codec: normalizeVoiceStreamCodec(payload.codec),
+    expiresAt: typeof payload.expiresAt === "number" ? payload.expiresAt : Date.now() + 30_000,
+    streamUrl: typeof payload.streamUrl === "string" ? payload.streamUrl : undefined,
+    fallbackGroup: typeof payload.fallbackGroup === "string" ? payload.fallbackGroup : undefined
+  };
+};
+
+const normalizeGroupStemDescriptor = (value: unknown): GroupStemDescriptor | undefined => {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const payload = value as Record<string, unknown>;
+  const groupId = typeof payload.groupId === "string" && payload.groupId.length > 0 ? payload.groupId : "";
+  const sessionId = typeof payload.sessionId === "string" && payload.sessionId.length > 0 ? payload.sessionId : "";
+  if (!groupId || !sessionId) {
+    return undefined;
+  }
+  return {
+    groupId,
+    sessionId,
+    token: typeof payload.token === "string" ? payload.token : "",
+    codec: normalizeVoiceStreamCodec(payload.codec),
+    expiresAt: typeof payload.expiresAt === "number" ? payload.expiresAt : Date.now() + 30_000,
+    streamUrl: typeof payload.streamUrl === "string" ? payload.streamUrl : undefined
+  };
+};
+
+const normalizeVoiceStreamByTarget = (value: unknown): Record<string, VoiceStreamDescriptor> | undefined => {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const normalized = Object.entries(value as Record<string, unknown>).reduce<Record<string, VoiceStreamDescriptor>>(
+    (acc, [hashedId, descriptor]) => {
+      const parsed = normalizeVoiceStreamDescriptor(descriptor);
+      if (parsed) {
+        acc[hashedId] = parsed;
+      }
+      return acc;
+    },
+    {}
+  );
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+};
+
 const normalizePhoneAudioCommand = (value: Partial<PhoneAudioCommandPayload>): PhoneAudioCommandPayload => {
   const kind = toPhoneAudioCommandKind(value.kind);
   const hints = normalizeRenderHints(value.renderHints);
@@ -1885,6 +2314,9 @@ const normalizePhoneAudioCommand = (value: Partial<PhoneAudioCommandPayload>): P
     sampleId: typeof value.sampleId === "string" ? value.sampleId : undefined,
     gain: typeof value.gain === "number" ? value.gain : undefined,
     seed: typeof value.seed === "number" ? value.seed : undefined,
+    stream: normalizeVoiceStreamDescriptor(value.stream),
+    streamByTarget: normalizeVoiceStreamByTarget(value.streamByTarget),
+    fallbackGroup: normalizeGroupStemDescriptor(value.fallbackGroup),
     renderHints: hints,
     renderHintsByTarget: hintsByTarget,
     issuedAt: typeof value.issuedAt === "number" ? value.issuedAt : Date.now()
@@ -2121,6 +2553,18 @@ const toPhoneAudioCommandKind = (value: unknown): PhoneAudioCommandPayload["kind
   return "sample_trigger";
 };
 
+const toStreamLifecycleStatus = (value: unknown): PhoneAudioAckPayload["streamStatus"] => {
+  if (
+    value === "subscribed" ||
+    value === "underrun" ||
+    value === "track_lost" ||
+    value === "fallback_group"
+  ) {
+    return value;
+  }
+  return undefined;
+};
+
 const normalizeRenderHints = (value: unknown): PhoneAudioCommandPayload["renderHints"] => {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -2211,6 +2655,117 @@ const normalizePromptResponse = (value: Partial<PromptResponsePayload>): PromptR
     respondedAt: typeof value.respondedAt === "number" && Number.isFinite(value.respondedAt)
       ? value.respondedAt
       : Date.now()
+  };
+};
+
+const normalizeKeyboardHostLink = (value: unknown): KeyboardStatePayload["hostLink"] => {
+  if (value === "online" || value === "connecting" || value === "degraded" || value === "offline") {
+    return value;
+  }
+  return "degraded";
+};
+
+const normalizeKeyboardPatchSnapshot = (
+  value: unknown,
+  fallback?: KeyboardStatePayload | null
+): KeyboardStatePayload["patch"] => {
+  const payload = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  const patchId =
+    typeof payload.patchId === "string" && payload.patchId.length > 0
+      ? payload.patchId
+      : fallback?.patch.patchId ?? "default";
+  const patchName =
+    typeof payload.patchName === "string" && payload.patchName.length > 0
+      ? payload.patchName
+      : fallback?.patch.patchName;
+  const bankRaw = typeof payload.bank === "number" ? payload.bank : fallback?.patch.bank ?? 0;
+  const programRaw = typeof payload.program === "number" ? payload.program : fallback?.patch.program ?? 0;
+  const updatedAtRaw = typeof payload.updatedAt === "number" ? payload.updatedAt : Date.now();
+
+  return {
+    patchId,
+    patchName,
+    bank: Math.max(0, Math.min(127, Math.round(bankRaw))),
+    program: Math.max(0, Math.min(127, Math.round(programRaw))),
+    updatedAt: updatedAtRaw
+  };
+};
+
+const normalizeKeyboardStatePayload = (
+  value: Partial<KeyboardStatePayload>,
+  fallback: KeyboardStatePayload | null
+): KeyboardStatePayload => {
+  const activeScene: KeyboardStatePayload["activeScene"] =
+    value.activeScene === "interstitial" ||
+    value.activeScene === "preshow" ||
+    value.activeScene === "introduction" ||
+    value.activeScene === "mainStatic" ||
+    value.activeScene === "mainDynamic" ||
+    value.activeScene === "ending"
+      ? value.activeScene
+      : undefined;
+  return {
+    profileId:
+      typeof value.profileId === "string" && value.profileId.length > 0
+        ? value.profileId
+        : fallback?.profileId ?? "minilab3",
+    profileName:
+      typeof value.profileName === "string" && value.profileName.length > 0
+        ? value.profileName
+        : fallback?.profileName ?? "MiniLab 3",
+    page:
+      typeof value.page === "number" && Number.isFinite(value.page)
+        ? Math.max(0, Math.round(value.page))
+        : fallback?.page ?? 0,
+    pageName:
+      typeof value.pageName === "string" && value.pageName.length > 0
+        ? value.pageName
+        : fallback?.pageName ?? "A",
+    hostLink:
+      typeof value.hostLink === "string"
+        ? normalizeKeyboardHostLink(value.hostLink)
+        : fallback?.hostLink ?? "degraded",
+    clockMaster: typeof value.clockMaster === "boolean" ? value.clockMaster : fallback?.clockMaster ?? true,
+    clockBpm:
+      typeof value.clockBpm === "number" && Number.isFinite(value.clockBpm)
+        ? Math.max(20, Math.min(320, value.clockBpm))
+        : fallback?.clockBpm ?? 120,
+    transportRunning:
+      typeof value.transportRunning === "boolean" ? value.transportRunning : fallback?.transportRunning ?? false,
+    patch: normalizeKeyboardPatchSnapshot(value.patch, fallback),
+    cueVersion:
+      typeof value.cueVersion === "number" && Number.isFinite(value.cueVersion)
+        ? Math.max(0, Math.round(value.cueVersion))
+        : fallback?.cueVersion,
+    activeScene: activeScene ?? fallback?.activeScene,
+    updatedAt:
+      typeof value.updatedAt === "number" && Number.isFinite(value.updatedAt)
+        ? value.updatedAt
+        : Date.now()
+  };
+};
+
+const normalizeKeyboardPatchChangePayload = (
+  value: Partial<KeyboardPatchChangePayload>,
+  fallback: KeyboardStatePayload | null
+): KeyboardPatchChangePayload => {
+  const patch = normalizeKeyboardPatchSnapshot(
+    {
+      patchId: value.patchId,
+      patchName: value.patchName,
+      bank: value.bank,
+      program: value.program,
+      updatedAt: value.updatedAt
+    },
+    fallback
+  );
+  return {
+    patchId: patch.patchId,
+    patchName: patch.patchName,
+    bank: patch.bank,
+    program: patch.program,
+    source: "operator",
+    updatedAt: patch.updatedAt
   };
 };
 

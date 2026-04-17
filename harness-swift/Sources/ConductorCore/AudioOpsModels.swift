@@ -91,7 +91,7 @@ public struct HarnessPhoneAudioCommandPayload: Codable {
     public let renderHintsByTarget: [String: RenderHints]?
     public let issuedAt: Double
 
-    public struct RenderHints: Codable {
+    public struct RenderHints: Codable, Equatable {
         public let zoneId: String?
         public let pan: Double?
         public let detuneCents: Double?
@@ -148,13 +148,277 @@ public struct HarnessPhoneAudioAckPayload: Codable {
     public let hashedId: String
     public let ok: Bool
     public let detail: String?
+    public let streamStatus: String?
+    public let streamReason: String?
+    public let voiceId: String?
+    public let trackId: String?
     public let receivedAt: Double
 
-    public init(commandId: String, hashedId: String, ok: Bool, detail: String?, receivedAt: Double) {
+    public init(
+        commandId: String,
+        hashedId: String,
+        ok: Bool,
+        detail: String?,
+        streamStatus: String? = nil,
+        streamReason: String? = nil,
+        voiceId: String? = nil,
+        trackId: String? = nil,
+        receivedAt: Double
+    ) {
         self.commandId = commandId
         self.hashedId = hashedId
         self.ok = ok
         self.detail = detail
+        self.streamStatus = streamStatus
+        self.streamReason = streamReason
+        self.voiceId = voiceId
+        self.trackId = trackId
         self.receivedAt = receivedAt
+    }
+}
+
+public struct HarnessKeyboardPatchSnapshot: Codable, Equatable {
+    public let patchId: String
+    public let patchName: String?
+    public let bank: Int
+    public let program: Int
+    public let updatedAt: Double
+
+    public init(
+        patchId: String,
+        patchName: String? = nil,
+        bank: Int,
+        program: Int,
+        updatedAt: Double
+    ) {
+        self.patchId = patchId
+        self.patchName = patchName
+        self.bank = bank
+        self.program = program
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct HarnessKeyboardStatePayload: Codable, Equatable {
+    public let profileId: String
+    public let profileName: String
+    public let page: Int
+    public let pageName: String
+    public let hostLink: String
+    public let clockMaster: Bool
+    public let clockBpm: Double
+    public let transportRunning: Bool
+    public let patch: HarnessKeyboardPatchSnapshot
+    public let cueVersion: Int?
+    public let activeScene: String?
+    public let updatedAt: Double
+
+    public init(
+        profileId: String,
+        profileName: String,
+        page: Int,
+        pageName: String,
+        hostLink: String,
+        clockMaster: Bool,
+        clockBpm: Double,
+        transportRunning: Bool,
+        patch: HarnessKeyboardPatchSnapshot,
+        cueVersion: Int? = nil,
+        activeScene: String? = nil,
+        updatedAt: Double
+    ) {
+        self.profileId = profileId
+        self.profileName = profileName
+        self.page = page
+        self.pageName = pageName
+        self.hostLink = hostLink
+        self.clockMaster = clockMaster
+        self.clockBpm = clockBpm
+        self.transportRunning = transportRunning
+        self.patch = patch
+        self.cueVersion = cueVersion
+        self.activeScene = activeScene
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct HarnessKeyboardPatchChangePayload: Codable, Equatable {
+    public let patchId: String
+    public let patchName: String?
+    public let bank: Int
+    public let program: Int
+    public let source: String
+    public let updatedAt: Double
+
+    public init(
+        patchId: String,
+        patchName: String? = nil,
+        bank: Int,
+        program: Int,
+        source: String,
+        updatedAt: Double
+    ) {
+        self.patchId = patchId
+        self.patchName = patchName
+        self.bank = bank
+        self.program = program
+        self.source = source
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct HarnessVoiceStreamDescriptor: Codable, Equatable {
+    public let voiceId: String
+    public let trackId: String
+    public let sessionId: String
+    public let token: String?
+    public let codec: String
+    public let expiresAt: Double
+    public let streamUrl: String?
+    public let fallbackGroup: String?
+
+    public init(
+        voiceId: String,
+        trackId: String,
+        sessionId: String,
+        token: String? = nil,
+        codec: String,
+        expiresAt: Double,
+        streamUrl: String? = nil,
+        fallbackGroup: String? = nil
+    ) {
+        self.voiceId = voiceId
+        self.trackId = trackId
+        self.sessionId = sessionId
+        self.token = token
+        self.codec = codec
+        self.expiresAt = expiresAt
+        self.streamUrl = streamUrl
+        self.fallbackGroup = fallbackGroup
+    }
+}
+
+public struct HarnessGroupStemDescriptor: Codable, Equatable {
+    public let groupId: String
+    public let sessionId: String
+    public let token: String?
+    public let codec: String
+    public let expiresAt: Double
+    public let streamUrl: String?
+
+    public init(
+        groupId: String,
+        sessionId: String,
+        token: String? = nil,
+        codec: String,
+        expiresAt: Double,
+        streamUrl: String? = nil
+    ) {
+        self.groupId = groupId
+        self.sessionId = sessionId
+        self.token = token
+        self.codec = codec
+        self.expiresAt = expiresAt
+        self.streamUrl = streamUrl
+    }
+}
+
+public struct HarnessVoiceStreamStartPayload: Codable, Equatable {
+    public let commandId: String
+    public let hashedId: String
+    public let note: Int?
+    public let velocity: Double?
+    public let renderHints: HarnessPhoneAudioCommandPayload.RenderHints?
+    public let stream: HarnessVoiceStreamDescriptor
+    public let issuedAt: Double
+
+    public init(
+        commandId: String,
+        hashedId: String,
+        note: Int? = nil,
+        velocity: Double? = nil,
+        renderHints: HarnessPhoneAudioCommandPayload.RenderHints? = nil,
+        stream: HarnessVoiceStreamDescriptor,
+        issuedAt: Double
+    ) {
+        self.commandId = commandId
+        self.hashedId = hashedId
+        self.note = note
+        self.velocity = velocity
+        self.renderHints = renderHints
+        self.stream = stream
+        self.issuedAt = issuedAt
+    }
+}
+
+public struct HarnessVoiceStreamStopPayload: Codable, Equatable {
+    public let commandId: String
+    public let hashedId: String
+    public let voiceId: String
+    public let trackId: String
+    public let note: Int?
+    public let reason: String?
+    public let issuedAt: Double
+
+    public init(
+        commandId: String,
+        hashedId: String,
+        voiceId: String,
+        trackId: String,
+        note: Int? = nil,
+        reason: String? = nil,
+        issuedAt: Double
+    ) {
+        self.commandId = commandId
+        self.hashedId = hashedId
+        self.voiceId = voiceId
+        self.trackId = trackId
+        self.note = note
+        self.reason = reason
+        self.issuedAt = issuedAt
+    }
+}
+
+public struct HarnessGroupStemStartPayload: Codable, Equatable {
+    public let commandId: String
+    public let hashedIds: [String]
+    public let group: HarnessGroupStemDescriptor
+    public let reason: String?
+    public let issuedAt: Double
+
+    public init(
+        commandId: String,
+        hashedIds: [String],
+        group: HarnessGroupStemDescriptor,
+        reason: String? = nil,
+        issuedAt: Double
+    ) {
+        self.commandId = commandId
+        self.hashedIds = hashedIds
+        self.group = group
+        self.reason = reason
+        self.issuedAt = issuedAt
+    }
+}
+
+public struct HarnessGroupStemStopPayload: Codable, Equatable {
+    public let commandId: String
+    public let hashedIds: [String]
+    public let groupId: String
+    public let reason: String?
+    public let issuedAt: Double
+
+    public init(
+        commandId: String,
+        hashedIds: [String],
+        groupId: String,
+        reason: String? = nil,
+        issuedAt: Double
+    ) {
+        self.commandId = commandId
+        self.hashedIds = hashedIds
+        self.groupId = groupId
+        self.reason = reason
+        self.issuedAt = issuedAt
     }
 }
