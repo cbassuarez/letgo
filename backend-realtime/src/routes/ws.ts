@@ -909,6 +909,14 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       return;
     }
 
+    const previousSocket = deviceSockets.get(hashedId);
+    if (previousSocket && previousSocket !== socket) {
+      try {
+        previousSocket.close(4002, "superseded");
+      } catch {
+        // Ignore close errors for stale sockets; the new socket is authoritative.
+      }
+    }
     deviceSockets.set(hashedId, socket);
     promptOrchestrator.upsertDevice(hashedId);
     logger.info("ws socket opened", { role: "device", hashedId });
@@ -939,12 +947,17 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     pushInitialSnapshot(socket, "device");
 
     socket.on("close", (code, reason) => {
+      const isCurrentSocket = deviceSockets.get(hashedId) === socket;
       logger.info("ws socket closed", {
         role: "device",
         hashedId,
         code,
-        reason: decodeCloseReason(reason)
+        reason: decodeCloseReason(reason),
+        current: isCurrentSocket
       });
+      if (!isCurrentSocket) {
+        return;
+      }
       deviceSockets.delete(hashedId);
       promptOrchestrator.removeDevice(hashedId);
       promptInfluenceByDevice.delete(hashedId);
@@ -960,14 +973,19 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     });
 
     socket.on("error", (error) => {
+      const isCurrentSocket = deviceSockets.get(hashedId) === socket;
       logger.warn("ws socket error", {
         role: "device",
         hashedId,
-        message: String(error)
+        message: String(error),
+        current: isCurrentSocket
       });
     });
 
     socket.on("message", async (raw: Buffer) => {
+      if (deviceSockets.get(hashedId) !== socket) {
+        return;
+      }
       const inbound = parse<DeviceInbound>(raw.toString());
       if (!inbound) {
         return;
@@ -1311,6 +1329,13 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       sentAt: Date.now()
     } satisfies WireEnvelope<SyncPacket>);
   }, 2000).unref();
+
+  setInterval(() => {
+    if (deviceSockets.size === 0 && harnessSockets.size === 0) {
+      return;
+    }
+    broadcastShowSnapshot();
+  }, 1000).unref();
 
   setInterval(() => {
     const activeParticipants = audienceField.snapshot().participantCount;

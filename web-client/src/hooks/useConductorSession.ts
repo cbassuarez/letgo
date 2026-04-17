@@ -389,10 +389,10 @@ export const computeReconnectDelayMs = (attempt: number, jitterSeed: number = 0.
 };
 
 export const linkStateFromSilence = (silenceMs: number): SessionLinkState => {
-  if (silenceMs > 30_000) {
+  if (silenceMs > 12_000) {
     return "offline";
   }
-  if (silenceMs > 20_000) {
+  if (silenceMs > 8_000) {
     return "degraded";
   }
   return "online";
@@ -443,6 +443,29 @@ export const useConductorSession = (hashedId: string): SessionState => {
   const linkStateRef = useRef<SessionLinkState>("connecting");
   const fallbackActivatedAtRef = useRef<number | null>(fallback ? Date.now() : null);
   const fallbackActiveRef = useRef<boolean>(Boolean(fallback));
+  const lastCueEnvelopeSentAtRef = useRef<number>(Date.now());
+
+  const shouldApplyCueCandidate = useCallback(
+    (nextVersion: number, nextCueId: string, envelopeSentAt: number): boolean => {
+      const currentVersion = cueRef.current?.version ?? -1;
+      if (nextVersion > currentVersion) {
+        return true;
+      }
+      if (nextVersion < currentVersion) {
+        return false;
+      }
+
+      if (envelopeSentAt > lastCueEnvelopeSentAtRef.current) {
+        return true;
+      }
+      if (envelopeSentAt < lastCueEnvelopeSentAtRef.current) {
+        return false;
+      }
+
+      return cueRef.current ? cueRef.current.cueId !== nextCueId : true;
+    },
+    []
+  );
 
   const sendWithSocket = useCallback(<T>(kind: WireEnvelope<T>["kind"], data: T): void => {
     const socket = socketRef.current;
@@ -597,6 +620,10 @@ export const useConductorSession = (hashedId: string): SessionState => {
         }
 
         const envelope = JSON.parse(event.data) as WireEnvelope;
+        const envelopeSentAt =
+          typeof envelope.sentAt === "number" && Number.isFinite(envelope.sentAt)
+            ? envelope.sentAt
+            : Date.now();
 
         if (envelope.kind === "show_snapshot") {
           const snapshot = envelope.data as Partial<ShowSnapshotPayload>;
@@ -622,16 +649,16 @@ export const useConductorSession = (hashedId: string): SessionState => {
               payload,
               cueRef.current?.version ?? 0
             );
-
-            if (cueRef.current && nextVersion < cueRef.current.version) {
+            const nextCueId =
+              typeof snapshot.cueId === "string"
+                ? snapshot.cueId
+                : `${snapshot.state}:${Math.round(snapshot.logicalTime)}:snapshot`;
+            if (!shouldApplyCueCandidate(nextVersion, nextCueId, envelopeSentAt)) {
               return;
             }
 
             const nextCue: CueCommand = {
-              cueId:
-                typeof snapshot.cueId === "string"
-                  ? snapshot.cueId
-                  : `${snapshot.state}:${Math.round(snapshot.logicalTime)}:snapshot`,
+              cueId: nextCueId,
               showState: snapshot.state,
               logicalTime: snapshot.logicalTime,
               payload,
@@ -639,6 +666,7 @@ export const useConductorSession = (hashedId: string): SessionState => {
               action: cueRef.current?.action ?? "jump"
             };
             cueRef.current = nextCue;
+            lastCueEnvelopeSentAtRef.current = envelopeSentAt;
             cueReceivedAtRef.current = Date.now();
             setCue(nextCue);
           }
@@ -654,8 +682,7 @@ export const useConductorSession = (hashedId: string): SessionState => {
               parseSceneKey((inboundCue.payload as Record<string, unknown> | undefined)?.activeSceneKey)
           });
           const nextVersion = resolveCueVersion(inboundCue.version, payload, cueRef.current?.version ?? 0);
-
-          if (cueRef.current && nextVersion < cueRef.current.version) {
+          if (!shouldApplyCueCandidate(nextVersion, inboundCue.cueId, envelopeSentAt)) {
             return;
           }
 
@@ -666,6 +693,7 @@ export const useConductorSession = (hashedId: string): SessionState => {
           };
 
           cueRef.current = nextCue;
+          lastCueEnvelopeSentAtRef.current = envelopeSentAt;
           cueReceivedAtRef.current = Date.now();
           setCue(nextCue);
           setLogicalNow(nextCue.logicalTime);
@@ -829,7 +857,7 @@ export const useConductorSession = (hashedId: string): SessionState => {
       retryDeadlineMsRef.current = null;
       socketRef.current?.close();
     };
-  }, [hashedId]);
+  }, [hashedId, shouldApplyCueCandidate]);
 
   return {
     cue,

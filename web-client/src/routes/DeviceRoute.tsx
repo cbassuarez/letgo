@@ -97,7 +97,7 @@ type OfflineReason = "engine_off" | "link_reconnecting" | "stream_hold";
 
 const STREAM_DROPOUT_GRACE_MS = 3_000;
 const STREAM_RECOVERY_FAIL_TIMEOUT_MS = 5_000;
-const LIVE_REVEAL_COUNTDOWN_SECONDS = 60;
+const LIVE_REVEAL_COUNTDOWN_SECONDS = 3;
 
 const formatCountdown = (remaining: number): string => {
   const clamped = Math.max(0, Math.floor(remaining));
@@ -312,15 +312,12 @@ export const DeviceRoute = (): JSX.Element => {
   const inferredOutputMode = defaultOutputModeForShowState(session.cue?.showState ?? null);
   const defaultDynamicEnabled = session.cue?.showState === "main";
   const inferredEngineFromAudioPath =
-    session.phoneAudioPoolState.quadRouteReady ||
     session.phoneAudioPoolState.gateArmed ||
     session.phoneAudioPoolState.gateCommitted;
   const explicitEngineRunning =
     cuePayload.engineRunning === true || cuePayload.engineRunning === "true";
-  const showStateRunning =
-    session.cue !== null && session.cue.showState !== "idle";
   const engineRunning =
-    explicitEngineRunning || inferredEngineFromAudioPath || showStateRunning;
+    explicitEngineRunning || inferredEngineFromAudioPath;
   const linkOnline = session.connected && session.linkState === "online";
   const rawOutputMode = typeof cuePayload.outputMode === "string" ? cuePayload.outputMode : inferredOutputMode;
   const normalizedOutputMode = rawOutputMode.toLowerCase();
