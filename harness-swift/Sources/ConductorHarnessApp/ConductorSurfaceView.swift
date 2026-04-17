@@ -438,6 +438,12 @@ private struct TelemetryDevicePanel: View, Equatable {
         var zoneCount: Int
         var dominantZone: String
         var unhealthyCount: Int
+        var cueLeadMs: Double
+        var cueCohortSize: Int
+        var cueCohortP95RttMs: Double
+        var activationSkewP50Ms: Double
+        var activationSkewP95Ms: Double
+        var activationMissP95Ms: Double
         var devices: [DeviceTelemetry]
     }
 
@@ -483,6 +489,22 @@ private struct TelemetryDevicePanel: View, Equatable {
                 Text("ZONES \(snapshot.zoneCount) · TOP \(snapshot.dominantZone)")
                 Spacer()
                 Text("UNHEALTHY \(snapshot.unhealthyCount)")
+            }
+            .font(ConsoleTheme.telemetryFont(size: 9))
+            .foregroundStyle(Color.white.opacity(0.58))
+
+            HStack {
+                Text("TAKE LEAD \(Int(snapshot.cueLeadMs))ms · COHORT \(snapshot.cueCohortSize)")
+                Spacer()
+                Text("RTT P95 \(Int(snapshot.cueCohortP95RttMs))ms")
+            }
+            .font(ConsoleTheme.telemetryFont(size: 9))
+            .foregroundStyle(Color.white.opacity(0.58))
+
+            HStack {
+                Text("SKEW P50 \(Int(snapshot.activationSkewP50Ms))ms · P95 \(Int(snapshot.activationSkewP95Ms))ms")
+                Spacer()
+                Text("MISS P95 \(Int(snapshot.activationMissP95Ms))ms")
             }
             .font(ConsoleTheme.telemetryFont(size: 9))
             .foregroundStyle(Color.white.opacity(0.58))
@@ -1367,6 +1389,12 @@ struct ConductorSurfaceView: View {
                         zoneCount: model.phoneAudioZoneOccupancy.count,
                         dominantZone: dominantZoneLabel,
                         unhealthyCount: unhealthyChoirDeviceCount,
+                        cueLeadMs: model.cueTimingLeadMs,
+                        cueCohortSize: model.cueTimingCohortSize,
+                        cueCohortP95RttMs: model.cueTimingCohortP95RttMs,
+                        activationSkewP50Ms: model.cueActivationSkewP50Ms,
+                        activationSkewP95Ms: model.cueActivationSkewP95Ms,
+                        activationMissP95Ms: model.cueActivationMissP95Ms,
                         devices: model.devices
                     ),
                     onPing: { model.refreshTelemetry() }

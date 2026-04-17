@@ -2,6 +2,7 @@ import {
   type AudioFeaturePayload,
   type AudioOpsStatePayload,
   type AudienceVectorPayload,
+  type CueActivationAckPayload,
   clamp01,
   type ColorIntentPayload,
   type CompositorMode,
@@ -27,6 +28,7 @@ import {
   type PromptOfferPayload,
   type PromptResponsePayload,
   stableHashToSeed,
+  type TakeTimingPolicy,
   type EchoCapsByStem,
   type EchoStem,
   type GroupStemDescriptor,
@@ -51,6 +53,10 @@ import type { WebSocket } from "ws";
 import type { AppConfig } from "../config";
 import { AudienceVectorField } from "../services/audienceVectorField";
 import type { AudioOpsStateHub } from "../services/audioOpsStateHub";
+import {
+  type SyncHealthSample,
+  buildCueTimingSchedule
+} from "../services/cueTimingScheduler";
 import type { CrowdPickPulseService } from "../services/crowdPickPulse";
 import { CrowdLightingField } from "../services/crowdLightingField";
 import { IdentityService } from "../services/identityService";
@@ -98,7 +104,8 @@ type HarnessInbound =
   | { kind: "keyboard_patch_change"; data: Partial<KeyboardPatchChangePayload> }
   | { kind: "push_pad_labels"; data: Partial<PushPadLabelsPayload> }
   | { kind: "text_scene"; data: Partial<TextScenePayload> & { cueId?: string } }
-  | { kind: "procedural_state"; data: Partial<ProgramProceduralState> };
+  | { kind: "procedural_state"; data: Partial<ProgramProceduralState> }
+  | { kind: "telemetry"; data: Record<string, unknown> };
 
 type DeviceInbound =
   | { kind: "sync"; data: SyncPacket }
@@ -106,7 +113,7 @@ type DeviceInbound =
   | { kind: "participant_vector"; data: Partial<ParticipantVectorPayload> & { vector?: Partial<ParamVector> } }
   | { kind: "zone_update"; data: { name: string; x: number; y: number; z?: number } }
   | { kind: "permissions"; data: { audio?: boolean; geolocation?: boolean; motion?: boolean } }
-  | { kind: "ack"; data: { cueId: string; seenAt: number } }
+  | { kind: "ack"; data: CueActivationAckPayload }
   | { kind: "phone_audio_ack"; data: Partial<PhoneAudioAckPayload> }
   | { kind: "push_deck_event"; data: Partial<PushDeckEventPayload> }
   | { kind: "crowd_pick_vote"; data: Partial<CrowdPickVotePayload> }
@@ -509,13 +516,230 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       action: "jump"
     };
   };
-  let latestCue: CueCommand = buildSnapshotCue();
+  let latestCue: CueCommand = withCueTiming(buildSnapshotCue(), Date.now());
   let latestStreamMap: ShowStreamMap = mergeStreamMaps(
     configuredStreamMap,
     parseStreamMap((latestCue.payload ?? {}) as Record<string, unknown>)
   );
   let latestActiveScene: ShowSceneKey | null = inferActiveSceneFromCue(latestCue, latestStreamMap);
   let latestCueVersion = latestCue.version;
+  const syncHealthByDevice = new Map<string, SyncHealthSample>();
+  const activationDeltaSamplesMs: number[] = [];
+  const activationMissSamplesMs: number[] = [];
+
+  interface ScheduledCueTelemetryEntry {
+    cueId: string;
+    cueVersion: number;
+    activateAtMs: number;
+    issuedAtMs: number;
+    leadMs: number;
+    timingPolicy: string;
+    timingCohort: string;
+    cohortSize: number;
+    cohortP95RttMs: number;
+  }
+
+  const cueTimingByCueId = new Map<string, ScheduledCueTelemetryEntry>();
+
+  const parseFiniteNumber = (value: unknown): number | null => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  };
+
+  const percentile = (values: number[], q: number): number => {
+    if (values.length === 0) {
+      return 0;
+    }
+    const sorted = [...values].sort((lhs, rhs) => lhs - rhs);
+    const index = Math.max(0, Math.min(sorted.length - 1, Math.ceil((sorted.length - 1) * q)));
+    return sorted[index] ?? sorted[sorted.length - 1] ?? 0;
+  };
+
+  const resolveCueTimingFromPayload = (
+    cue: CueCommand,
+    nowMs: number
+  ): Required<Pick<CueCommand, "activateAtMs" | "issuedAtMs" | "leadMs" | "timingPolicy" | "timingCohort">> => {
+    const payload = (cue.payload ?? {}) as Record<string, unknown>;
+    const activateAtMs = parseFiniteNumber(cue.activateAtMs ?? payload.activateAtMs);
+    const issuedAtMs = parseFiniteNumber(cue.issuedAtMs ?? payload.issuedAtMs);
+    const leadMs = parseFiniteNumber(cue.leadMs ?? payload.leadMs);
+    const timingPolicyRaw = typeof cue.timingPolicy === "string" ? cue.timingPolicy : payload.timingPolicy;
+    const timingCohortRaw = typeof cue.timingCohort === "string" ? cue.timingCohort : payload.timingCohort;
+
+    if (
+      activateAtMs !== null &&
+      issuedAtMs !== null &&
+      leadMs !== null &&
+      typeof timingPolicyRaw === "string" &&
+      typeof timingCohortRaw === "string"
+    ) {
+      return {
+        activateAtMs,
+        issuedAtMs,
+        leadMs,
+        timingPolicy: timingPolicyRaw as CueCommand["timingPolicy"] & string,
+        timingCohort: timingCohortRaw as CueCommand["timingCohort"] & string
+      };
+    }
+
+    const schedule = buildCueTimingSchedule(
+      Object.fromEntries(syncHealthByDevice.entries()),
+      [...deviceSockets.keys()],
+      nowMs
+    );
+
+    return {
+      activateAtMs: schedule.timing.activateAtMs,
+      issuedAtMs: schedule.timing.issuedAtMs,
+      leadMs: schedule.timing.leadMs,
+      timingPolicy: schedule.timing.timingPolicy,
+      timingCohort: schedule.timing.timingCohort
+    };
+  };
+
+  function withCueTiming(cue: CueCommand, nowMs: number): CueCommand {
+    const payload = (cue.payload ?? {}) as Record<string, unknown>;
+    const timing = resolveCueTimingFromPayload(cue, nowMs);
+    const nextPayload: Record<string, unknown> = {
+      ...payload,
+      activateAtMs: timing.activateAtMs,
+      issuedAtMs: timing.issuedAtMs,
+      leadMs: timing.leadMs,
+      timingPolicy: timing.timingPolicy,
+      timingCohort: timing.timingCohort
+    };
+
+    return {
+      ...cue,
+      payload: nextPayload,
+      activateAtMs: timing.activateAtMs,
+      issuedAtMs: timing.issuedAtMs,
+      leadMs: timing.leadMs,
+      timingPolicy: timing.timingPolicy,
+      timingCohort: timing.timingCohort
+    };
+  }
+
+  const emitCueTimingTelemetry = (entry: ScheduledCueTelemetryEntry): void => {
+    broadcastToHarness({
+      kind: "telemetry",
+      data: {
+        kind: "cue_timing_schedule",
+        cueId: entry.cueId,
+        cueVersion: entry.cueVersion,
+        activateAtMs: entry.activateAtMs,
+        issuedAtMs: entry.issuedAtMs,
+        leadMs: entry.leadMs,
+        timingPolicy: entry.timingPolicy,
+        timingCohort: entry.timingCohort,
+        cohortSize: entry.cohortSize,
+        cohortP95RttMs: entry.cohortP95RttMs
+      },
+      sentAt: Date.now()
+    } satisfies WireEnvelope);
+  };
+
+  const rememberCueTiming = (cue: CueCommand): void => {
+    const payload = (cue.payload ?? {}) as Record<string, unknown>;
+    const activateAtMs = parseFiniteNumber(cue.activateAtMs ?? payload.activateAtMs);
+    const issuedAtMs = parseFiniteNumber(cue.issuedAtMs ?? payload.issuedAtMs);
+    const leadMs = parseFiniteNumber(cue.leadMs ?? payload.leadMs);
+    const timingPolicy = typeof cue.timingPolicy === "string" ? cue.timingPolicy : payload.timingPolicy;
+    const timingCohort = typeof cue.timingCohort === "string" ? cue.timingCohort : payload.timingCohort;
+    if (
+      activateAtMs === null ||
+      issuedAtMs === null ||
+      leadMs === null ||
+      typeof timingPolicy !== "string" ||
+      typeof timingCohort !== "string"
+    ) {
+      return;
+    }
+    const cohort = buildCueTimingSchedule(
+      Object.fromEntries(syncHealthByDevice.entries()),
+      [...deviceSockets.keys()],
+      issuedAtMs
+    );
+    const entry: ScheduledCueTelemetryEntry = {
+      cueId: cue.cueId,
+      cueVersion: cue.version,
+      activateAtMs,
+      issuedAtMs,
+      leadMs,
+      timingPolicy,
+      timingCohort,
+      cohortSize: cohort.cohortSize,
+      cohortP95RttMs: cohort.cohortP95RttMs
+    };
+    cueTimingByCueId.set(cue.cueId, entry);
+    emitCueTimingTelemetry(entry);
+  };
+
+  const emitCueActivationMetrics = (cueId: string): void => {
+    if (activationDeltaSamplesMs.length === 0) {
+      return;
+    }
+    const p50SkewMs = percentile(activationDeltaSamplesMs, 0.5);
+    const p95SkewMs = percentile(activationDeltaSamplesMs, 0.95);
+    const p95MissMs = percentile(activationMissSamplesMs, 0.95);
+    broadcastToHarness({
+      kind: "telemetry",
+      data: {
+        kind: "cue_timing_metrics",
+        cueId,
+        sampleCount: activationDeltaSamplesMs.length,
+        p50SkewMs,
+        p95SkewMs,
+        p95MissMs
+      },
+      sentAt: Date.now()
+    } satisfies WireEnvelope);
+  };
+
+  const recordCueActivationAck = (
+    source: "device" | "harness",
+    cueId: string,
+    activatedAtMsRaw: unknown,
+    activationDeltaMsRaw: unknown,
+    metadata: Record<string, unknown>
+  ): void => {
+    const timing = cueTimingByCueId.get(cueId);
+    if (!timing) {
+      return;
+    }
+    const activatedAtMs = parseFiniteNumber(activatedAtMsRaw) ?? Date.now();
+    const derivedDeltaMs = activatedAtMs - timing.activateAtMs;
+    const activationDeltaMs = parseFiniteNumber(activationDeltaMsRaw) ?? derivedDeltaMs;
+    activationDeltaSamplesMs.push(activationDeltaMs);
+    if (activationDeltaSamplesMs.length > 400) {
+      activationDeltaSamplesMs.splice(0, activationDeltaSamplesMs.length - 400);
+    }
+    activationMissSamplesMs.push(Math.max(0, activationDeltaMs));
+    if (activationMissSamplesMs.length > 400) {
+      activationMissSamplesMs.splice(0, activationMissSamplesMs.length - 400);
+    }
+
+    broadcastToHarness({
+      kind: "telemetry",
+      data: {
+        kind: "cue_activation_ack",
+        source,
+        cueId,
+        activatedAtMs,
+        activationDeltaMs,
+        ...metadata
+      },
+      sentAt: Date.now()
+    } satisfies WireEnvelope);
+
+    emitCueActivationMetrics(cueId);
+  };
 
   const syncCueMediaState = (cue: CueCommand): void => {
     const payload = (cue.payload ?? {}) as Record<string, unknown>;
@@ -528,6 +752,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       latestActiveScene = activeScene;
     }
     latestCueVersion = Math.max(latestCueVersion, cue.version);
+    rememberCueTiming(cue);
   };
 
   const buildShowSnapshotPayload = (): ShowSnapshotPayload => {
@@ -542,6 +767,21 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       latestActiveScene = activeScene;
     }
     latestCueVersion = Math.max(latestCueVersion, latestCue.version, snapshot.version);
+    const activateAtMs = parseFiniteNumber(latestCue.activateAtMs ?? cuePayload.activateAtMs);
+    const issuedAtMs = parseFiniteNumber(latestCue.issuedAtMs ?? cuePayload.issuedAtMs);
+    const leadMs = parseFiniteNumber(latestCue.leadMs ?? cuePayload.leadMs);
+    const timingPolicy =
+      typeof latestCue.timingPolicy === "string"
+        ? latestCue.timingPolicy
+        : typeof cuePayload.timingPolicy === "string"
+          ? cuePayload.timingPolicy
+          : undefined;
+    const timingCohort =
+      typeof latestCue.timingCohort === "string"
+        ? latestCue.timingCohort
+        : typeof cuePayload.timingCohort === "string"
+          ? cuePayload.timingCohort
+          : undefined;
 
     return {
       state: snapshot.state,
@@ -557,41 +797,56 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       promptPolicy: promptOrchestrator.policy(),
       cohortSalt: promptOrchestrator.currentCohortSalt(),
       sharedUniqueMix: promptOrchestrator.sharedUniqueMix(),
-      echoCapsByStem: resolveEchoCapsByScene(latestActiveScene)
+      echoCapsByStem: resolveEchoCapsByScene(latestActiveScene),
+      activateAtMs: activateAtMs ?? undefined,
+      issuedAtMs: issuedAtMs ?? undefined,
+      leadMs: leadMs ?? undefined,
+      timingPolicy:
+        typeof timingPolicy === "string"
+          ? (timingPolicy as NonNullable<ShowSnapshotPayload["timingPolicy"]>)
+          : undefined,
+      timingCohort:
+        typeof timingCohort === "string"
+          ? (timingCohort as NonNullable<ShowSnapshotPayload["timingCohort"]>)
+          : undefined
     };
   };
 
   const enrichCuePayload = (cue: CueCommand): CueCommand => {
+    const nowMs = Date.now();
+    const timedCue = withCueTiming(cue, nowMs);
+    const timedPayload = (timedCue.payload ?? {}) as Record<string, unknown>;
     const payload = (cue.payload ?? {}) as Record<string, unknown>;
     latestStreamMap = mergeStreamMaps(
       configuredStreamMap,
-      mergeStreamMaps(latestStreamMap, parseStreamMap(payload))
+      mergeStreamMaps(latestStreamMap, parseStreamMap(timedPayload))
     );
-    const activeScene = inferActiveSceneFromCue(cue, latestStreamMap) ?? latestActiveScene;
+    const activeScene = inferActiveSceneFromCue(timedCue, latestStreamMap) ?? latestActiveScene;
     if (activeScene) {
       latestActiveScene = activeScene;
     }
-    latestCueVersion = Math.max(latestCueVersion, cue.version);
-    const outputFallback = fallbackOutputForState(cue.showState);
+    latestCueVersion = Math.max(latestCueVersion, timedCue.version);
+    const outputFallback = fallbackOutputForState(timedCue.showState);
 
     const nextPayload: Record<string, unknown> = {
       ...payload,
+      ...timedPayload,
       cueVersion: latestCueVersion,
       outputMode:
-        typeof payload.outputMode === "string" && payload.outputMode.trim().length > 0
-          ? payload.outputMode
+        typeof timedPayload.outputMode === "string" && timedPayload.outputMode.trim().length > 0
+          ? timedPayload.outputMode
           : outputFallback.outputMode,
       showFixed:
-        typeof payload.showFixed === "boolean"
-          ? payload.showFixed
+        typeof timedPayload.showFixed === "boolean"
+          ? timedPayload.showFixed
           : outputFallback.showFixed,
       showDynamic:
-        typeof payload.showDynamic === "boolean"
-          ? payload.showDynamic
+        typeof timedPayload.showDynamic === "boolean"
+          ? timedPayload.showDynamic
           : outputFallback.showDynamic,
       interstitialActive:
-        typeof payload.interstitialActive === "boolean"
-          ? payload.interstitialActive
+        typeof timedPayload.interstitialActive === "boolean"
+          ? timedPayload.interstitialActive
           : outputFallback.interstitialActive,
       showStreamMap: latestStreamMap
     };
@@ -614,7 +869,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     }
 
     return {
-      ...cue,
+      ...timedCue,
       payload: nextPayload,
       version: latestCueVersion
     };
@@ -663,28 +918,32 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       }
 
       if (inbound.kind === "cue" && isCueCommand(inbound.data)) {
-        latestCue = inbound.data;
+        const scheduledCue = withCueTiming(inbound.data, Date.now());
+        latestCue = scheduledCue;
         await deps.replayService.record({
           type: "cue",
           timestamp: Date.now(),
-          logicalTime: inbound.data.logicalTime,
-          cueId: inbound.data.cueId,
+          logicalTime: scheduledCue.logicalTime,
+          cueId: scheduledCue.cueId,
           source: "harness",
-          payload: inbound.data.payload
+          payload: scheduledCue.payload
         });
-        broadcastCue(inbound.data);
+        broadcastCue(scheduledCue);
         broadcastShowSnapshot();
-        composeAndBroadcastTextScene(true, inbound.data.cueId);
+        composeAndBroadcastTextScene(true, scheduledCue.cueId);
         return;
       }
 
       if (inbound.kind === "command") {
         try {
-          const cue = deps.show.applyAction(
-            inbound.data.action,
-            Date.now(),
-            inbound.data.targetState,
-            inbound.data.payload ?? {}
+          const cue = withCueTiming(
+            deps.show.applyAction(
+              inbound.data.action,
+              Date.now(),
+              inbound.data.targetState,
+              inbound.data.payload ?? {}
+            ),
+            Date.now()
           );
           latestCue = cue;
 
@@ -897,6 +1156,28 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         };
         deps.audioOpsStateHub.setTextScene(merged);
         broadcastTextScene(merged);
+        return;
+      }
+
+      if (inbound.kind === "telemetry") {
+        await deps.replayService.record({
+          type: "telemetry",
+          timestamp: Date.now(),
+          logicalTime: deps.show.snapshot().logicalTime,
+          source: "harness",
+          payload: inbound.data
+        });
+        if (inbound.data.type === "cue_activation_ack" && typeof inbound.data.cueId === "string") {
+          recordCueActivationAck(
+            "harness",
+            inbound.data.cueId,
+            inbound.data.activatedAtMs,
+            inbound.data.activationDeltaMs,
+            {
+              cueVersion: inbound.data.cueVersion
+            }
+          );
+        }
       }
     });
   });
@@ -961,6 +1242,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       deviceSockets.delete(hashedId);
       promptOrchestrator.removeDevice(hashedId);
       promptInfluenceByDevice.delete(hashedId);
+      syncHealthByDevice.delete(hashedId);
       const aggregate = audienceField.remove(hashedId);
       broadcastAudienceVector(aggregate);
       const lighting = deps.lightingField.remove(hashedId);
@@ -994,6 +1276,11 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       if (inbound.kind === "sync" && inbound.data.kind === "pong") {
         const stats = deps.sync.evaluatePong(inbound.data, Date.now());
         choirAllocator.updateSyncHealth(hashedId, stats.rtt, stats.driftEstimate, Date.now());
+        syncHealthByDevice.set(hashedId, {
+          rttMs: stats.rtt,
+          driftMs: stats.driftEstimate,
+          lastSeenAtMs: Date.now()
+        });
         await deps.replayService.record({
           type: "sync",
           timestamp: Date.now(),
@@ -1263,6 +1550,39 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         return;
       }
 
+      if (inbound.kind === "ack") {
+        const cueId = typeof inbound.data.cueId === "string" ? inbound.data.cueId : "";
+        const seenAt = parseFiniteNumber(inbound.data.seenAt) ?? Date.now();
+        if (cueId.length > 0) {
+          recordCueActivationAck(
+            "device",
+            cueId,
+            inbound.data.activatedAtMs ?? seenAt,
+            inbound.data.activationDeltaMs,
+            {
+              hashedId
+            }
+          );
+        }
+        await deps.replayService.record({
+          type: "device_uplink",
+          timestamp: Date.now(),
+          logicalTime: deps.show.snapshot().logicalTime,
+          source: "phone",
+          payload: {
+            hashedId,
+            kind: "cue_activation_ack",
+            cueId,
+            seenAt,
+            activatedAtMs:
+              parseFiniteNumber(inbound.data.activatedAtMs) ??
+              seenAt,
+            activationDeltaMs: parseFiniteNumber(inbound.data.activationDeltaMs)
+          }
+        });
+        return;
+      }
+
       if (inbound.kind === "phone_audio_ack") {
         const ack: PhoneAudioAckPayload = {
           commandId: typeof inbound.data.commandId === "string" ? inbound.data.commandId : "",
@@ -1306,9 +1626,9 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         return;
       }
 
-      if (inbound.kind === "telemetry" || inbound.kind === "ack") {
+      if (inbound.kind === "telemetry") {
         await deps.replayService.record({
-          type: inbound.kind === "ack" ? "device_uplink" : "telemetry",
+          type: "telemetry",
           timestamp: Date.now(),
           logicalTime: deps.show.snapshot().logicalTime,
           source: "phone",

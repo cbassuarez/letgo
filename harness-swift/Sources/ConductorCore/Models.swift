@@ -84,6 +84,11 @@ public struct CueCommand: Codable, Equatable {
     public let payload: [String: String]
     public let version: Int
     public let action: CueAction
+    public let activateAtMs: TimeInterval?
+    public let issuedAtMs: TimeInterval?
+    public let leadMs: TimeInterval?
+    public let timingPolicy: String?
+    public let timingCohort: String?
 
     public init(
         cueId: String,
@@ -91,7 +96,12 @@ public struct CueCommand: Codable, Equatable {
         logicalTime: TimeInterval,
         payload: [String: String] = [:],
         version: Int = 1,
-        action: CueAction
+        action: CueAction,
+        activateAtMs: TimeInterval? = nil,
+        issuedAtMs: TimeInterval? = nil,
+        leadMs: TimeInterval? = nil,
+        timingPolicy: String? = nil,
+        timingCohort: String? = nil
     ) {
         self.cueId = cueId
         self.showState = showState
@@ -99,6 +109,11 @@ public struct CueCommand: Codable, Equatable {
         self.payload = payload
         self.version = version
         self.action = action
+        self.activateAtMs = activateAtMs
+        self.issuedAtMs = issuedAtMs
+        self.leadMs = leadMs
+        self.timingPolicy = timingPolicy
+        self.timingCohort = timingCohort
     }
 }
 

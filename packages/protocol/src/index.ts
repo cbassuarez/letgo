@@ -14,6 +14,17 @@ export type CueAction = "start" | "hold" | "jump" | "abort" | "recover";
 
 export type Role = "audience" | "performer" | "observer" | "muted";
 
+export type TakeTimingPolicy = "scheduled_window_v1";
+export type TakeTimingCohort = "venue";
+
+export interface CueTimingContract {
+  activateAtMs?: number;
+  issuedAtMs?: number;
+  leadMs?: number;
+  timingPolicy?: TakeTimingPolicy;
+  timingCohort?: TakeTimingCohort;
+}
+
 export interface CueCommand {
   cueId: string;
   showState: ShowState;
@@ -21,6 +32,11 @@ export interface CueCommand {
   payload: Record<string, unknown>;
   version: number;
   action: CueAction;
+  activateAtMs?: number;
+  issuedAtMs?: number;
+  leadMs?: number;
+  timingPolicy?: TakeTimingPolicy;
+  timingCohort?: TakeTimingCohort;
 }
 
 export type ShowSceneKey =
@@ -74,6 +90,19 @@ export interface ShowSnapshotPayload {
   cohortSalt?: string;
   sharedUniqueMix?: SharedUniqueMixPayload;
   echoCapsByStem?: EchoCapsByStem;
+  activateAtMs?: number;
+  issuedAtMs?: number;
+  leadMs?: number;
+  timingPolicy?: TakeTimingPolicy;
+  timingCohort?: TakeTimingCohort;
+}
+
+export interface CueActivationAckPayload {
+  cueId: string;
+  seenAt: number;
+  activatedAtMs?: number;
+  activationDeltaMs?: number;
+  source?: "device" | "harness";
 }
 
 export interface SyncPacket {

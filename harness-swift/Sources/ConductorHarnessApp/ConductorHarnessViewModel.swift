@@ -462,6 +462,16 @@ private struct TimelineStepPlan {
     let completionState: ShowState
 }
 
+private struct CueActivationTelemetryPayload: Codable {
+    let type: String
+    let cueId: String
+    let cueVersion: Int
+    let activatedAtMs: TimeInterval
+    let activationDeltaMs: TimeInterval
+    let source: String
+    let prewarmMiss: Bool
+}
+
 @MainActor
 final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     @Published var state: ShowState = .idle
@@ -568,6 +578,12 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     @Published private(set) var phoneAudioZoneOccupancy: [String: Int] = [:]
     @Published private(set) var phoneAudioDeviceHealth: [String: HarnessPhoneAudioPoolStatePayload.DeviceHealth] = [:]
     @Published private(set) var phoneAudioFailoverCount: Int = 0
+    @Published private(set) var cueTimingLeadMs: Double = 0
+    @Published private(set) var cueTimingCohortSize: Int = 0
+    @Published private(set) var cueTimingCohortP95RttMs: Double = 0
+    @Published private(set) var cueActivationSkewP50Ms: Double = 0
+    @Published private(set) var cueActivationSkewP95Ms: Double = 0
+    @Published private(set) var cueActivationMissP95Ms: Double = 0
     @Published var phoneAudioTargetMode: PhoneAudioTargetMode = .rotating
     @Published var phoneAudioSingleTargetID: String = ""
     @Published var phoneAudioSubsetTargetIDs: Set<String> = []
@@ -659,6 +675,14 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private var mediaDurationTaskCache: [String: Task<TimeInterval?, Never>] = [:]
     private var showFixedCounter = 0
     private var sequenceWorkItems: [DispatchWorkItem] = []
+    private var scheduledCueTimer: DispatchWorkItem?
+    private var pendingScheduledCue: CueCommand?
+    private var pendingScheduledCuePrewarmReady = false
+    private var pendingScheduledCueDeadlineMs: TimeInterval?
+    private var pendingScheduledCueSentAtMs: TimeInterval = 0
+    private var latestRemoteCueVersion: Int = -1
+    private var latestRemoteCueIssuedAtMs: TimeInterval = 0
+    private var latestRemoteCueSentAtMs: TimeInterval = 0
     private let hlsStreamConfig = HLSStreamConfig.fromEnvironment()
     private let localMediaPreviewEnabled: Bool = {
         let env = ProcessInfo.processInfo.environment["CONDUCTOR_LOCAL_MEDIA_PREVIEW"]?
@@ -1173,6 +1197,8 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             work.cancel()
         }
         pushQuantizedPadWorkItems.removeAll()
+        scheduledCueTimer?.cancel()
+        scheduledCueTimer = nil
         pushActiveChoirPadNotes.removeAll()
         quadAudioEngine.stop()
         websocket.stop()
@@ -1792,19 +1818,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             latestCue = cue
             state = cue.showState
             publishKeyboardState()
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                guard self.latestCue?.cueId == cue.cueId else { return }
-                self.updatePreview(for: cue, outputProfile: outputProfile)
-                if outputProfile.mode == .static, outputProfile.showFixed, !outputProfile.loopsIndefinitely {
-                    let fallbackState = staticAutoReturnTarget ?? cue.showState
-                    self.scheduleStaticAutoReturn(
-                        for: cue,
-                        targetState: fallbackState,
-                        outputProfile: outputProfile
-                    )
-                }
-            }
+            previewStatus = "Cue dispatched — awaiting scheduled activation"
 
             Task {
                 do {
@@ -7501,12 +7515,312 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         }
     }
 
+    private func parseDouble(_ value: Any?) -> TimeInterval? {
+        if let value = value as? Double {
+            return value
+        }
+        if let value = value as? Int {
+            return Double(value)
+        }
+        if let value = value as? NSNumber {
+            return value.doubleValue
+        }
+        if let value = value as? String, let parsed = Double(value) {
+            return parsed
+        }
+        return nil
+    }
+
+    private func parseInt(_ value: Any?) -> Int? {
+        if let value = value as? Int {
+            return value
+        }
+        if let value = value as? Double {
+            return Int(value)
+        }
+        if let value = value as? NSNumber {
+            return value.intValue
+        }
+        if let value = value as? String, let parsed = Int(value) {
+            return parsed
+        }
+        return nil
+    }
+
+    private func stringifyPayloadValue(_ value: Any) -> String {
+        if let value = value as? String {
+            return value
+        }
+        if let value = value as? Bool {
+            return value ? "true" : "false"
+        }
+        if let value = value as? NSNumber {
+            return value.stringValue
+        }
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(withJSONObject: value, options: []),
+           let json = String(data: data, encoding: .utf8) {
+            return json
+        }
+        return String(describing: value)
+    }
+
+    private func cueIssuedAtMs(_ cue: CueCommand, sentAtMs: TimeInterval) -> TimeInterval {
+        if let issuedAtMs = cue.issuedAtMs {
+            return issuedAtMs
+        }
+        if let payloadIssuedAt = cue.payload["issuedAtMs"], let parsed = Double(payloadIssuedAt) {
+            return parsed
+        }
+        return sentAtMs
+    }
+
+    private func cueActivateAtMs(_ cue: CueCommand) -> TimeInterval? {
+        if let activateAtMs = cue.activateAtMs {
+            return activateAtMs
+        }
+        if let payloadActivateAt = cue.payload["activateAtMs"], let parsed = Double(payloadActivateAt) {
+            return parsed
+        }
+        return nil
+    }
+
+    private func cueTimingLeadMs(_ cue: CueCommand) -> TimeInterval? {
+        if let leadMs = cue.leadMs {
+            return leadMs
+        }
+        if let payloadLeadMs = cue.payload["leadMs"], let parsed = Double(payloadLeadMs) {
+            return parsed
+        }
+        return nil
+    }
+
+    private func shouldAcceptRemoteCue(_ cue: CueCommand, sentAtMs: TimeInterval) -> Bool {
+        if cue.version > latestRemoteCueVersion {
+            return true
+        }
+        if cue.version < latestRemoteCueVersion {
+            return false
+        }
+        let issuedAtMs = cueIssuedAtMs(cue, sentAtMs: sentAtMs)
+        if issuedAtMs > latestRemoteCueIssuedAtMs {
+            return true
+        }
+        if issuedAtMs < latestRemoteCueIssuedAtMs {
+            return false
+        }
+        if sentAtMs > latestRemoteCueSentAtMs {
+            return true
+        }
+        if sentAtMs < latestRemoteCueSentAtMs {
+            return false
+        }
+        return latestCue?.cueId != cue.cueId
+    }
+
+    private func cancelScheduledCueActivation() {
+        scheduledCueTimer?.cancel()
+        scheduledCueTimer = nil
+    }
+
+    private func sendCueActivationAckTelemetry(
+        cue: CueCommand,
+        activatedAtMs: TimeInterval,
+        prewarmMiss: Bool
+    ) {
+        let targetAtMs = cueActivateAtMs(cue) ?? activatedAtMs
+        let payload = CueActivationTelemetryPayload(
+            type: "cue_activation_ack",
+            cueId: cue.cueId,
+            cueVersion: cue.version,
+            activatedAtMs: activatedAtMs,
+            activationDeltaMs: activatedAtMs - targetAtMs,
+            source: "harness",
+            prewarmMiss: prewarmMiss
+        )
+
+        Task {
+            do {
+                try await websocket.sendEnvelope(kind: "telemetry", data: payload)
+            } catch {
+                await MainActor.run {
+                    self.lastLinkError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func commitRemoteCue(_ cue: CueCommand, sentAtMs: TimeInterval, prewarmMiss: Bool) {
+        cancelScheduledCueActivation()
+        pendingScheduledCue = nil
+        pendingScheduledCuePrewarmReady = false
+        pendingScheduledCueDeadlineMs = nil
+        pendingScheduledCueSentAtMs = 0
+
+        latestCue = cue
+        state = cue.showState
+        publishKeyboardState()
+
+        let laneOverride = cue.payload["showFixedLaneId"]
+        let outputProfile = resolveOutputProfile(for: cue.showState, overrideStaticLaneId: laneOverride)
+        updatePreview(for: cue, outputProfile: outputProfile)
+        if outputProfile.mode == .static, outputProfile.showFixed, !outputProfile.loopsIndefinitely {
+            let fallbackState = outputProfile.showFixedLaneId
+                .flatMap { timelineStepPlan(for: $0)?.completionState }
+                ?? cue.showState
+            scheduleStaticAutoReturn(
+                for: cue,
+                targetState: fallbackState,
+                outputProfile: outputProfile
+            )
+        }
+
+        latestRemoteCueVersion = cue.version
+        latestRemoteCueIssuedAtMs = cueIssuedAtMs(cue, sentAtMs: sentAtMs)
+        latestRemoteCueSentAtMs = sentAtMs
+
+        sendCueActivationAckTelemetry(
+            cue: cue,
+            activatedAtMs: ConductorHarnessViewModel.nowMilliseconds(),
+            prewarmMiss: prewarmMiss
+        )
+    }
+
+    private func stageRemoteCue(_ cue: CueCommand, sentAtMs: TimeInterval, activateAtMs: TimeInterval) {
+        cancelScheduledCueActivation()
+        pendingScheduledCue = cue
+        pendingScheduledCuePrewarmReady = false
+        pendingScheduledCueDeadlineMs = activateAtMs
+        pendingScheduledCueSentAtMs = sentAtMs
+        latestRemoteCueVersion = cue.version
+        latestRemoteCueIssuedAtMs = cueIssuedAtMs(cue, sentAtMs: sentAtMs)
+        latestRemoteCueSentAtMs = sentAtMs
+
+        let leadMs = cueTimingLeadMs(cue) ?? max(0, activateAtMs - ConductorHarnessViewModel.nowMilliseconds())
+        previewStatus = "Cue staged · TAKE in \(Int(max(0, leadMs)))ms"
+
+        let outputProfile = resolveOutputProfile(for: cue.showState, overrideStaticLaneId: cue.payload["showFixedLaneId"])
+        if let mediaURL = previewMediaURL(for: cue, outputProfile: outputProfile) {
+            Task { [weak self] in
+                guard let self else { return }
+                _ = await self.cachedMediaDuration(for: mediaURL)
+                await MainActor.run {
+                    guard self.pendingScheduledCue?.cueId == cue.cueId else { return }
+                    self.pendingScheduledCuePrewarmReady = true
+                    if let deadline = self.pendingScheduledCueDeadlineMs,
+                       ConductorHarnessViewModel.nowMilliseconds() >= deadline {
+                        self.commitRemoteCue(cue, sentAtMs: sentAtMs, prewarmMiss: true)
+                    }
+                }
+            }
+        } else {
+            pendingScheduledCuePrewarmReady = true
+        }
+
+        let delayMs = max(0, activateAtMs - ConductorHarnessViewModel.nowMilliseconds())
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard let pending = self.pendingScheduledCue, pending.cueId == cue.cueId else { return }
+            if self.pendingScheduledCuePrewarmReady {
+                self.commitRemoteCue(pending, sentAtMs: sentAtMs, prewarmMiss: false)
+                return
+            }
+            self.previewStatus = "Sync hold · prewarm missed deadline"
+            self.sendCueActivationAckTelemetry(
+                cue: pending,
+                activatedAtMs: ConductorHarnessViewModel.nowMilliseconds(),
+                prewarmMiss: true
+            )
+        }
+        scheduledCueTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + (delayMs / 1_000), execute: work)
+    }
+
+    private func applyRemoteCue(_ cue: CueCommand, sentAtMs: TimeInterval) {
+        guard shouldAcceptRemoteCue(cue, sentAtMs: sentAtMs) else {
+            return
+        }
+        if let activateAtMs = cueActivateAtMs(cue),
+           activateAtMs > ConductorHarnessViewModel.nowMilliseconds() + 8 {
+            stageRemoteCue(cue, sentAtMs: sentAtMs, activateAtMs: activateAtMs)
+            return
+        }
+        commitRemoteCue(cue, sentAtMs: sentAtMs, prewarmMiss: false)
+    }
+
+    private func decodeCueCommand(_ payload: Any) -> CueCommand? {
+        guard let rawCue = payload as? [String: Any],
+              let cueId = rawCue["cueId"] as? String,
+              let rawState = rawCue["showState"] as? String,
+              let showState = ShowState(rawValue: rawState),
+              let logicalTime = parseDouble(rawCue["logicalTime"])
+        else {
+            return nil
+        }
+
+        var cuePayload: [String: String] = [:]
+        if let rawPayload = rawCue["payload"] as? [String: Any] {
+            for (key, value) in rawPayload {
+                cuePayload[key] = stringifyPayloadValue(value)
+            }
+        }
+        let version = parseInt(rawCue["version"]) ?? 0
+        let action = CueAction(rawValue: (rawCue["action"] as? String) ?? "") ?? .jump
+        let activateAtMs = parseDouble(rawCue["activateAtMs"]) ?? parseDouble(cuePayload["activateAtMs"])
+        let issuedAtMs = parseDouble(rawCue["issuedAtMs"]) ?? parseDouble(cuePayload["issuedAtMs"])
+        let leadMs = parseDouble(rawCue["leadMs"]) ?? parseDouble(cuePayload["leadMs"])
+        let timingPolicy = (rawCue["timingPolicy"] as? String) ?? cuePayload["timingPolicy"]
+        let timingCohort = (rawCue["timingCohort"] as? String) ?? cuePayload["timingCohort"]
+
+        return CueCommand(
+            cueId: cueId,
+            showState: showState,
+            logicalTime: logicalTime,
+            payload: cuePayload,
+            version: version,
+            action: action,
+            activateAtMs: activateAtMs,
+            issuedAtMs: issuedAtMs,
+            leadMs: leadMs,
+            timingPolicy: timingPolicy,
+            timingCohort: timingCohort
+        )
+    }
+
     private func handleBackendMessage(_ text: String) {
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let kind = json["kind"] as? String
         else {
             return
+        }
+        let sentAtMs = parseDouble(json["sentAt"]) ?? ConductorHarnessViewModel.nowMilliseconds()
+
+        if kind == "cue",
+           let payload = json["data"],
+           let cue = decodeCueCommand(payload) {
+            applyRemoteCue(cue, sentAtMs: sentAtMs)
+            return
+        }
+
+        if kind == "telemetry",
+           let payload = json["data"] as? [String: Any],
+           let telemetryKind = payload["kind"] as? String {
+            if telemetryKind == "cue_timing_schedule" {
+                cueTimingLeadMs = parseDouble(payload["leadMs"]) ?? cueTimingLeadMs
+                cueTimingCohortSize = parseInt(payload["cohortSize"]) ?? cueTimingCohortSize
+                cueTimingCohortP95RttMs = parseDouble(payload["cohortP95RttMs"]) ?? cueTimingCohortP95RttMs
+                return
+            }
+            if telemetryKind == "cue_timing_metrics" {
+                cueActivationSkewP50Ms = parseDouble(payload["p50SkewMs"]) ?? cueActivationSkewP50Ms
+                cueActivationSkewP95Ms = parseDouble(payload["p95SkewMs"]) ?? cueActivationSkewP95Ms
+                cueActivationMissP95Ms = parseDouble(payload["p95MissMs"]) ?? cueActivationMissP95Ms
+                return
+            }
+            if telemetryKind == "cue_activation_ack" {
+                return
+            }
         }
 
         if kind == "error",

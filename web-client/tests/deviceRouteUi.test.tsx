@@ -274,6 +274,7 @@ const goNoGoValueFor = (label: string): string => {
 
 describe("DeviceRoute minimal live UI", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     sessionState = baseSession();
     fixedLayerShouldError = false;
     permissionState = {
@@ -606,5 +607,28 @@ describe("DeviceRoute minimal live UI", () => {
       expect(screen.queryByTestId("live-permission-overlay")).toBeNull();
     });
     expect(screen.getByTestId("live-controls-ribbon")).toBeTruthy();
+  });
+
+  it("bypasses permission modal when cached required permissions are still valid", async () => {
+    const now = Date.now();
+    window.localStorage.setItem(
+      `conductor.permission-grant.v1:${validHash}`,
+      JSON.stringify({
+        grantedPermissions: {
+          audio: true,
+          motion: true,
+          geolocation: false
+        },
+        grantedAt: now - 10_000,
+        expiresAt: now + 1_000_000
+      })
+    );
+
+    renderLive();
+
+    expect(screen.queryByTestId("live-permission-overlay")).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByTestId("live-controls-ribbon")).toBeTruthy();
+    });
   });
 });

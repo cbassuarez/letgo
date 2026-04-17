@@ -1,6 +1,7 @@
 import {
   clamp01,
   type ColorInteractionPolicy,
+  type DevicePermissions,
   type PromptOfferPayload,
   deterministicPick,
   type Role,
@@ -21,6 +22,11 @@ import { useDeviceTextVariance } from "../hooks/useDeviceTextVariance";
 import { useParticipantVector } from "../hooks/useParticipantVector";
 import { usePhoneVoiceEngine } from "../hooks/usePhoneVoiceEngine";
 import { isValidHashedId } from "../lib/identity";
+import {
+  clearPermissionGrantCache,
+  readPermissionGrantCache,
+  writePermissionGrantCache
+} from "../lib/permissionGrantCache";
 import { BACKEND_HEALTH_URL } from "../lib/wsClient";
 
 const scriptBank: ScriptCandidate[] = [
@@ -94,6 +100,12 @@ const defaultOutputModeForShowState = (showState: ShowState | null): "off" | "st
 };
 
 type OfflineReason = "engine_off" | "link_reconnecting" | "stream_hold";
+
+const emptyPermissions: DevicePermissions = {
+  audio: false,
+  geolocation: false,
+  motion: false
+};
 
 const STREAM_DROPOUT_GRACE_MS = 3_000;
 const STREAM_RECOVERY_FAIL_TIMEOUT_MS = 5_000;
@@ -231,17 +243,19 @@ const isColorPolicyActive = (
 
 export const DeviceRoute = (): JSX.Element => {
   const { hashedId = "" } = useParams();
+  const cachedPermissionEntry = useMemo(
+    () => readPermissionGrantCache(hashedId),
+    [hashedId]
+  );
+  const cachedPermissions = cachedPermissionEntry?.grantedPermissions ?? emptyPermissions;
+  const cachedRequiredReady = cachedPermissions.audio && cachedPermissions.motion;
   const capabilitiesSupported =
     typeof window !== "undefined" &&
     "WebSocket" in window &&
     "DeviceMotionEvent" in window &&
     "DeviceOrientationEvent" in window;
-  const [permissionsDone, setPermissionsDone] = useState(false);
-  const [permissions, setPermissions] = useState({
-    audio: false,
-    geolocation: false,
-    motion: false
-  });
+  const [permissionsDone, setPermissionsDone] = useState(cachedRequiredReady);
+  const [permissions, setPermissions] = useState(cachedPermissions);
   const [compositorMode, setCompositorMode] = useState<CompositorMode>("fallback");
   const [backendHealth, setBackendHealth] = useState<{
     ok: boolean;
@@ -274,6 +288,55 @@ export const DeviceRoute = (): JSX.Element => {
   const holdPromptStartRef = useRef<number | null>(null);
   const lastPromptIdRef = useRef<string>("");
 
+  const persistPermissionCache = useCallback(
+    (nextPermissions: DevicePermissions): void => {
+      if (nextPermissions.audio && nextPermissions.motion) {
+        writePermissionGrantCache(hashedId, nextPermissions);
+        return;
+      }
+      clearPermissionGrantCache(hashedId);
+    },
+    [hashedId]
+  );
+
+  const updatePermissionsWithCache = useCallback(
+    (updater: (current: DevicePermissions) => DevicePermissions): void => {
+      setPermissions((current) => {
+        const next = updater(current);
+        persistPermissionCache(next);
+        return next;
+      });
+    },
+    [persistPermissionCache]
+  );
+
+  const invalidateRequiredPermissions = useCallback(
+    (capability: "audio" | "motion"): void => {
+      permissionsSentRef.current = false;
+      zoneSentRef.current = false;
+      updatePermissionsWithCache((current) =>
+        capability === "audio"
+          ? {
+              ...current,
+              audio: false
+            }
+          : {
+              ...current,
+              motion: false
+            }
+      );
+      setPermissionsDone(false);
+    },
+    [updatePermissionsWithCache]
+  );
+
+  useEffect(() => {
+    setPermissions(cachedPermissions);
+    setPermissionsDone(cachedRequiredReady);
+    permissionsSentRef.current = false;
+    zoneSentRef.current = false;
+  }, [cachedPermissions, cachedRequiredReady]);
+
   const session = useConductorSession(hashedId);
   const {
     sendCrowdPickVote,
@@ -299,7 +362,12 @@ export const DeviceRoute = (): JSX.Element => {
   } = usePhoneVoiceEngine({
     enabled: permissionsDone && session.phoneAudioPoolState.gateCommitted,
     hashedId,
-    onAck: sendPhoneAudioAck
+    onAck: sendPhoneAudioAck,
+    onRequiredCapabilityFailure: (capability) => {
+      if (capability === "audio" || capability === "motion") {
+        invalidateRequiredPermissions(capability);
+      }
+    }
   });
   const autoZone = useMemo(() => buildAutoZone(hashedId), [hashedId]);
   const [liveZone, setLiveZone] = useState(autoZone);
@@ -506,8 +574,14 @@ export const DeviceRoute = (): JSX.Element => {
         setLiveZone(buildGeoZone(hashedId, position.coords.latitude, position.coords.longitude));
         zoneSentRef.current = false;
       },
-      () => {
-        // Keep deterministic fallback zone when geolocation is unavailable.
+      (error) => {
+        if (error.code === error.PERMISSION_DENIED) {
+          updatePermissionsWithCache((current) => ({
+            ...current,
+            geolocation: false
+          }));
+          zoneSentRef.current = false;
+        }
       },
       {
         enableHighAccuracy: false,
@@ -520,7 +594,96 @@ export const DeviceRoute = (): JSX.Element => {
       active = false;
       navigator.geolocation.clearWatch(watchID);
     };
-  }, [hashedId, permissions.geolocation, permissionsDone]);
+  }, [hashedId, permissions.geolocation, permissionsDone, updatePermissionsWithCache]);
+
+  useEffect(() => {
+    if (!permissionsDone || !permissions.geolocation) {
+      return;
+    }
+    if (!("permissions" in navigator) || typeof navigator.permissions.query !== "function") {
+      return;
+    }
+
+    let active = true;
+    let statusRef: PermissionStatus | null = null;
+
+    const handleStatus = (status: PermissionStatus): void => {
+      if (!active) {
+        return;
+      }
+      if (status.state === "denied") {
+        updatePermissionsWithCache((current) => ({
+          ...current,
+          geolocation: false
+        }));
+      }
+    };
+
+    void navigator.permissions
+      .query({ name: "geolocation" as PermissionName })
+      .then((status) => {
+        if (!active) {
+          return;
+        }
+        statusRef = status;
+        handleStatus(status);
+        status.onchange = () => handleStatus(status);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      active = false;
+      if (statusRef) {
+        statusRef.onchange = null;
+      }
+    };
+  }, [permissions.geolocation, permissionsDone, updatePermissionsWithCache]);
+
+  useEffect(() => {
+    if (!permissionsDone) {
+      return;
+    }
+    if (!("permissions" in navigator) || typeof navigator.permissions.query !== "function") {
+      return;
+    }
+
+    let active = true;
+    const statuses: PermissionStatus[] = [];
+
+    const handleStatus = (status: PermissionStatus, capability: "audio" | "motion"): void => {
+      if (!active) {
+        return;
+      }
+      if (status.state === "denied") {
+        invalidateRequiredPermissions(capability);
+      }
+    };
+
+    const watchPermission = (name: PermissionName, capability: "audio" | "motion"): void => {
+      void navigator.permissions
+        .query({ name })
+        .then((status) => {
+          if (!active) {
+            return;
+          }
+          statuses.push(status);
+          handleStatus(status, capability);
+          status.onchange = () => handleStatus(status, capability);
+        })
+        .catch(() => undefined);
+    };
+
+    watchPermission("microphone" as PermissionName, "audio");
+    watchPermission("accelerometer" as PermissionName, "motion");
+    watchPermission("gyroscope" as PermissionName, "motion");
+
+    return () => {
+      active = false;
+      for (const status of statuses) {
+        status.onchange = null;
+      }
+    };
+  }, [invalidateRequiredPermissions, permissionsDone]);
 
   useEffect(() => {
     if (!permissionsDone || !session.connected || zoneSentRef.current) {
@@ -992,6 +1155,7 @@ export const DeviceRoute = (): JSX.Element => {
     >
       <FixedVideoLayer
         cue={session.cue}
+        pendingCue={session.pendingCue}
         logicalNow={session.logicalNow}
         enabled={fixedLayerEnabled}
         forcedSource={showRecoveryInterstitial ? interstitialRecoverySource : null}
@@ -1379,6 +1543,7 @@ export const DeviceRoute = (): JSX.Element => {
           <PermissionGate
             hashedId={hashedId}
             onDone={(granted) => {
+              writePermissionGrantCache(hashedId, granted);
               permissionsSentRef.current = false;
               zoneSentRef.current = false;
               setPermissions(granted);

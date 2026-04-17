@@ -13,6 +13,7 @@ interface UsePhoneVoiceEngineInput {
   enabled: boolean;
   hashedId: string;
   onAck: (payload: PhoneAudioAckPayload) => void;
+  onRequiredCapabilityFailure?: (capability: "audio" | "motion", detail?: string) => void;
 }
 
 type VoiceEntry = {
@@ -30,7 +31,28 @@ const isLocalSynthFallbackEnabled = (): boolean => {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 };
 
-export const usePhoneVoiceEngine = ({ enabled, hashedId, onAck }: UsePhoneVoiceEngineInput) => {
+const classifyAudioCapabilityFailure = (error: unknown): string | null => {
+  const name =
+    error instanceof Error || (typeof DOMException !== "undefined" && error instanceof DOMException)
+      ? error.name.toLowerCase()
+      : "";
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+
+  if (name.includes("notallowed") || name.includes("security")) {
+    return name || "permission_denied";
+  }
+  if (message.includes("permission") || message.includes("denied") || message.includes("not allowed")) {
+    return "permission_denied";
+  }
+  return null;
+};
+
+export const usePhoneVoiceEngine = ({
+  enabled,
+  hashedId,
+  onAck,
+  onRequiredCapabilityFailure
+}: UsePhoneVoiceEngineInput) => {
   const localSynthFallbackEnabledRef = useRef<boolean>(isLocalSynthFallbackEnabled());
   const contextRef = useRef<AudioContext | null>(null);
   const noteVoicesRef = useRef<Map<number, { oscillator: OscillatorNode; gain: GainNode; pan: StereoPannerNode }>>(new Map());
@@ -41,6 +63,17 @@ export const usePhoneVoiceEngine = ({ enabled, hashedId, onAck }: UsePhoneVoiceE
   const voiceIdByTrackIdRef = useRef<Map<string, string>>(new Map());
   const voiceIdByNoteRef = useRef<Map<number, string>>(new Map());
   const activeGroupStreamsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+
+  const reportAudioCapabilityFailure = useCallback(
+    (error: unknown, fallbackDetail: string): void => {
+      const reason = classifyAudioCapabilityFailure(error);
+      if (!reason) {
+        return;
+      }
+      onRequiredCapabilityFailure?.("audio", reason || fallbackDetail);
+    },
+    [onRequiredCapabilityFailure]
+  );
 
   useEffect(() => {
     return () => {
@@ -71,10 +104,15 @@ export const usePhoneVoiceEngine = ({ enabled, hashedId, onAck }: UsePhoneVoiceE
       contextRef.current = new AudioContext();
     }
     if (contextRef.current.state !== "running") {
-      await contextRef.current.resume();
+      try {
+        await contextRef.current.resume();
+      } catch (error) {
+        reportAudioCapabilityFailure(error, "audio_context_resume_failed");
+        throw error;
+      }
     }
     return contextRef.current;
-  }, []);
+  }, [reportAudioCapabilityFailure]);
 
   const pickRenderHints = useCallback(
     (command: PhoneAudioCommandPayload) => {
@@ -275,6 +313,7 @@ export const usePhoneVoiceEngine = ({ enabled, hashedId, onAck }: UsePhoneVoiceE
         });
         return "started";
       } catch (error) {
+        reportAudioCapabilityFailure(error, "stream_play_failed");
         onAck({
           commandId,
           hashedId,
@@ -289,7 +328,7 @@ export const usePhoneVoiceEngine = ({ enabled, hashedId, onAck }: UsePhoneVoiceE
         return "failed";
       }
     },
-    [hashedId, onAck]
+    [hashedId, onAck, reportAudioCapabilityFailure]
   );
 
   const stopVoiceStream = useCallback(
@@ -382,6 +421,7 @@ export const usePhoneVoiceEngine = ({ enabled, hashedId, onAck }: UsePhoneVoiceE
           receivedAt: Date.now()
         });
       } catch (error) {
+        reportAudioCapabilityFailure(error, "group_stream_play_failed");
         onAck({
           commandId: payload.commandId,
           hashedId,
@@ -393,7 +433,7 @@ export const usePhoneVoiceEngine = ({ enabled, hashedId, onAck }: UsePhoneVoiceE
         });
       }
     },
-    [hashedId, onAck]
+    [hashedId, onAck, reportAudioCapabilityFailure]
   );
 
   const stopGroupStem = useCallback(
@@ -608,6 +648,7 @@ export const usePhoneVoiceEngine = ({ enabled, hashedId, onAck }: UsePhoneVoiceE
           receivedAt: Date.now()
         });
       } catch (error) {
+        reportAudioCapabilityFailure(error, "phone_audio_error");
         onAck({
           commandId: command.commandId,
           hashedId,
@@ -626,7 +667,8 @@ export const usePhoneVoiceEngine = ({ enabled, hashedId, onAck }: UsePhoneVoiceE
       stopAllGroupStreams,
       stopAllVoiceStreams,
       stopLocalSynth,
-      stopVoiceStream
+      stopVoiceStream,
+      reportAudioCapabilityFailure
     ]
   );
 

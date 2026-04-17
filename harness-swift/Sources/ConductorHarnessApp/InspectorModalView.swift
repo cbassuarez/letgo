@@ -290,6 +290,10 @@ struct InspectorModalView: View {
                     inspectorRow("Failovers", "\(model.phoneAudioFailoverCount)")
                     inspectorRow("Zones", zoneSummary)
                     inspectorRow("Unhealthy", "\(unhealthy)")
+                    inspectorRow("TAKE Lead", "\(Int(model.cueTimingLeadMs))ms")
+                    inspectorRow("Cohort", "\(model.cueTimingCohortSize) · RTT P95 \(Int(model.cueTimingCohortP95RttMs))ms")
+                    inspectorRow("Skew", "P50 \(Int(model.cueActivationSkewP50Ms))ms · P95 \(Int(model.cueActivationSkewP95Ms))ms")
+                    inspectorRow("Miss", "P95 \(Int(model.cueActivationMissP95Ms))ms")
 
                     if model.phoneAudioDeviceHealth.isEmpty {
                         Text("No device health samples yet.")

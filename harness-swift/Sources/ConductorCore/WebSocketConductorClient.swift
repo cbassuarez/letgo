@@ -39,7 +39,9 @@ public final class WebSocketConductorClient: NSObject {
     public private(set) var state: LinkState = .idle
 
     private static let forwardedMessageKinds: [String] = [
+        "\"kind\":\"cue\"",
         "\"kind\":\"error\"",
+        "\"kind\":\"telemetry\"",
         "\"kind\":\"phone_audio_pool_state\"",
         "\"kind\":\"phone_audio_ack\"",
         "\"kind\":\"voice_stream_start\"",

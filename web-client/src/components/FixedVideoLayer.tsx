@@ -4,6 +4,7 @@ import type { CueCommand, ShowSceneKey, ShowStreamMap } from "@conductor/protoco
 
 interface FixedVideoLayerProps {
   cue: CueCommand | null;
+  pendingCue?: CueCommand | null;
   logicalNow: number;
   enabled: boolean;
   forcedSource?: string | null;
@@ -301,6 +302,7 @@ const resetVideoElement = (video: HTMLVideoElement): void => {
 
 export const FixedVideoLayer = ({
   cue,
+  pendingCue = null,
   logicalNow,
   enabled,
   forcedSource = null,
@@ -314,6 +316,7 @@ export const FixedVideoLayer = ({
 
   const ref = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const prewarmHlsRef = useRef<Hls | null>(null);
   const [videoReady, setVideoReady] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
 
@@ -336,10 +339,31 @@ export const FixedVideoLayer = ({
     [cue, payload, interstitialActive, streamMap, effectiveScene]
   );
   const source = forcedSource ?? resolvedSource;
+  const pendingPayload = (pendingCue?.payload ?? {}) as Record<string, unknown>;
+  const pendingOutputModeRaw = typeof pendingPayload.outputMode === "string" ? pendingPayload.outputMode.toLowerCase() : "";
+  const pendingOutputMode =
+    pendingOutputModeRaw.length > 0 ? pendingOutputModeRaw : defaultOutputModeForState(pendingCue?.showState ?? null);
+  const pendingInterstitialActive = boolFromPayload(
+    pendingPayload.interstitialActive,
+    pendingOutputMode.includes("interstitial") || pendingOutputMode === "off"
+  );
+  const pendingStreamMap = useMemo(() => parseStreamMapFromPayload(pendingPayload), [pendingPayload]);
+  const pendingActiveScene = useMemo(
+    () => resolveActiveScene(pendingCue, pendingPayload, pendingStreamMap, pendingInterstitialActive),
+    [pendingCue, pendingPayload, pendingStreamMap, pendingInterstitialActive]
+  );
+  const pendingSource = useMemo(
+    () => resolveSource(pendingCue, pendingPayload, pendingInterstitialActive, pendingStreamMap, pendingActiveScene),
+    [pendingCue, pendingPayload, pendingInterstitialActive, pendingStreamMap, pendingActiveScene]
+  );
   const explicitMimeHint =
     normalizeUrl(payload.showFixedMediaMime) ??
     normalizeUrl(payload.showFixedMime);
   const hlsSource = source ? looksLikeHlsSource(source, explicitMimeHint) : false;
+  const pendingExplicitMimeHint =
+    normalizeUrl(pendingPayload.showFixedMediaMime) ??
+    normalizeUrl(pendingPayload.showFixedMime);
+  const pendingHlsSource = pendingSource ? looksLikeHlsSource(pendingSource, pendingExplicitMimeHint) : false;
   const shouldLoop = hlsSource ? false : boolFromPayload(payload.outputLoop, true);
   const playbackBindingKey = `${source ?? "none"}::${effectiveScene ?? "none"}::${cueVersion}`;
 
@@ -362,10 +386,76 @@ export const FixedVideoLayer = ({
     onPlaybackReadyChange?.(videoReady);
   }, [onPlaybackReadyChange, source, videoFailed, videoReady]);
 
+  useEffect(() => {
+    if (!pendingSource || pendingSource === source || isJsdomEnvironment()) {
+      return;
+    }
+
+    const prewarmVideo = document.createElement("video");
+    prewarmVideo.preload = "auto";
+    prewarmVideo.muted = true;
+    prewarmVideo.playsInline = true;
+    let cancelled = false;
+
+    const cleanup = (): void => {
+      cancelled = true;
+      if (prewarmHlsRef.current) {
+        prewarmHlsRef.current.destroy();
+        prewarmHlsRef.current = null;
+      }
+      try {
+        prewarmVideo.pause();
+      } catch {
+        // noop
+      }
+      prewarmVideo.removeAttribute("src");
+    };
+
+    if (!pendingHlsSource || prewarmVideo.canPlayType(hlsMimeType)) {
+      prewarmVideo.src = pendingSource;
+      try {
+        prewarmVideo.load();
+      } catch {
+        // noop
+      }
+      return cleanup;
+    }
+
+    if (!Hls.isSupported()) {
+      return cleanup;
+    }
+
+    const hls = new Hls({
+      lowLatencyMode: true,
+      backBufferLength: 60
+    });
+    prewarmHlsRef.current = hls;
+
+    hls.on(Hls.Events.ERROR, (_event, data) => {
+      if (!data.fatal || cancelled) {
+        return;
+      }
+      cleanup();
+    });
+    hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+      if (cancelled) {
+        return;
+      }
+      hls.loadSource(pendingSource);
+    });
+    hls.attachMedia(prewarmVideo);
+
+    return cleanup;
+  }, [pendingHlsSource, pendingSource, source]);
+
   useEffect(() => () => {
     if (hlsRef.current) {
       hlsRef.current.destroy();
       hlsRef.current = null;
+    }
+    if (prewarmHlsRef.current) {
+      prewarmHlsRef.current.destroy();
+      prewarmHlsRef.current = null;
     }
   }, []);
 
