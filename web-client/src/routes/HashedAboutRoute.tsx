@@ -1,5 +1,7 @@
 import { motion, useReducedMotion } from "framer-motion";
+import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
+import { aboutEthicCopy, aboutPlotCopy } from "../lib/copyVariance";
 
 const fadeConfig = (reducedMotion: boolean, delay = 0): Record<string, unknown> => {
   if (reducedMotion) {
@@ -23,6 +25,8 @@ const fadeConfig = (reducedMotion: boolean, delay = 0): Record<string, unknown> 
 export const HashedAboutRoute = (): JSX.Element => {
   const reducedMotion = useReducedMotion() ?? false;
   const { hashedId = "" } = useParams();
+  const plotText = useMemo(() => aboutPlotCopy(hashedId), [hashedId]);
+  const ethicText = useMemo(() => aboutEthicCopy(hashedId), [hashedId]);
 
   return (
     <section className="mx-auto mt-10 w-full max-w-6xl pb-16 sm:mt-14 sm:pb-24">
@@ -41,20 +45,20 @@ export const HashedAboutRoute = (): JSX.Element => {
         {...fadeConfig(reducedMotion, 0.14)}
         className="participant-headline mt-4 max-w-5xl text-[2.3rem] leading-[0.9] text-participant-cream sm:text-[4.2rem]"
       >
-        I make this piece as a celebration of pressure held in public.
+        About the film
       </motion.h1>
 
       <motion.section {...fadeConfig(reducedMotion, 0.2)} className="participant-card mt-10">
         <p className="participant-kicker">Plot</p>
         <p className="mt-4 max-w-4xl text-lg leading-relaxed text-participant-smoke/88">
-          a reflection on the rejection of letting go as a formalized concept; this variable length work explores representations of loss through a literal loss of directorial and temporal control as audience members govern and steer the work live. an ode to persistent ephemerality, this work applies aleatoric and improvisatory concepts to live video compositing. a script appears as text overlay, repeating from a tight set of phrases that mirror the repetitions of loss itself; the musical material does the same, cycling through a narrow sample bank. these function as constant reminders, mirroring the strictures by which nostalgia and the ruminant reminders of what once was come to mind. things pass through us regardless of what we do for or against that; they don't lodge so much as circulate, pass through us.
+          {plotText}
         </p>
       </motion.section>
 
       <motion.section {...fadeConfig(reducedMotion, 0.27)} className="participant-card mt-8">
         <p className="participant-kicker">Participation Ethic</p>
         <p className="mt-4 max-w-4xl text-lg leading-relaxed text-participant-smoke/88">
-          In this film, audience participation is somewhere between cast, crew, observer, operator, and director. I see this made manifest through two constucts: 1. the system itself, which, as a cybernetic system, provides a wide array of interactive surfaces between its nodes (you, me, the machines and servers, the film, etc.) and 2. that of "the final cut" which this film rejects, instead opting for an immanent, Deleuzian realization of film. The latter treats the film as a constant process of becoming rather than a finished state, which connected audience-members shape live.
+          {ethicText}
         </p>
       </motion.section>
 

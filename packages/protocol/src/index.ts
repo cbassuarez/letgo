@@ -990,6 +990,16 @@ export const stableHashToSeed = (input: string): number => {
   return Math.abs(hash >>> 0);
 };
 
+export const hashChecksum = (payload: string): string =>
+  (stableHashToSeed(payload) >>> 0).toString(16).padStart(8, "0").slice(0, 6);
+
+export const isChecksumValid = (hashedId: string): boolean => {
+  if (!/^[a-f0-9]{32}$/.test(hashedId)) {
+    return false;
+  }
+  return hashedId.slice(26) === hashChecksum(hashedId.slice(0, 26));
+};
+
 export const deterministicPick = <T>(seed: number, values: T[]): T => {
   if (values.length === 0) {
     throw new Error("Cannot pick from an empty array");

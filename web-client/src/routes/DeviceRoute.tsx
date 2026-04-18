@@ -28,6 +28,7 @@ import {
   writePermissionGrantCache
 } from "../lib/permissionGrantCache";
 import { BACKEND_HEALTH_URL } from "../lib/wsClient";
+import { useWakeLock } from "../hooks/useWakeLock";
 
 const scriptBank: ScriptCandidate[] = [
   {
@@ -375,6 +376,17 @@ export const DeviceRoute = (): JSX.Element => {
       }
     }
   });
+  useWakeLock(permissionsDone);
+
+  const isIosSafari =
+    typeof navigator !== "undefined" &&
+    /iPhone|iPad/.test(navigator.userAgent) &&
+    !("standalone" in navigator && (navigator as unknown as { standalone: boolean }).standalone);
+  const [a2hsDismissed, setA2hsDismissed] = useState(
+    () => typeof sessionStorage !== "undefined" && sessionStorage.getItem("letgo-a2hs-dismissed") === "1"
+  );
+  const showA2hsPrompt = isIosSafari && !a2hsDismissed && !permissionsDone;
+
   const autoZone = useMemo(() => buildAutoZone(hashedId), [hashedId]);
   const [liveZone, setLiveZone] = useState(autoZone);
 
@@ -1542,6 +1554,26 @@ export const DeviceRoute = (): JSX.Element => {
             <p className="live-countdown-hint">Holding until stream stabilizes.</p>
           </motion.article>
         </motion.section>
+      ) : null}
+
+      {showA2hsPrompt ? (
+        <section className="live-a2hs-banner" data-testid="live-a2hs-banner">
+          <p className="live-a2hs-text">
+            For full immersion, tap{" "}
+            <span aria-hidden="true" style={{ fontSize: "1.1em" }}>&#x2191;</span>{" "}
+            then <strong>Add to Home Screen</strong>
+          </p>
+          <button
+            type="button"
+            className="live-a2hs-dismiss"
+            onClick={() => {
+              sessionStorage.setItem("letgo-a2hs-dismissed", "1");
+              setA2hsDismissed(true);
+            }}
+          >
+            Dismiss
+          </button>
+        </section>
       ) : null}
 
       {!permissionsDone ? (

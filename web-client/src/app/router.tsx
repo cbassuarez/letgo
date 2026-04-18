@@ -1,6 +1,7 @@
 import { createBrowserRouter, type RouteObject } from "react-router-dom";
 import { DeviceRoute } from "../routes/DeviceRoute";
 import { HashedAboutRoute } from "../routes/HashedAboutRoute";
+import { HashedAccessibilityRoute } from "../routes/HashedAccessibilityRoute";
 import { HashedHomeRoute } from "../routes/HashedHomeRoute";
 import { HashedSiteLayout } from "../routes/HashedSiteLayout";
 import { KeylessIntroRoute } from "../routes/KeylessIntroRoute";
@@ -32,6 +33,10 @@ export const appRoutes: RouteObject[] = [
       {
         path: "about",
         element: <HashedAboutRoute />
+      },
+      {
+        path: "accessibility",
+        element: <HashedAccessibilityRoute />
       }
     ]
   },

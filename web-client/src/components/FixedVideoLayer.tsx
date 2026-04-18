@@ -265,6 +265,36 @@ const looksLikeHlsSource = (source: string, mimeHint: string | null): boolean =>
   return /\.m3u8($|[?#])/i.test(source);
 };
 
+const getViewportAspectRatio = (): number => {
+  if (typeof window === "undefined") {
+    return 4 / 3;
+  }
+  return window.innerWidth / window.innerHeight;
+};
+
+const selectBestLevel = (hls: Hls): void => {
+  const levels = hls.levels;
+  if (levels.length <= 1) {
+    return;
+  }
+  const viewportAR = getViewportAspectRatio();
+  let bestIndex = 0;
+  let bestDiff = Infinity;
+  for (let i = 0; i < levels.length; i++) {
+    const level = levels[i];
+    if (!level.width || !level.height) {
+      continue;
+    }
+    const levelAR = level.width / level.height;
+    const diff = Math.abs(levelAR - viewportAR);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestIndex = i;
+    }
+  }
+  hls.currentLevel = bestIndex;
+};
+
 const isJsdomEnvironment = (): boolean =>
   typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("jsdom");
 
@@ -522,6 +552,7 @@ export const FixedVideoLayer = ({
     });
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      selectBestLevel(hls);
       setVideoReady(true);
       setVideoFailed(false);
       onPlaybackReadyChange?.(true);
@@ -529,12 +560,18 @@ export const FixedVideoLayer = ({
       safePlay(video);
     });
 
+    const onResize = (): void => {
+      selectBestLevel(hls);
+    };
+    window.addEventListener("resize", onResize);
+
     hls.on(Hls.Events.MEDIA_ATTACHED, () => {
       hls.loadSource(source);
     });
     hls.attachMedia(video);
 
     return () => {
+      window.removeEventListener("resize", onResize);
       hls.destroy();
       if (hlsRef.current === hls) {
         hlsRef.current = null;

@@ -213,6 +213,16 @@ export const HashedHomeRoute = (): JSX.Element => {
                     Logbook
                   </Link>
                 </li>
+                <li role="none">
+                  <Link
+                    to={`/${hashedId}/accessibility`}
+                    role="menuitem"
+                    className="home-more-item"
+                    onClick={() => setMoreOpen(false)}
+                  >
+                    Accessibility
+                  </Link>
+                </li>
               </motion.ul>
             ) : null}
           </div>

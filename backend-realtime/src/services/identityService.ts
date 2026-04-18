@@ -1,4 +1,4 @@
-import { stableHashToSeed, type DevicePermissions, type DeviceProfile, type Role } from "@conductor/protocol";
+import { stableHashToSeed, hashChecksum, isChecksumValid, type DevicePermissions, type DeviceProfile, type Role } from "@conductor/protocol";
 import { createHash } from "node:crypto";
 
 export interface IdentityInput {
@@ -38,13 +38,14 @@ export class IdentityService {
   }
 
   validateHashedId(candidate: string): boolean {
-    return /^[a-f0-9]{32}$/.test(candidate);
+    return isChecksumValid(candidate);
   }
 
   private hash(rawToken: string): string {
-    return createHash("sha256")
+    const payload = createHash("sha256")
       .update(`${this.salt}:${rawToken}`)
       .digest("hex")
-      .slice(0, 32);
+      .slice(0, 26);
+    return payload + hashChecksum(payload);
   }
 }
