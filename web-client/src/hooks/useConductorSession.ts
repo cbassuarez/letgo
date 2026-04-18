@@ -29,6 +29,10 @@ import {
   type SyncPacket,
   type TextScenePayload,
   type VoiceStreamStartPayload,
+  type VoiceStreamSubscribePayload,
+  type VoiceStreamSubscribedPayload,
+  type VoiceStreamUnsubscribePayload,
+  type VoiceStreamIceCandidatePayload,
   type VoiceStreamStopPayload,
   type WireEnvelope
 } from "@conductor/protocol";
@@ -62,6 +66,7 @@ interface SessionState {
   keyboardState: KeyboardStatePayload | null;
   keyboardPatchChange: KeyboardPatchChangePayload | null;
   voiceStreamStart: VoiceStreamStartPayload | null;
+  voiceStreamSubscribed: VoiceStreamSubscribedPayload | null;
   voiceStreamStop: VoiceStreamStopPayload | null;
   groupStemStart: GroupStemStartPayload | null;
   groupStemStop: GroupStemStopPayload | null;
@@ -70,6 +75,11 @@ interface SessionState {
   sendZoneUpdate: (zone: DeviceZone) => void;
   sendParticipantVector: (payload: ParticipantVectorPayload) => void;
   sendPhoneAudioAck: (payload: PhoneAudioAckPayload) => void;
+  sendVoiceStreamSubscribe: (
+    payload: VoiceStreamSubscribePayload
+  ) => Promise<VoiceStreamSubscribedPayload | null>;
+  sendVoiceStreamUnsubscribe: (payload: VoiceStreamUnsubscribePayload) => void;
+  sendVoiceStreamIce: (payload: VoiceStreamIceCandidatePayload) => void;
   sendCrowdPickVote: (payload: CrowdPickVotePayload) => void;
   sendPromptResponse: (payload: PromptResponsePayload) => void;
 }
@@ -447,6 +457,7 @@ export const useConductorSession = (hashedId: string): SessionState => {
   const [keyboardState, setKeyboardState] = useState<KeyboardStatePayload | null>(null);
   const [keyboardPatchChange, setKeyboardPatchChange] = useState<KeyboardPatchChangePayload | null>(null);
   const [voiceStreamStart, setVoiceStreamStart] = useState<VoiceStreamStartPayload | null>(null);
+  const [voiceStreamSubscribed, setVoiceStreamSubscribed] = useState<VoiceStreamSubscribedPayload | null>(null);
   const [voiceStreamStop, setVoiceStreamStop] = useState<VoiceStreamStopPayload | null>(null);
   const [groupStemStart, setGroupStemStart] = useState<GroupStemStartPayload | null>(null);
   const [groupStemStop, setGroupStemStop] = useState<GroupStemStopPayload | null>(null);
@@ -472,6 +483,15 @@ export const useConductorSession = (hashedId: string): SessionState => {
   const fallbackActivatedAtRef = useRef<number | null>(fallback ? Date.now() : null);
   const fallbackActiveRef = useRef<boolean>(Boolean(fallback));
   const lastCueEnvelopeSentAtRef = useRef<number>(Date.now());
+  const voiceSubscribeResolversRef = useRef(
+    new Map<
+      string,
+      {
+        resolve: (payload: VoiceStreamSubscribedPayload | null) => void;
+        timeoutId: number;
+      }
+    >()
+  );
 
   const shouldApplyCueCandidate = useCallback(
     (nextVersion: number, nextIssuedAtMs: number, nextCueId: string, envelopeSentAt: number): boolean => {
@@ -511,6 +531,12 @@ export const useConductorSession = (hashedId: string): SessionState => {
     sendEnvelope(socket, kind, data);
   }, []);
 
+  const voiceSubscribeKey = useCallback(
+    (payload: Pick<VoiceStreamSubscribePayload, "commandId" | "voiceId" | "trackId" | "requestType">): string =>
+      `${payload.commandId}:${payload.voiceId}:${payload.trackId}:${payload.requestType}`,
+    []
+  );
+
   const sendPermissions = useCallback(
     (permissions: DevicePermissions): void => {
       sendWithSocket("permissions", permissions);
@@ -535,6 +561,46 @@ export const useConductorSession = (hashedId: string): SessionState => {
   const sendPhoneAudioAck = useCallback(
     (payload: PhoneAudioAckPayload): void => {
       sendWithSocket("phone_audio_ack", payload);
+    },
+    [sendWithSocket]
+  );
+
+  const sendVoiceStreamSubscribe = useCallback(
+    (payload: VoiceStreamSubscribePayload): Promise<VoiceStreamSubscribedPayload | null> => {
+      const key = voiceSubscribeKey(payload);
+      const existing = voiceSubscribeResolversRef.current.get(key);
+      if (existing) {
+        window.clearTimeout(existing.timeoutId);
+        existing.resolve(null);
+        voiceSubscribeResolversRef.current.delete(key);
+      }
+
+      return new Promise((resolve) => {
+        const timeoutId = window.setTimeout(() => {
+          const pending = voiceSubscribeResolversRef.current.get(key);
+          if (!pending) {
+            return;
+          }
+          voiceSubscribeResolversRef.current.delete(key);
+          pending.resolve(null);
+        }, 4_000);
+        voiceSubscribeResolversRef.current.set(key, { resolve, timeoutId });
+        sendWithSocket("voice_stream_subscribe", payload);
+      });
+    },
+    [sendWithSocket, voiceSubscribeKey]
+  );
+
+  const sendVoiceStreamUnsubscribe = useCallback(
+    (payload: VoiceStreamUnsubscribePayload): void => {
+      sendWithSocket("voice_stream_unsubscribe", payload);
+    },
+    [sendWithSocket]
+  );
+
+  const sendVoiceStreamIce = useCallback(
+    (payload: VoiceStreamIceCandidatePayload): void => {
+      sendWithSocket("voice_stream_ice", payload);
     },
     [sendWithSocket]
   );
@@ -877,6 +943,23 @@ export const useConductorSession = (hashedId: string): SessionState => {
           setVoiceStreamStart(envelope.data as VoiceStreamStartPayload);
         }
 
+        if (envelope.kind === "voice_stream_subscribed") {
+          const payload = envelope.data as VoiceStreamSubscribedPayload;
+          setVoiceStreamSubscribed(payload);
+          const key = voiceSubscribeKey({
+            commandId: payload.commandId,
+            voiceId: payload.voiceId,
+            trackId: payload.trackId,
+            requestType: payload.requestType
+          });
+          const pending = voiceSubscribeResolversRef.current.get(key);
+          if (pending) {
+            window.clearTimeout(pending.timeoutId);
+            voiceSubscribeResolversRef.current.delete(key);
+            pending.resolve(payload);
+          }
+        }
+
         if (envelope.kind === "voice_stream_stop") {
           setVoiceStreamStop(envelope.data as VoiceStreamStopPayload);
         }
@@ -969,6 +1052,11 @@ export const useConductorSession = (hashedId: string): SessionState => {
     return () => {
       stoppedRef.current = true;
       clearPendingCueTimer();
+      for (const pending of voiceSubscribeResolversRef.current.values()) {
+        window.clearTimeout(pending.timeoutId);
+        pending.resolve(null);
+      }
+      voiceSubscribeResolversRef.current.clear();
       window.clearInterval(logicalTimer);
       window.clearInterval(supervisionTimer);
       if (reconnectTimerRef.current !== null) {
@@ -977,7 +1065,7 @@ export const useConductorSession = (hashedId: string): SessionState => {
       retryDeadlineMsRef.current = null;
       socketRef.current?.close();
     };
-  }, [hashedId, shouldApplyCueCandidate]);
+  }, [hashedId, shouldApplyCueCandidate, voiceSubscribeKey]);
 
   return {
     cue,
@@ -1002,6 +1090,7 @@ export const useConductorSession = (hashedId: string): SessionState => {
     keyboardState,
     keyboardPatchChange,
     voiceStreamStart,
+    voiceStreamSubscribed,
     voiceStreamStop,
     groupStemStart,
     groupStemStop,
@@ -1010,6 +1099,9 @@ export const useConductorSession = (hashedId: string): SessionState => {
     sendZoneUpdate,
     sendParticipantVector,
     sendPhoneAudioAck,
+    sendVoiceStreamSubscribe,
+    sendVoiceStreamUnsubscribe,
+    sendVoiceStreamIce,
     sendCrowdPickVote,
     sendPromptResponse
   };

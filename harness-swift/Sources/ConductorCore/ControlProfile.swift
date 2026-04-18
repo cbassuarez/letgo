@@ -164,8 +164,8 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
         case .rightTakeButton: return "Take Button"
         case .engineStartHold: return "Engine Start (Hold 5s)"
         case .engineStopHold: return "Engine Stop (Hold 5s)"
-        case .rightTrigger1: return "Trigger A (Rhythm)"
-        case .rightTrigger2: return "Trigger B (Space)"
+        case .rightTrigger1: return "Trigger A (Text Surf / Rhythm)"
+        case .rightTrigger2: return "Trigger B (Text Burst / Space)"
         case .ultrachunkOverlayToggle: return "Ultrachunk Overlay Toggle"
         case .leftMainThrottle: return "Left Main Throttle"
         case .leftAuxThrottle: return "Left Aux Throttle"
@@ -173,17 +173,17 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
         case .leftHatUp: return "Throttle Hat Up"
         case .leftHatRight: return "Throttle Hat Right"
         case .leftHatDown: return "Throttle Hat Down"
-        case .leftPlaybackButton: return "Playback Button"
+        case .leftPlaybackButton: return "Playback / Text Mute"
         case .leftModeRotary: return "Mode Rotary"
         case .leftRotary1Decrease: return "Rotary 1 Axis"
         case .leftRotary1Increase: return "Rotary 1 Increase"
         case .leftRotary2Axis: return "Rotary 2 Axis"
-        case .leftBottomToggle1: return "Bottom Toggle 1"
-        case .leftBottomToggle2: return "Bottom Toggle 2"
-        case .leftBottomToggle3: return "Bottom Toggle 3"
-        case .leftBottomToggle4: return "Bottom Toggle 4"
-        case .leftBottomToggle5: return "Bottom Toggle 5"
-        case .leftBottomToggle6: return "Bottom Toggle 6"
+        case .leftBottomToggle1: return "Main Static Scene 1"
+        case .leftBottomToggle2: return "Main Static Scene 2"
+        case .leftBottomToggle3: return "Main Static Scene 3"
+        case .leftBottomToggle4: return "Main Static Scene 4"
+        case .leftBottomToggle5: return "Main Dynamic On A"
+        case .leftBottomToggle6: return "Main Dynamic On B"
         case .leftArmToggleUp: return "Arm Toggle Up"
         case .leftArmToggleDown: return "Arm Toggle Down"
         case .leftCueToggleUp: return "Cue Toggle Up"
@@ -192,7 +192,7 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
         case .leftToggle1Up: return "Toggle 1 Up (Choir On)"
         case .leftToggle1Down: return "Toggle 1 Down (Choir Off)"
         case .leftToggle1Directional: return "Toggle 1 Directional"
-        case .leftStaticVisualClutch: return "Static Visual Clutch"
+        case .leftStaticVisualClutch: return "Right Stick Route Clutch"
         }
     }
 
@@ -218,6 +218,11 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
         case .leftToggle1Up: return "CHOIR ON"
         case .leftToggle1Down: return "CHOIR OFF"
         case .leftStaticVisualClutch: return "CLUTCH"
+        case .leftBottomToggle1: return "STATIC 1"
+        case .leftBottomToggle2: return "STATIC 2"
+        case .leftBottomToggle3: return "STATIC 3"
+        case .leftBottomToggle4: return "STATIC 4"
+        case .leftBottomToggle5, .leftBottomToggle6: return "DYNAMIC ON"
         default: return title.uppercased()
         }
     }
@@ -257,6 +262,12 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
             return "Phone gate GO (commit) subject to safety guards."
         case .leftCueToggleCenter:
             return "Phone gate SAFE (clear/hold safe)."
+        case .rightTrigger1:
+            return "Dynamic: text surf pressure lane. Non-dynamic: FX chain A intensity."
+        case .rightTrigger2:
+            return "Dynamic: one-shot text burst trigger. Non-dynamic: FX chain B intensity."
+        case .leftPlaybackButton:
+            return "Dynamic: text mute toggle. Non-dynamic: preview playback toggle."
         case .leftToggle1Up:
             return "Choir latched ON trigger (up position)."
         case .leftToggle1Down:
@@ -268,7 +279,17 @@ public enum ControlRole: String, Codable, CaseIterable, Sendable {
         case .ultrachunkOverlayToggle:
             return "Toggles ultrachunk overlay layer on/off over base X/Y paulstretch morph."
         case .leftStaticVisualClutch:
-            return "Hold to temporarily repurpose right stick for static visual override."
+            return "Tap to toggle right-stick AUDIO route, double-tap for DUAL route."
+        case .leftBottomToggle1:
+            return "Arms MAIN STATIC scene 1 (main timeline only)."
+        case .leftBottomToggle2:
+            return "Arms MAIN STATIC scene 2 (main timeline only)."
+        case .leftBottomToggle3:
+            return "Arms MAIN STATIC scene 3 (main timeline only)."
+        case .leftBottomToggle4:
+            return "Arms MAIN STATIC scene 4 (main timeline only)."
+        case .leftBottomToggle5, .leftBottomToggle6:
+            return "Arms MAIN DYNAMIC mode (main timeline only)."
         case .engineStartHold:
             return "Hold for 5 seconds to start engine."
         case .engineStopHold:

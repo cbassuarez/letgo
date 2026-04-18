@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import ConductorCore
 import Foundation
+import Security
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -167,6 +168,11 @@ struct MIDIInputOption: Identifiable, Equatable {
     let name: String
 }
 
+struct MIDIOutputOption: Identifiable, Equatable {
+    let id: String
+    let name: String
+}
+
 private struct MediaManifest: Codable {
     var sceneMedia: [String: String]
     var interstitialMedia: String?
@@ -302,6 +308,145 @@ private struct HLSStreamConfig {
         let trimmedBase = base.hasSuffix("/") ? String(base.dropLast()) : base
         let trimmedComponent = component.hasPrefix("/") ? String(component.dropFirst()) : component
         return "\(trimmedBase)/\(trimmedComponent)"
+    }
+}
+
+private struct VoiceReturnRoutingConfig {
+    static let defaultSampleRate: Double = 48_000
+    static let defaultBusCount: Int = 8
+    static let defaultBufferDurationSeconds: Double = 6
+
+    let enabled: Bool
+    let preferredSampleRate: Double
+    let busCount: Int
+    let bufferDurationSeconds: Double
+    let fallbackMode: VoiceReturnCaptureFallbackMode
+    let noteBusOverrides: [Int: Int]
+
+    var captureConfiguration: VoiceReturnCaptureConfiguration {
+        VoiceReturnCaptureConfiguration(
+            enabled: enabled,
+            preferredSampleRate: preferredSampleRate,
+            preferredBusCount: busCount,
+            bufferDurationSeconds: bufferDurationSeconds,
+            fallbackMode: fallbackMode
+        )
+    }
+
+    static func fromEnvironment(_ env: [String: String] = ProcessInfo.processInfo.environment) -> VoiceReturnRoutingConfig {
+        let enabled = boolValue(
+            env["CONDUCTOR_VOICE_RETURN_CAPTURE_ENABLED"] ?? env["CONDUCTOR_VOICE_RETURN_ENABLED"],
+            defaultValue: true
+        )
+        let busCount = intValue(
+            env["CONDUCTOR_VOICE_RETURN_CAPTURE_BUS_COUNT"] ?? env["CONDUCTOR_VOICE_RETURN_BUS_COUNT"],
+            defaultValue: defaultBusCount,
+            minValue: 1,
+            maxValue: 32
+        )
+        let sampleRate = doubleValue(
+            env["CONDUCTOR_VOICE_RETURN_CAPTURE_SAMPLE_RATE"] ?? env["CONDUCTOR_VOICE_RETURN_SAMPLE_RATE"],
+            defaultValue: defaultSampleRate,
+            minValue: 8_000,
+            maxValue: 192_000
+        )
+        let bufferDuration = doubleValue(
+            env["CONDUCTOR_VOICE_RETURN_CAPTURE_BUFFER_SECONDS"] ?? env["CONDUCTOR_VOICE_RETURN_BUFFER_SECONDS"],
+            defaultValue: defaultBufferDurationSeconds,
+            minValue: 1,
+            maxValue: 30
+        )
+
+        let rawFallback = (env["CONDUCTOR_VOICE_RETURN_CAPTURE_FALLBACK"] ?? env["CONDUCTOR_VOICE_RETURN_FALLBACK"])?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let fallbackMode: VoiceReturnCaptureFallbackMode = {
+            switch rawFallback {
+            case "tone", "synth", "synthesized", "synthesizedtone":
+                return .synthesizedTone
+            default:
+                return .silence
+            }
+        }()
+
+        let overrides = parseNoteBusOverrides(
+            env["CONDUCTOR_VOICE_RETURN_CAPTURE_NOTE_BUS_MAP"] ?? env["CONDUCTOR_VOICE_RETURN_NOTE_BUS_MAP"],
+            busCount: busCount
+        )
+
+        return VoiceReturnRoutingConfig(
+            enabled: enabled,
+            preferredSampleRate: sampleRate,
+            busCount: busCount,
+            bufferDurationSeconds: bufferDuration,
+            fallbackMode: fallbackMode,
+            noteBusOverrides: overrides
+        )
+    }
+
+    private static func boolValue(_ raw: String?, defaultValue: Bool) -> Bool {
+        guard let normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !normalized.isEmpty else {
+            return defaultValue
+        }
+        switch normalized {
+        case "1", "true", "yes", "on":
+            return true
+        case "0", "false", "no", "off":
+            return false
+        default:
+            return defaultValue
+        }
+    }
+
+    private static func intValue(
+        _ raw: String?,
+        defaultValue: Int,
+        minValue: Int,
+        maxValue: Int
+    ) -> Int {
+        guard let raw,
+              let parsed = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return defaultValue
+        }
+        return min(maxValue, max(minValue, parsed))
+    }
+
+    private static func doubleValue(
+        _ raw: String?,
+        defaultValue: Double,
+        minValue: Double,
+        maxValue: Double
+    ) -> Double {
+        guard let raw,
+              let parsed = Double(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+              parsed.isFinite else {
+            return defaultValue
+        }
+        return min(maxValue, max(minValue, parsed))
+    }
+
+    private static func parseNoteBusOverrides(_ raw: String?, busCount: Int) -> [Int: Int] {
+        guard let raw,
+              !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return [:]
+        }
+
+        let normalizedBusCount = max(1, busCount)
+        let segments = raw.split(whereSeparator: { $0 == "," || $0 == ";" || $0 == "\n" })
+        var map: [Int: Int] = [:]
+        for segment in segments {
+            let pair = segment.split(separator: ":", maxSplits: 1).map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            guard pair.count == 2,
+                  let note = Int(pair[0]),
+                  let bus = Int(pair[1]) else {
+                continue
+            }
+            let clampedNote = max(0, min(127, note))
+            let normalizedBus = max(0, bus) % normalizedBusCount
+            map[clampedNote] = normalizedBus
+        }
+        return map
     }
 }
 
@@ -493,6 +638,22 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     @Published var selectedModelCandidateID: String = ""
     @Published var modelSearchPaths: [String] = []
     @Published var modelSearchOverridePath: String? = nil
+    @Published private(set) var backendTextRuntimeStatus: HarnessTextRuntimeStatusPayload?
+    @Published private(set) var backendTextStrictCount: Int = 0
+    @Published private(set) var backendTextLooseCount: Int = 0
+    @Published private(set) var backendTextStrictSource: String = "unknown"
+    @Published private(set) var backendTextLooseSource: String = "unknown"
+    @Published private(set) var backendTextWarnings: [String] = []
+    @Published private(set) var backendTextModelSummary: String = "Backend model status unavailable"
+    @Published private(set) var backendTextSemanticSummary: String = "Semantic mode OFF"
+    @Published var backendTextSemanticModeSelection: HarnessTextSemanticMode = .off
+    @Published var backendTextSemanticModelInput: String = "gpt-4.1-mini"
+    @Published var backendTextSemanticAPIKeyInput: String = ""
+    @Published private(set) var backendTextSemanticAPIKeySaved = false
+    @Published private(set) var backendTextSemanticAPIKeyConfiguredRemote: Bool?
+    @Published private(set) var backendTextImportedStrictLabel: String = "none"
+    @Published private(set) var backendTextImportedLooseLabel: String = "none"
+    @Published private(set) var backendTextImportedModelLabel: String = "none"
 
     @Published var previewScene: ShowState = .idle
     @Published var previewStatus: String = "No preview media loaded"
@@ -515,6 +676,10 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     @Published var selectedMIDIInputID: String = ""
     @Published private(set) var midiInputActive = false
     @Published private(set) var midiInputStatus = "MIDI OFF"
+    @Published private(set) var availableMIDIDestinations: [MIDIOutputOption] = []
+    @Published var selectedMIDIDestinationID: String = ""
+    @Published private(set) var midiOutputActive = false
+    @Published private(set) var midiOutputStatus = "MIDI OUT OFF"
     @Published private(set) var keyboardProfileID = "minilab3"
     @Published private(set) var keyboardProfileName = "MiniLab 3"
     @Published private(set) var keyboardPage = 0
@@ -551,6 +716,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     @Published private(set) var pushPhonePadEchoProbability: Double = 0
     @Published private(set) var soundManipulationFocus: SoundManipulationFocus?
     @Published private(set) var hotasStaticVisualOverrideHeld = false
+    @Published private(set) var rightStickRouteMode: RightStickRouteModeID = .base
     @Published private(set) var effectsChainState: EffectsChainState = .idle
     @Published private(set) var activeEffectsPreset = EffectsChainPreset(chainAName: "Rhythm", chainBName: "Space", bankID: 1)
     @Published private(set) var staticAudioMacroState: StaticAudioMacroState = .neutral
@@ -562,6 +728,10 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     @Published private(set) var ultrachunkPrimarySampleID: String?
     @Published private(set) var ultrachunkSecondarySampleID: String?
     @Published private(set) var hotasUltrachunkOverlayEnabled = false
+    @Published private(set) var dynamicAudioDensity: Double = 0.5
+    @Published private(set) var dynamicAudioLayerCount: Int = 2
+    @Published private(set) var dynamicEchoMacro: Double = 0
+    @Published private(set) var dynamicTextMuted = false
     @Published private(set) var dynamicBinManifest: [DynamicBinClip] = []
     @Published private(set) var programProceduralState: ProgramProceduralState = .default()
     @Published private(set) var programAudioState: ProgramAudioState = .default
@@ -660,6 +830,9 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private let sampleMorphEngine = SampleMorphEngine()
 
     private var importedModelCandidates: [CompiledModelCandidate] = []
+    private var backendRuntimeStrictCandidates: [HarnessRuntimeScriptCandidate] = []
+    private var backendRuntimeLooseCandidates: [HarnessRuntimeScriptCandidate] = []
+    private var backendRuntimeModelPayloadJSON: String?
     private var previewLoopObserver: NSObjectProtocol?
     private var latchController = OutputLatchController(timeoutSeconds: 8)
     private var latchTimer: Timer?
@@ -683,6 +856,11 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private var latestRemoteCueVersion: Int = -1
     private var latestRemoteCueIssuedAtMs: TimeInterval = 0
     private var latestRemoteCueSentAtMs: TimeInterval = 0
+    private let voicePublisherSessionID: String = {
+        let prefix = ProcessInfo.processInfo.environment["CONDUCTOR_MANAGED_SFU_SESSION_PREFIX"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(prefix?.isEmpty == false ? prefix! : "letgo")-voice"
+    }()
     private let hlsStreamConfig = HLSStreamConfig.fromEnvironment()
     private let localMediaPreviewEnabled: Bool = {
         let env = ProcessInfo.processInfo.environment["CONDUCTOR_LOCAL_MEDIA_PREVIEW"]?
@@ -691,8 +869,17 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         return env == "1" || env == "true" || env == "yes"
     }()
     private var phoneCommandSequence = 0
+    private var announcedVoicePublisherNotes: Set<Int> = []
+    private var voicePublisherTrackBusByID: [String: Int] = [:]
+    private var voicePublisherNextBusCursor: Int = 0
     private var lastLatchStatus: StatusLineEvent?
     private var midiIngestor: MIDIIngestor?
+    private let midiOutputEngine = CoreMIDIOutputEngine()
+    private let voiceRTPPublisher = VoiceRTPPublisher()
+    private let voiceReturnRoutingConfig = VoiceReturnRoutingConfig.fromEnvironment()
+    private var midiClockTimer: DispatchSourceTimer?
+    private var lastMIDIPublishedEngineRunning = false
+    private var lastMIDIPublishedBPM: Double = 120
     private var hotasProfile: ControlProfile = .defaultX56StrictLive
     private var hotasLastKnownGoodProfile: ControlProfile?
     private var hotasMapper: ControlProfileMapper?
@@ -742,6 +929,8 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private var hotasUltrachunkLastFrameAtMs: TimeInterval = 0
     private var hotasUltrachunkLastRenderAtMs: TimeInterval = 0
     private var hotasUltrachunkLastFrame: UltrachunkControlFrame = .neutral
+    private var dynamicTextProbabilityBeforeMute: Double = 0.5
+    private var dynamicTextBurstLastAtMs: TimeInterval = 0
     private let hotasUltrachunkQualityProfile: UltrachunkQualityProfile = .maxQuality
 
     private struct RoutedHOTASActionContext {
@@ -865,6 +1054,13 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         )
     }
 
+    var selectedMIDIDestinationDisplayName: String {
+        Self.resolveMIDIDestinationDisplayName(
+            outputs: availableMIDIDestinations,
+            selectedOutputID: selectedMIDIDestinationID
+        )
+    }
+
     var soundSituationalSnapshot: SoundSituationalSnapshot {
         let nowMs = ConductorHarnessViewModel.nowMilliseconds()
 
@@ -917,7 +1113,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 outputRouteName: selectedAudioRouteDisplayName,
                 outputRouteSummary: audioRouteStatusSummary,
                 midiInputName: selectedMIDIInputDisplayName,
-                midiStatus: midiInputStatus,
+                midiStatus: "\(midiInputStatus) · \(midiOutputStatus)",
                 hotasStatus: hotasInputStatus,
                 pushStatus: pushControlEnabled ? pushLastSignalSummary : "Push OFF",
                 level: ioLevel
@@ -951,6 +1147,16 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return first.name
         }
         return "NO MIDI INPUTS"
+    }
+
+    nonisolated static func resolveMIDIDestinationDisplayName(outputs: [MIDIOutputOption], selectedOutputID: String) -> String {
+        if let selected = outputs.first(where: { $0.id == selectedOutputID }) {
+            return selected.name
+        }
+        if let first = outputs.first {
+            return first.name
+        }
+        return "NO MIDI DESTINATIONS"
     }
 
     nonisolated static func deriveSoundMode(
@@ -1052,6 +1258,9 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     }
 
     static let coreMLSearchDirectoryDefaultsKey = "coreMLModelSearchDirectoryOverride"
+    static let backendTextSemanticModelDefaultsKey = "backendTextSemanticModel"
+    private static let backendTextSemanticAPIKeychainService = "com.letgo.conductor.harness.text-runtime"
+    private static let backendTextSemanticAPIKeychainAccount = "openai-api-key"
 
     static func loadCoreMLSearchDirectoryOverride() -> URL? {
         guard let raw = UserDefaults.standard.string(forKey: coreMLSearchDirectoryDefaultsKey),
@@ -1069,6 +1278,48 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         return CoreMLModelLocator.defaultSearchDirectories(additionalDirectories: extras)
     }
 
+    private static func loadSecret(service: String, account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let value = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return value
+    }
+
+    @discardableResult
+    private static func storeSecret(_ value: String, service: String, account: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+
+        if trimmed.isEmpty {
+            SecItemDelete(query as CFDictionary)
+            return true
+        }
+
+        let data = Data(trimmed.utf8)
+        SecItemDelete(query as CFDictionary)
+        var createQuery = query
+        createQuery[kSecValueData as String] = data
+        createQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let status = SecItemAdd(createQuery as CFDictionary, nil)
+        return status == errSecSuccess
+    }
+
     init() {
         let preferredModelName = ProcessInfo.processInfo.environment["CONDUCTOR_COREML_MODEL_NAME"]
         let overrideURL = Self.loadCoreMLSearchDirectoryOverride()
@@ -1081,11 +1332,25 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         self.modelSearchOverridePath = overrideURL?.path
         self.modelSearchPaths = searchDirectories.map { $0.path }
         self.textEngine = TextSelectionEngine(model: scoringModel)
+        self.backendTextSemanticModelInput =
+            UserDefaults.standard.string(forKey: Self.backendTextSemanticModelDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? "gpt-4.1-mini"
+        if self.backendTextSemanticModelInput.isEmpty {
+            self.backendTextSemanticModelInput = "gpt-4.1-mini"
+        }
+        self.backendTextSemanticAPIKeyInput =
+            Self.loadSecret(
+                service: Self.backendTextSemanticAPIKeychainService,
+                account: Self.backendTextSemanticAPIKeychainAccount
+            ) ?? ""
+        self.backendTextSemanticAPIKeySaved = !self.backendTextSemanticAPIKeyInput.isEmpty
         configurePreviewPlayerForPerformanceMode()
         let proceduralSeed = Int(Date().timeIntervalSince1970)
         performerProceduralState = .default(seed: proceduralSeed)
         programProceduralState = performerProceduralState
         startHUDTelemetryPump()
+        voiceRTPPublisher.configureReturnCapture(voiceReturnRoutingConfig.captureConfiguration)
 
         websocket.onMessage = { [weak self] text in
             MainActor.assumeIsolated {
@@ -1106,6 +1371,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 self?.publishKeyboardState()
                 self?.publishPushPadLabelsForActiveMainBank(force: true)
                 self?.publishCurrentCueSnapshot(reason: "ws_open")
+                self?.requestBackendTextRuntimeStatus()
                 self?.pushStatus(StatusLineEvent(
                     message: "WS link online",
                     severity: .success,
@@ -1191,6 +1457,11 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         abortCoverTimer?.invalidate()
         midiIngestor?.stop()
         midiIngestor = nil
+        midiClockTimer?.setEventHandler {}
+        midiClockTimer?.cancel()
+        midiClockTimer = nil
+        midiOutputEngine.disarm()
+        voiceRTPPublisher.stopAll()
         hotasInputMultiplexer?.stop()
         hotasInputMultiplexer = nil
         for work in pushQuantizedPadWorkItems.values {
@@ -1305,16 +1576,40 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return "engine_start"
         case .stopEngine:
             return "engine_stop"
+        case .cycleRightStickRouteMode:
+            return "right_stick_route_cycle"
+        case .setRightStickRouteMode(let mode):
+            return "right_stick_route_\(mode.rawValue)"
         case .patchVector:
             return "patch_vector"
         case .armOutputMode:
             return "arm_mode"
         case .armTransportLane:
             return "arm_lane"
+        case .armMainStaticScene(let sceneIndex):
+            return "main_static_scene_\(sceneIndex)"
+        case .armMainDynamicMode:
+            return "main_dynamic_on"
         case .queueTimelineStep:
             return "queue_timeline"
         case .setDynamicBinSelection:
             return "dynamic_bin"
+        case .setDynamicAudioSurfX:
+            return "dynamic_audio_surf_x"
+        case .setDynamicAudioSurfY:
+            return "dynamic_audio_surf_y"
+        case .setDynamicAudioSurfZ:
+            return "dynamic_audio_surf_z"
+        case .setDynamicAudioDensity:
+            return "dynamic_audio_density"
+        case .setDynamicEchoMacro:
+            return "dynamic_echo_macro"
+        case .setDynamicTextSurf:
+            return "dynamic_text_surf"
+        case .triggerDynamicTextBurst:
+            return "dynamic_text_burst"
+        case .toggleDynamicTextMute:
+            return "dynamic_text_mute_toggle"
         case .setCutCadence:
             return "cut_cadence"
         case .setCompositorBlend:
@@ -1898,6 +2193,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         vector = machine.updateVector(with: patch)
         performerProceduralState.performerVector = vector
         programProceduralState.performerVector = vector
+        sendVectorPatchToMIDIHost(patch)
 
         Task {
             do {
@@ -1948,6 +2244,55 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 ))
             }
         }
+    }
+
+    var canUseMainSceneControlsFromControl: Bool {
+        state == .main
+    }
+
+    @discardableResult
+    func armMainStaticSceneFromControl(_ sceneIndex: Int) -> Bool {
+        guard sceneIndex > 0 else {
+            pushStatus(StatusLineEvent(
+                message: "MAIN STATIC blocked: scene index must be >= 1",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return false
+        }
+
+        guard let laneId = mainStaticSceneLaneID(sceneIndex: sceneIndex) else {
+            pushStatus(StatusLineEvent(
+                message: "MAIN STATIC \(sceneIndex) blocked: load lane first",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return false
+        }
+
+        let now = Date()
+        _ = latchController.armMode(FlightOutputMode.static.rawValue, now: now)
+        let snapshot = latchController.armLane(laneId, now: now)
+        syncLatchState(snapshot, now: now)
+        pushStatus(StatusLineEvent(
+            message: "MAIN STATIC \(sceneIndex) armed (\(laneId.uppercased())) — TAKE/GO to commit",
+            severity: .info,
+            timestamp: now
+        ))
+        return true
+    }
+
+    @discardableResult
+    func armMainDynamicModeFromControl() -> Bool {
+        let now = Date()
+        let snapshot = latchController.armMode(FlightOutputMode.dynamic.rawValue, now: now)
+        syncLatchState(snapshot, now: now)
+        pushStatus(StatusLineEvent(
+            message: "MAIN DYNAMIC armed — TAKE/GO to commit",
+            severity: .info,
+            timestamp: now
+        ))
+        return true
     }
 
     func armOutputMode(_ mode: FlightOutputMode) {
@@ -2098,8 +2443,10 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             let route = try quadAudioEngine.start()
             engineRunning = true
             applyRouteStatus(route, emitStatus: true)
+            syncMIDITransportClock(force: true)
         } catch {
             engineRunning = false
+            syncMIDITransportClock(force: true)
             resetAudioRouteStatus()
             pushStatus(StatusLineEvent(
                 message: "Audio engine failed to start: \(error.localizedDescription)",
@@ -2116,8 +2463,19 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         phoneAudioFailoverCount = 0
         hotasPhoneChoirContextActive = false
         activeChoirMIDINotes.removeAll()
+        for note in announcedVoicePublisherNotes {
+            publishVoicePublisherAnnouncement(forNote: note, active: false)
+            stopVoicePublisherTrack(forNote: note)
+        }
+        announcedVoicePublisherNotes.removeAll()
+        clearVoicePublisherTrackAssignments()
         effectsChainState = .idle
+        rightStickRouteMode = .base
         hotasStaticVisualOverrideHeld = false
+        dynamicTextMuted = false
+        dynamicAudioDensity = 0.5
+        dynamicAudioLayerCount = 2
+        dynamicEchoMacro = 0
         staticAudioMacroState = .neutral
         resetHOTASStaticSampleAuditionState()
         choirFieldState = .neutral
@@ -2176,6 +2534,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         cancelPendingPushQuantizedPadWork()
         cancelSequenceWork()
         engineRunning = false
+        syncMIDITransportClock(force: true)
         quadAudioEngine.stop()
         stopAudioFeaturePump()
         resetAudioRouteStatus()
@@ -2186,8 +2545,19 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         phoneAudioFailoverCount = 0
         hotasPhoneChoirContextActive = false
         activeChoirMIDINotes.removeAll()
+        for note in announcedVoicePublisherNotes {
+            publishVoicePublisherAnnouncement(forNote: note, active: false)
+            stopVoicePublisherTrack(forNote: note)
+        }
+        announcedVoicePublisherNotes.removeAll()
+        clearVoicePublisherTrackAssignments()
         effectsChainState = .idle
+        rightStickRouteMode = .base
         hotasStaticVisualOverrideHeld = false
+        dynamicTextMuted = false
+        dynamicAudioDensity = 0.5
+        dynamicAudioLayerCount = 2
+        dynamicEchoMacro = 0
         staticAudioMacroState = .neutral
         resetHOTASStaticSampleAuditionState()
         choirFieldState = .neutral
@@ -2316,17 +2686,58 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         ))
     }
 
+    private func mainStaticSceneLaneIDs() -> [String] {
+        let timelineLaneIDs = Set(timelineStepPlans.keys)
+        var laneIDs = hotasProfile.staticLaneOrder.filter { !timelineLaneIDs.contains($0) }
+        for lane in showFixedLanes {
+            guard !timelineLaneIDs.contains(lane.id) else { continue }
+            if !laneIDs.contains(lane.id) {
+                laneIDs.append(lane.id)
+            }
+        }
+        return laneIDs
+    }
+
+    private func mainStaticSceneLaneID(sceneIndex: Int) -> String? {
+        let laneIDs = mainStaticSceneLaneIDs()
+        let targetIndex = sceneIndex - 1
+        guard targetIndex >= 0 else { return nil }
+        if targetIndex < laneIDs.count {
+            return laneIDs[targetIndex]
+        }
+
+        let fallback = String(format: "main-%02d", sceneIndex)
+        if showFixedLanes.contains(where: { $0.id == fallback }) {
+            return fallback
+        }
+        return nil
+    }
+
     func resetShowRun() {
         cancelPendingPushQuantizedPadWork()
         cancelSequenceWork()
         engineRunning = false
+        syncMIDITransportClock(force: true)
         quadAudioEngine.stop()
         stopAudioFeaturePump()
         resetAudioRouteStatus()
         phoneAudioGateArmed = false
         phoneAudioGateCommitted = false
         hotasPhoneChoirContextActive = false
+        activeChoirMIDINotes.removeAll()
+        for note in announcedVoicePublisherNotes {
+            publishVoicePublisherAnnouncement(forNote: note, active: false)
+            stopVoicePublisherTrack(forNote: note)
+        }
+        announcedVoicePublisherNotes.removeAll()
+        clearVoicePublisherTrackAssignments()
         effectsChainState = .idle
+        rightStickRouteMode = .base
+        hotasStaticVisualOverrideHeld = false
+        dynamicTextMuted = false
+        dynamicAudioDensity = 0.5
+        dynamicAudioLayerCount = 2
+        dynamicEchoMacro = 0
         resetHOTASStaticSampleAuditionState()
         stopMIDIInput(notify: false)
         publishPhoneAudioPoolState()
@@ -2375,6 +2786,24 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         }
         if !midiInputs.contains(where: { $0.id == selectedMIDIInputID }) {
             selectedMIDIInputID = midiInputs.first?.id ?? ""
+        }
+
+        let midiOutputs = CoreMIDIOutputEngine.availableDestinations()
+            .map { MIDIOutputOption(id: $0.id, name: $0.name) }
+        if availableMIDIDestinations != midiOutputs {
+            availableMIDIDestinations = midiOutputs
+        }
+        if !midiOutputs.contains(where: { $0.id == selectedMIDIDestinationID }) {
+            selectedMIDIDestinationID = midiOutputs.first?.id ?? ""
+        }
+        if midiOutputActive,
+           !selectedMIDIDestinationID.isEmpty,
+           midiOutputEngine.armedDestinationID != selectedMIDIDestinationID {
+            let rearmed = midiOutputEngine.arm(destinationID: selectedMIDIDestinationID)
+            midiOutputActive = rearmed
+            midiOutputStatus = rearmed
+                ? "MIDI OUT: \(selectedMIDIDestinationDisplayName)"
+                : "MIDI OUT OFF"
         }
         refreshHOTASActivation()
     }
@@ -2531,6 +2960,137 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 severity: .info,
                 timestamp: Date()
             ))
+        }
+    }
+
+    func armMIDIDestination() {
+        refreshSetupInventory()
+        guard !selectedMIDIDestinationID.isEmpty else {
+            pushStatus(StatusLineEvent(
+                message: "MIDI OUT arm blocked: no destination found",
+                severity: .warn,
+                timestamp: Date()
+            ))
+            return
+        }
+
+        let armed = midiOutputEngine.arm(destinationID: selectedMIDIDestinationID)
+        midiOutputActive = armed
+        if armed {
+            midiOutputStatus = "MIDI OUT: \(selectedMIDIDestinationDisplayName)"
+            pushStatus(StatusLineEvent(
+                message: "MIDI output armed: \(selectedMIDIDestinationDisplayName)",
+                severity: .success,
+                timestamp: Date()
+            ))
+            sendCurrentPatchToMIDIHost()
+        } else {
+            midiOutputStatus = "MIDI OUT OFF"
+            pushStatus(StatusLineEvent(
+                message: "MIDI output arm failed",
+                severity: .error,
+                timestamp: Date()
+            ))
+        }
+        syncMIDITransportClock(force: true)
+        publishKeyboardState()
+    }
+
+    func stopMIDIDestination(notify: Bool = true) {
+        let wasActive = midiOutputActive
+        stopMIDIClockPump()
+        if wasActive {
+            midiOutputEngine.sendStop()
+        }
+        midiOutputEngine.disarm()
+        midiOutputActive = false
+        midiOutputStatus = "MIDI OUT OFF"
+        if notify {
+            pushStatus(StatusLineEvent(
+                message: "MIDI output disarmed",
+                severity: .info,
+                timestamp: Date()
+            ))
+        }
+        publishKeyboardState()
+    }
+
+    private func syncMIDITransportClock(force: Bool = false) {
+        let shouldRunClock = midiOutputActive && keyboardClockMaster && engineRunning
+        let bpmChanged = abs(keyboardClockBPM - lastMIDIPublishedBPM) > 0.001
+        if shouldRunClock {
+            if !lastMIDIPublishedEngineRunning || force {
+                midiOutputEngine.sendStart()
+                lastMIDIPublishedEngineRunning = true
+            }
+            if force || bpmChanged || midiClockTimer == nil {
+                restartMIDIClockPump()
+            }
+        } else {
+            stopMIDIClockPump()
+            if lastMIDIPublishedEngineRunning || force {
+                midiOutputEngine.sendStop()
+                lastMIDIPublishedEngineRunning = false
+            }
+        }
+        lastMIDIPublishedBPM = keyboardClockBPM
+    }
+
+    private func restartMIDIClockPump() {
+        stopMIDIClockPump()
+        guard midiOutputActive && keyboardClockMaster && engineRunning else { return }
+        let bpm = max(20, min(300, keyboardClockBPM))
+        let interval = 60.0 / (bpm * 24.0)
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
+        timer.schedule(deadline: .now() + interval, repeating: interval, leeway: .milliseconds(1))
+        timer.setEventHandler { [weak self] in
+            self?.midiOutputEngine.sendClockTick()
+        }
+        timer.resume()
+        midiClockTimer = timer
+    }
+
+    private func stopMIDIClockPump() {
+        midiClockTimer?.setEventHandler {}
+        midiClockTimer?.cancel()
+        midiClockTimer = nil
+    }
+
+    private func sendCurrentPatchToMIDIHost() {
+        guard midiOutputActive else { return }
+        // Channel 15 (0-based 14) is reserved for host-link commands.
+        let controlChannel = 14
+        midiOutputEngine.sendBankSelect(
+            bankMSB: max(0, min(127, keyboardPatchBank)),
+            bankLSB: nil,
+            channel: controlChannel
+        )
+        midiOutputEngine.sendProgramChange(
+            program: max(0, min(127, keyboardPatchProgram)),
+            channel: controlChannel
+        )
+    }
+
+    private func sendVectorPatchToMIDIHost(_ patch: ParamVectorPatch) {
+        guard midiOutputActive else { return }
+        let controlChannel = 14
+        if let textAmount = patch.textAmount {
+            midiOutputEngine.sendControlChange(controller: 20, value: Int((max(0, min(1, textAmount)) * 127).rounded()), channel: controlChannel)
+        }
+        if let compositeBias = patch.compositeBias {
+            midiOutputEngine.sendControlChange(controller: 21, value: Int((max(0, min(1, compositeBias)) * 127).rounded()), channel: controlChannel)
+        }
+        if let audioGain = patch.audioGain {
+            midiOutputEngine.sendControlChange(controller: 22, value: Int((max(0, min(1, audioGain)) * 127).rounded()), channel: controlChannel)
+        }
+        if let spatialX = patch.spatialX {
+            midiOutputEngine.sendControlChange(controller: 23, value: Int((max(0, min(1, spatialX)) * 127).rounded()), channel: controlChannel)
+        }
+        if let spatialY = patch.spatialY {
+            midiOutputEngine.sendControlChange(controller: 24, value: Int((max(0, min(1, spatialY)) * 127).rounded()), channel: controlChannel)
+        }
+        if let spatialZ = patch.spatialZ {
+            midiOutputEngine.sendControlChange(controller: 25, value: Int((max(0, min(1, spatialZ)) * 127).rounded()), channel: controlChannel)
         }
     }
 
@@ -2739,6 +3299,17 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             gain: 0.34
         )
         dispatchPhoneAudioCommand(command, label: "CHOIR NOTE ON")
+        if !announcedVoicePublisherNotes.contains(clampedNote) {
+            announcedVoicePublisherNotes.insert(clampedNote)
+            publishVoicePublisherAnnouncement(forNote: clampedNote, active: true)
+        }
+        if midiOutputActive {
+            midiOutputEngine.sendNoteOn(
+                note: clampedNote,
+                velocity: Int((clampedVelocity * 127).rounded()),
+                channel: 0
+            )
+        }
     }
 
     func triggerPhoneChoirNoteOff() {
@@ -2753,6 +3324,18 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             note: clampedNote
         )
         dispatchPhoneAudioCommand(command, label: "CHOIR NOTE OFF")
+        if announcedVoicePublisherNotes.contains(clampedNote) {
+            announcedVoicePublisherNotes.remove(clampedNote)
+            publishVoicePublisherAnnouncement(forNote: clampedNote, active: false)
+        }
+        stopVoicePublisherTrack(forNote: clampedNote)
+        if midiOutputActive {
+            midiOutputEngine.sendNoteOff(
+                note: clampedNote,
+                velocity: 0,
+                channel: 0
+            )
+        }
     }
 
     func triggerPhoneAmbientNoise() {
@@ -2788,6 +3371,88 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         activeChoirMIDINotes.removeAll()
         let command = makePhoneCommand(kind: .stopAll)
         dispatchPhoneAudioCommand(command, label: "PHONE STOP ALL")
+        for note in announcedVoicePublisherNotes {
+            publishVoicePublisherAnnouncement(forNote: note, active: false)
+            stopVoicePublisherTrack(forNote: note)
+        }
+        announcedVoicePublisherNotes.removeAll()
+        clearVoicePublisherTrackAssignments()
+    }
+
+    private static func voicePublisherTrackID(forNote note: Int) -> String {
+        "note-\(max(0, min(127, note)))"
+    }
+
+    private static func parseVoicePublisherNote(trackID: String) -> Int? {
+        guard trackID.hasPrefix("note-") else { return nil }
+        let suffix = trackID.dropFirst("note-".count)
+        guard let parsed = Int(suffix) else { return nil }
+        return max(0, min(127, parsed))
+    }
+
+    private func stopVoicePublisherTrack(forNote note: Int) {
+        stopVoicePublisherTrack(trackID: Self.voicePublisherTrackID(forNote: note))
+    }
+
+    private func stopVoicePublisherTrack(trackID: String) {
+        voiceRTPPublisher.removeTrack(trackID: trackID)
+        voicePublisherTrackBusByID.removeValue(forKey: trackID)
+    }
+
+    private func clearVoicePublisherTrackAssignments() {
+        voicePublisherTrackBusByID.removeAll(keepingCapacity: true)
+        voicePublisherNextBusCursor = 0
+    }
+
+    private func sourceDescription(for source: VoiceTrackSource) -> String {
+        switch source {
+        case .returnBus(let index):
+            return "return-bus-\(index)"
+        case .synthesizedTone:
+            return "synth-fallback"
+        }
+    }
+
+    private func sourceForVoicePublisherTrack(trackID: String, note: Int) -> VoiceTrackSource {
+        guard voiceReturnRoutingConfig.enabled else {
+            return .synthesizedTone(note: note)
+        }
+
+        let busIndex: Int
+        if let assigned = voicePublisherTrackBusByID[trackID] {
+            busIndex = assigned
+        } else if let override = voiceReturnRoutingConfig.noteBusOverrides[note] {
+            busIndex = override
+            voicePublisherTrackBusByID[trackID] = override
+        } else {
+            let normalizedBusCount = max(1, voiceReturnRoutingConfig.busCount)
+            let next = voicePublisherNextBusCursor % normalizedBusCount
+            voicePublisherTrackBusByID[trackID] = next
+            voicePublisherNextBusCursor = (next + 1) % normalizedBusCount
+            busIndex = next
+        }
+        return .returnBus(index: busIndex)
+    }
+
+    private func publishVoicePublisherAnnouncement(forNote note: Int, active: Bool) {
+        guard linkState == .online || linkState == .degraded else { return }
+        let payload = HarnessVoicePublisherAnnouncePayload(
+            publisherId: "harness-native",
+            sessionId: voicePublisherSessionID,
+            trackId: Self.voicePublisherTrackID(forNote: note),
+            codec: "opus",
+            active: active,
+            updatedAt: Date().timeIntervalSince1970 * 1000
+        )
+        Task {
+            do {
+                try await websocket.sendEnvelope(kind: "voice_publisher_announce", data: payload)
+            } catch {
+                await MainActor.run {
+                    self.lastLinkError = error.localizedDescription
+                }
+            }
+        }
     }
 
     private func guardPhoneAudioDispatchReady(label: String) -> Bool {
@@ -3019,8 +3684,15 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private func publishKeyboardState() {
         guard linkState == .online || linkState == .degraded else { return }
         let nowMs = Date().timeIntervalSince1970 * 1000
-        keyboardHostLink = linkState == .online ? "online" : "degraded"
-        keyboardTransportRunning = engineRunning
+        if midiOutputActive {
+            keyboardHostLink = "online"
+        } else if selectedMIDIDestinationID.isEmpty {
+            keyboardHostLink = "offline"
+        } else {
+            keyboardHostLink = "degraded"
+        }
+        keyboardTransportRunning = engineRunning && midiOutputActive
+        syncMIDITransportClock()
         keyboardPatchName = sampleLabelByID[selectedSampleID] ?? keyboardPatchName
         let payload = HarnessKeyboardStatePayload(
             profileId: keyboardProfileID,
@@ -3054,6 +3726,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     }
 
     private func publishKeyboardPatchChange() {
+        sendCurrentPatchToMIDIHost()
         guard linkState == .online || linkState == .degraded else { return }
         let nowMs = Date().timeIntervalSince1970 * 1000
         let patchName = sampleLabelByID[selectedSampleID] ?? keyboardPatchName
@@ -3882,6 +4555,267 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         applyModelHealth(report)
     }
 
+    func requestBackendTextRuntimeStatus() {
+        let payload = HarnessTextRuntimeUpdatePayload(requestStatus: true)
+        Task { [weak self] in
+            do {
+                try await self?.websocket.sendEnvelope(kind: "text_runtime_update", data: payload)
+            } catch {
+                await MainActor.run {
+                    self?.pushStatus(StatusLineEvent(
+                        message: "Text runtime status request failed: \(error.localizedDescription)",
+                        severity: .warn,
+                        timestamp: Date()
+                    ))
+                }
+            }
+        }
+    }
+
+    private func normalizedBackendTextSemanticModel() -> String {
+        let trimmed = backendTextSemanticModelInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            backendTextSemanticModelInput = "gpt-4.1-mini"
+            return "gpt-4.1-mini"
+        }
+        if backendTextSemanticModelInput != trimmed {
+            backendTextSemanticModelInput = trimmed
+        }
+        return trimmed
+    }
+
+    private func normalizedBackendTextSemanticAPIKey() -> String {
+        let trimmed = backendTextSemanticAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if backendTextSemanticAPIKeyInput != trimmed {
+            backendTextSemanticAPIKeyInput = trimmed
+        }
+        return trimmed
+    }
+
+    private func persistBackendTextSemanticConfiguration() -> Bool {
+        let model = normalizedBackendTextSemanticModel()
+        UserDefaults.standard.set(model, forKey: Self.backendTextSemanticModelDefaultsKey)
+
+        let secret = normalizedBackendTextSemanticAPIKey()
+        let ok = Self.storeSecret(
+            secret,
+            service: Self.backendTextSemanticAPIKeychainService,
+            account: Self.backendTextSemanticAPIKeychainAccount
+        )
+        backendTextSemanticAPIKeySaved = !secret.isEmpty
+        if !ok {
+            pushStatus(StatusLineEvent(
+                message: "Semantic API key could not be saved to Keychain",
+                severity: .warn,
+                timestamp: Date()
+            ))
+        }
+        return ok
+    }
+
+    func reloadBackendTextRuntime() {
+        _ = persistBackendTextSemanticConfiguration()
+        let semanticModel = normalizedBackendTextSemanticModel()
+        let semanticAPIKey = normalizedBackendTextSemanticAPIKey()
+        let payload = HarnessTextRuntimeUpdatePayload(
+            requestStatus: true,
+            reload: true,
+            semanticMode: backendTextSemanticModeSelection,
+            semanticApiKey: semanticAPIKey,
+            semanticModel: semanticModel
+        )
+        Task { [weak self] in
+            do {
+                try await self?.websocket.sendEnvelope(kind: "text_runtime_update", data: payload)
+            } catch {
+                await MainActor.run {
+                    self?.pushStatus(StatusLineEvent(
+                        message: "Backend text runtime reload failed: \(error.localizedDescription)",
+                        severity: .warn,
+                        timestamp: Date()
+                    ))
+                }
+            }
+        }
+    }
+
+    func pushBackendTextRuntimeConfiguration(
+        pushStrict: Bool = true,
+        pushLoose: Bool = true,
+        pushModel: Bool = true
+    ) {
+        _ = persistBackendTextSemanticConfiguration()
+        let semanticModel = normalizedBackendTextSemanticModel()
+        let semanticAPIKey = normalizedBackendTextSemanticAPIKey()
+        let payload = HarnessTextRuntimeUpdatePayload(
+            requestStatus: true,
+            strictCandidates: pushStrict && !backendRuntimeStrictCandidates.isEmpty ? backendRuntimeStrictCandidates : nil,
+            looseCandidates: pushLoose && !backendRuntimeLooseCandidates.isEmpty ? backendRuntimeLooseCandidates : nil,
+            modelPayloadJSON: pushModel ? backendRuntimeModelPayloadJSON : nil,
+            semanticMode: backendTextSemanticModeSelection,
+            semanticApiKey: semanticAPIKey,
+            semanticModel: semanticModel
+        )
+        Task { [weak self] in
+            do {
+                try await self?.websocket.sendEnvelope(kind: "text_runtime_update", data: payload)
+                await MainActor.run {
+                    self?.pushStatus(StatusLineEvent(
+                        message: "Text runtime pushed to backend",
+                        severity: .success,
+                        timestamp: Date()
+                    ))
+                }
+            } catch {
+                await MainActor.run {
+                    self?.pushStatus(StatusLineEvent(
+                        message: "Text runtime push failed: \(error.localizedDescription)",
+                        severity: .warn,
+                        timestamp: Date()
+                    ))
+                }
+            }
+        }
+    }
+
+    func applyBackendTextSemanticModeSelection() {
+        _ = persistBackendTextSemanticConfiguration()
+        let semanticModel = normalizedBackendTextSemanticModel()
+        let semanticAPIKey = normalizedBackendTextSemanticAPIKey()
+        let payload = HarnessTextRuntimeUpdatePayload(
+            requestStatus: true,
+            semanticMode: backendTextSemanticModeSelection,
+            semanticApiKey: semanticAPIKey,
+            semanticModel: semanticModel
+        )
+        Task { [weak self] in
+            do {
+                try await self?.websocket.sendEnvelope(kind: "text_runtime_update", data: payload)
+                await MainActor.run {
+                    let modeLabel = self?.backendTextSemanticModeSelection.rawValue.uppercased() ?? "UNKNOWN"
+                    let keyState = semanticAPIKey.isEmpty ? "no key" : "key loaded"
+                    self?.pushStatus(StatusLineEvent(
+                        message: "Semantic runtime applied (\(modeLabel), \(semanticModel), \(keyState))",
+                        severity: .success,
+                        timestamp: Date()
+                    ))
+                }
+            } catch {
+                await MainActor.run {
+                    self?.pushStatus(StatusLineEvent(
+                        message: "Semantic mode update failed: \(error.localizedDescription)",
+                        severity: .warn,
+                        timestamp: Date()
+                    ))
+                }
+            }
+        }
+    }
+
+    func clearBackendTextSemanticAPIKey() {
+        backendTextSemanticAPIKeyInput = ""
+        _ = persistBackendTextSemanticConfiguration()
+        applyBackendTextSemanticModeSelection()
+    }
+
+    func importBackendStrictScriptBankFromDisk() {
+        guard let url = pickTextRuntimeFile(title: "Import Strict Script Bank") else {
+            return
+        }
+        do {
+            let parsed = try parseRuntimeScriptCandidates(from: url, bankHint: "strict")
+            guard !parsed.isEmpty else {
+                pushStatus(StatusLineEvent(
+                    message: "Strict script import produced no valid lines",
+                    severity: .warn,
+                    timestamp: Date()
+                ))
+                return
+            }
+            backendRuntimeStrictCandidates = parsed
+            backendTextImportedStrictLabel = url.lastPathComponent
+            pushStatus(StatusLineEvent(
+                message: "Loaded strict script bank (\(parsed.count) lines)",
+                severity: .success,
+                timestamp: Date()
+            ))
+            pushBackendTextRuntimeConfiguration(pushStrict: true, pushLoose: false, pushModel: false)
+        } catch {
+            pushStatus(StatusLineEvent(
+                message: "Strict script import failed: \(error.localizedDescription)",
+                severity: .warn,
+                timestamp: Date()
+            ))
+        }
+    }
+
+    func importBackendLooseScriptBankFromDisk() {
+        guard let url = pickTextRuntimeFile(title: "Import Loose Script Bank") else {
+            return
+        }
+        do {
+            let parsed = try parseRuntimeScriptCandidates(from: url, bankHint: "loose")
+            guard !parsed.isEmpty else {
+                pushStatus(StatusLineEvent(
+                    message: "Loose script import produced no valid lines",
+                    severity: .warn,
+                    timestamp: Date()
+                ))
+                return
+            }
+            backendRuntimeLooseCandidates = parsed
+            backendTextImportedLooseLabel = url.lastPathComponent
+            pushStatus(StatusLineEvent(
+                message: "Loaded loose script bank (\(parsed.count) lines)",
+                severity: .success,
+                timestamp: Date()
+            ))
+            pushBackendTextRuntimeConfiguration(pushStrict: false, pushLoose: true, pushModel: false)
+        } catch {
+            pushStatus(StatusLineEvent(
+                message: "Loose script import failed: \(error.localizedDescription)",
+                severity: .warn,
+                timestamp: Date()
+            ))
+        }
+    }
+
+    func importBackendTextModelFromDisk() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Backend Text Model JSON"
+        panel.prompt = "Import"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [UTType.json]
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            let raw = try String(contentsOf: url, encoding: .utf8)
+            guard let data = raw.data(using: .utf8) else {
+                throw NSError(domain: "TextRuntime", code: 1, userInfo: [NSLocalizedDescriptionKey: "Model JSON encoding invalid"])
+            }
+            _ = try JSONSerialization.jsonObject(with: data)
+            backendRuntimeModelPayloadJSON = raw
+            backendTextImportedModelLabel = url.lastPathComponent
+            pushStatus(StatusLineEvent(
+                message: "Loaded backend text model JSON",
+                severity: .success,
+                timestamp: Date()
+            ))
+            pushBackendTextRuntimeConfiguration(pushStrict: false, pushLoose: false, pushModel: true)
+        } catch {
+            pushStatus(StatusLineEvent(
+                message: "Backend model import failed: \(error.localizedDescription)",
+                severity: .warn,
+                timestamp: Date()
+            ))
+        }
+    }
+
     func importSceneMedia(for scene: ShowState) {
         guard scene != .main else {
             pushStatus(StatusLineEvent(
@@ -3996,22 +4930,165 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
 
     func setDynamicBinSelectionFromControl(_ value: Double) {
         let normalized = Self.clamp01(value)
-        updatePerformerProceduralState { state in
-            state.dynamicBinSelection = normalized
-        }
-        recordSoundManipulationFocus(lane: "SRC X", value: normalized, controlIDHint: "gd:x")
-        maybeTriggerHOTASDynamicSampleScoring(
-            lane: "SRC X",
+        applyDynamicVideoAxis(
             axis: .x,
-            normalizedControlValue: normalized
+            normalizedControlValue: normalized,
+            lane: "SRC X",
+            controlIDHint: "gd:x"
         )
     }
 
     func setCutCadenceFromControl(_ value: Double) {
         let normalized = Self.clamp01(value)
+        applyDynamicVideoAxis(
+            axis: .y,
+            normalizedControlValue: normalized,
+            lane: "CUT Y",
+            controlIDHint: "gd:y"
+        )
+    }
+
+    func setCompositorBlendFromControl(_ value: Double) {
+        let normalized = Self.clamp01(value)
+        applyDynamicVideoAxis(
+            axis: .z,
+            normalizedControlValue: normalized,
+            lane: "COMP Z",
+            controlIDHint: "gd:rz"
+        )
+    }
+
+    func setDynamicAudioSurfXFromControl(_ value: Double) {
+        let normalized = Self.clamp01(value)
+        maybeTriggerHOTASDynamicSampleScoring(
+            lane: "AUDIO SURF X",
+            axis: .x,
+            normalizedControlValue: normalized
+        )
+        recordSoundManipulationFocus(lane: "AUDIO SURF X", value: normalized, controlIDHint: "gd:x")
+    }
+
+    func setDynamicAudioSurfYFromControl(_ value: Double) {
+        let normalized = Self.clamp01(value)
+        maybeTriggerHOTASDynamicSampleScoring(
+            lane: "AUDIO SURF Y",
+            axis: .y,
+            normalizedControlValue: normalized
+        )
+        recordSoundManipulationFocus(lane: "AUDIO SURF Y", value: normalized, controlIDHint: "gd:y")
+    }
+
+    func setDynamicAudioSurfZFromControl(_ value: Double) {
+        let normalized = Self.clamp01(value)
+        maybeTriggerHOTASDynamicSampleScoring(
+            lane: "AUDIO SURF Z",
+            axis: .z,
+            normalizedControlValue: normalized
+        )
+        recordSoundManipulationFocus(lane: "AUDIO SURF Z", value: normalized, controlIDHint: "gd:rz")
+    }
+
+    func setDynamicAudioDensityFromControl(_ value: Double) {
+        let normalized = Self.clamp01(value)
+        dynamicAudioDensity = normalized
+        dynamicAudioLayerCount = 1 + Int((normalized * 3).rounded(.toNearestOrAwayFromZero))
+        recordSoundManipulationFocus(lane: "DENSITY", value: normalized, controlIDHint: "gd:42")
         updatePerformerProceduralState { state in
-            state.cutCadence = normalized
-            switch normalized {
+            state.cutCadence = max(state.cutCadence, normalized * 0.78)
+        }
+    }
+
+    func setDynamicEchoMacroFromControl(_ value: Double) {
+        let normalized = Self.clamp01(value)
+        dynamicEchoMacro = normalized
+        recordSoundManipulationFocus(lane: "ECHO", value: normalized, controlIDHint: "gd:wheel")
+        updatePerformerProceduralState { state in
+            state.echoProbabilityGlobal = normalized
+            state.echoProbabilityByStem = [
+                "pads": normalized,
+                "hotas": normalized,
+                "choir": normalized,
+                "fx": normalized
+            ]
+        }
+    }
+
+    func setDynamicTextSurfFromControl(_ value: Double) {
+        guard currentHOTASOutputModeID() == .dynamic else { return }
+        let normalized = Self.clamp01(value)
+        guard !dynamicTextMuted else { return }
+        updatePerformerProceduralState { state in
+            state.textProbability = max(0.08, normalized)
+            state.strictLooseBlend = Self.clamp01(0.82 - (normalized * 0.66))
+        }
+        recordSoundManipulationFocus(lane: "TEXT SURF", value: normalized, controlIDHint: "trig:a")
+    }
+
+    func triggerDynamicTextBurstFromControl() {
+        guard currentHOTASOutputModeID() == .dynamic else { return }
+        guard !dynamicTextMuted else { return }
+        let nowMs = ConductorHarnessViewModel.nowMilliseconds()
+        let burstCooldownMs: TimeInterval = 700
+        guard nowMs - dynamicTextBurstLastAtMs >= burstCooldownMs else { return }
+        dynamicTextBurstLastAtMs = nowMs
+        updatePerformerProceduralState { state in
+            state.textProbability = 1
+            state.strictLooseBlend = min(state.strictLooseBlend, 0.35)
+        }
+        pushStatus(StatusLineEvent(
+            message: "TEXT BURST fired",
+            severity: .info,
+            timestamp: Date()
+        ))
+    }
+
+    func toggleDynamicTextMuteFromControl() {
+        guard currentHOTASOutputModeID() == .dynamic else {
+            togglePreviewPlayback()
+            return
+        }
+
+        if dynamicTextMuted {
+            dynamicTextMuted = false
+            let restored = Self.clamp01(max(0.08, dynamicTextProbabilityBeforeMute))
+            updatePerformerProceduralState { state in
+                state.textProbability = restored
+            }
+            pushStatus(StatusLineEvent(
+                message: "DYNAMIC text restored",
+                severity: .success,
+                timestamp: Date()
+            ))
+        } else {
+            dynamicTextMuted = true
+            dynamicTextProbabilityBeforeMute = performerProceduralState.textProbability
+            updatePerformerProceduralState { state in
+                state.textProbability = 0
+            }
+            pushStatus(StatusLineEvent(
+                message: "DYNAMIC text muted",
+                severity: .warn,
+                timestamp: Date()
+            ))
+        }
+    }
+
+    private func applyDynamicVideoAxis(
+        axis: HOTASSampleSpaceAxis,
+        normalizedControlValue: Double,
+        lane: String,
+        controlIDHint: String
+    ) {
+        let nowMs = ConductorHarnessViewModel.nowMilliseconds()
+        let (frame, _) = updateUltrachunkControlFrame(
+            axis: axis,
+            normalizedControlValue: normalizedControlValue,
+            nowMs: nowMs
+        )
+        updatePerformerProceduralState { state in
+            state.dynamicBinSelection = frame.x
+            state.cutCadence = frame.y
+            switch frame.y {
             case ..<0.28:
                 state.transitionMode = .cut
             case ..<0.62:
@@ -4021,20 +5098,9 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             default:
                 state.transitionMode = .stutter
             }
-        }
-        recordSoundManipulationFocus(lane: "CUT Y", value: normalized, controlIDHint: "gd:y")
-        maybeTriggerHOTASDynamicSampleScoring(
-            lane: "CUT Y",
-            axis: .y,
-            normalizedControlValue: normalized
-        )
-    }
 
-    func setCompositorBlendFromControl(_ value: Double) {
-        let normalized = Self.clamp01(value)
-        updatePerformerProceduralState { state in
-            state.fade = normalized
-            switch normalized {
+            state.fade = frame.twist
+            switch frame.twist {
             case ..<0.17:
                 state.compositorPreset = .blend
             case ..<0.34:
@@ -4048,13 +5114,20 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             default:
                 state.compositorPreset = .stutter
             }
+
+            let splitSignal = Self.clamp01((frame.speed * 0.62) + (abs(frame.x - 0.5) * 0.46))
+            switch splitSignal {
+            case ..<0.30:
+                state.splitLayout = .none
+            case ..<0.55:
+                state.splitLayout = .split2
+            case ..<0.78:
+                state.splitLayout = .split3
+            default:
+                state.splitLayout = .split4
+            }
         }
-        recordSoundManipulationFocus(lane: "COMP Z", value: normalized, controlIDHint: "gd:rz")
-        maybeTriggerHOTASDynamicSampleScoring(
-            lane: "COMP Z",
-            axis: .z,
-            normalizedControlValue: normalized
-        )
+        recordSoundManipulationFocus(lane: lane, value: normalizedControlValue, controlIDHint: controlIDHint)
     }
 
     private func recordSoundManipulationFocus(
@@ -4087,20 +5160,11 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     }
 
     func setStaticVisualOverrideHoldFromControl(_ isHeld: Bool) {
-        let next = hotasStaticVideoOverrideEnabled ? isHeld : false
-        guard hotasStaticVisualOverrideHeld != next else { return }
-        hotasStaticVisualOverrideHeld = next
-        refreshProgramAudioState(nowMs: ConductorHarnessViewModel.nowMilliseconds())
-        Task { [hudTelemetryStore] in
-            await hudTelemetryStore.ingestSystem(
-                stage: .applied,
-                severity: .apply,
-                controlID: "clutch:static_visual",
-                semanticAction: next ? "static_visual_clutch_on" : "static_visual_clutch_off",
-                outcome: next ? "HELD" : "RELEASED",
-                detail: nil
-            )
+        guard hotasStaticVideoOverrideEnabled else {
+            setRightStickRouteModeFromControl(.base)
+            return
         }
+        setRightStickRouteModeFromControl(isHeld ? .audioOnly : .base)
     }
 
     func setStaticSampleMorphFromControl(_ value: Double) {
@@ -4246,6 +5310,43 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         }
     }
 
+    func cycleRightStickRouteModeFromControl() {
+        let next: RightStickRouteModeID
+        switch rightStickRouteMode {
+        case .base:
+            next = .audioOnly
+        case .audioOnly:
+            next = .base
+        case .dualWrite:
+            next = .base
+        }
+        setRightStickRouteModeFromControl(next)
+    }
+
+    func setRightStickRouteModeFromControl(_ mode: RightStickRouteModeID) {
+        guard rightStickRouteMode != mode else { return }
+        rightStickRouteMode = mode
+        // Compatibility flag for legacy call sites still keyed off clutch-held semantics.
+        hotasStaticVisualOverrideHeld = mode != .base
+
+        let modeLabel: String
+        switch mode {
+        case .base:
+            modeLabel = "BASE"
+        case .audioOnly:
+            modeLabel = "AUDIO"
+        case .dualWrite:
+            modeLabel = "DUAL"
+        }
+
+        pushStatus(StatusLineEvent(
+            message: "RIGHT STICK route -> \(modeLabel)",
+            severity: .info,
+            timestamp: Date()
+        ))
+        refreshProgramAudioState(nowMs: ConductorHarnessViewModel.nowMilliseconds())
+    }
+
     func setPhoneChoirContextActiveFromControl(_ active: Bool) {
         guard hotasPhoneChoirContextActive != active else { return }
         hotasPhoneChoirContextActive = active
@@ -4304,7 +5405,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     private func applyStaticSampleMorphSelection() {
         guard currentHOTASOutputModeID() != .dynamic else { return }
         guard !hotasPhoneChoirContextActive else { return }
-        guard !hotasStaticVisualOverrideHeld else { return }
+        guard rightStickRouteMode != .audioOnly else { return }
 
         let candidateIDs = mainBankSampleIDs(for: activeSampleBank)
         guard let resolved = sampleMorphEngine.resolveSampleID(
@@ -4355,7 +5456,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
     ) {
         guard !hotasPhoneChoirContextActive else { return }
         guard currentHOTASOutputModeID() != .dynamic else { return }
-        guard !hotasStaticVisualOverrideHeld else { return }
+        guard rightStickRouteMode != .base else { return }
         maybeTriggerHOTASSampleSpaceAudition(
             lane: lane,
             axis: axis,
@@ -4941,6 +6042,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return true
         } catch {
             engineRunning = false
+            syncMIDITransportClock(force: true)
             resetAudioRouteStatus()
             pushStatus(StatusLineEvent(
                 message: "\(operation) failed: \(error.localizedDescription)",
@@ -5210,6 +6312,20 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         state.fade = Self.clamp01(state.fade)
         state.cutCadence = Self.clamp01(state.cutCadence)
         state.dynamicBinSelection = Self.clamp01(state.dynamicBinSelection)
+        if let promptInfluence = state.promptInfluence {
+            state.promptInfluence = Self.clamp01(promptInfluence)
+        }
+        if let directPickInfluence = state.directPickInfluence {
+            state.directPickInfluence = Self.clamp01(directPickInfluence)
+        }
+        if let echoGlobal = state.echoProbabilityGlobal {
+            state.echoProbabilityGlobal = Self.clamp01(echoGlobal)
+        }
+        if let byStem = state.echoProbabilityByStem {
+            state.echoProbabilityByStem = byStem.reduce(into: [String: Double]()) { result, entry in
+                result[entry.key] = Self.clamp01(entry.value)
+            }
+        }
 
         if dynamicBinManifest.isEmpty {
             state.dynamicBinIndex = 0
@@ -5250,6 +6366,194 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
                 }
             }
         }
+    }
+
+    private func pickTextRuntimeFile(title: String) -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = title
+        panel.prompt = "Import"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [UTType.plainText, UTType.json]
+        guard panel.runModal() == .OK else {
+            return nil
+        }
+        return panel.url
+    }
+
+    private func parseRuntimeScriptCandidates(
+        from url: URL,
+        bankHint: String
+    ) throws -> [HarnessRuntimeScriptCandidate] {
+        let raw = try String(contentsOf: url, encoding: .utf8)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return []
+        }
+
+        if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") {
+            if let parsed = try parseRuntimeScriptCandidatesFromJSON(raw: raw, bankHint: bankHint), !parsed.isEmpty {
+                return parsed
+            }
+        }
+
+        return parseRuntimeScriptCandidatesFromText(raw: raw, bankHint: bankHint)
+    }
+
+    private func parseRuntimeScriptCandidatesFromJSON(
+        raw: String,
+        bankHint: String
+    ) throws -> [HarnessRuntimeScriptCandidate]? {
+        guard let data = raw.data(using: .utf8) else {
+            throw NSError(
+                domain: "TextRuntime",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Could not decode JSON as UTF-8"]
+            )
+        }
+        let object = try JSONSerialization.jsonObject(with: data)
+
+        let candidateArray: [Any]
+        if let list = object as? [Any] {
+            candidateArray = list
+        } else if let map = object as? [String: Any] {
+            let bankKeys: [String]
+            if bankHint == "strict" {
+                bankKeys = ["strict", "strictScriptBank", "strictBank", "strictLines", "candidates", "lines"]
+            } else {
+                bankKeys = ["loose", "looseSourceBank", "looseBank", "looseLines", "candidates", "lines"]
+            }
+            var resolved: [Any] = []
+            for key in bankKeys {
+                if let nested = map[key] as? [Any], !nested.isEmpty {
+                    resolved = nested
+                    break
+                }
+            }
+            candidateArray = resolved
+        } else {
+            return nil
+        }
+
+        let candidates = candidateArray.compactMap { entry -> HarnessRuntimeScriptCandidate? in
+            if let text = entry as? String {
+                let cleaned = sanitizeRuntimeTextLine(text)
+                guard !cleaned.isEmpty else { return nil }
+                return HarnessRuntimeScriptCandidate(text: cleaned, weight: 0.7)
+            }
+            guard let map = entry as? [String: Any] else {
+                return nil
+            }
+            let textRaw = (map["text"] as? String) ?? (map["line"] as? String) ?? (map["baseText"] as? String)
+            guard let textRaw else { return nil }
+            let cleaned = sanitizeRuntimeTextLine(textRaw)
+            guard !cleaned.isEmpty else { return nil }
+            let id = (map["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let weight = parseRuntimeWeight(map["weight"])
+            return HarnessRuntimeScriptCandidate(
+                id: id?.isEmpty == true ? nil : id,
+                text: cleaned,
+                weight: weight
+            )
+        }
+
+        return dedupeRuntimeScriptCandidates(candidates)
+    }
+
+    private func parseRuntimeScriptCandidatesFromText(
+        raw: String,
+        bankHint: String
+    ) -> [HarnessRuntimeScriptCandidate] {
+        let lines = raw.split(whereSeparator: \.isNewline)
+        var parsed: [HarnessRuntimeScriptCandidate] = []
+        parsed.reserveCapacity(lines.count)
+
+        for rawLine in lines {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty || line.hasPrefix("#") || line.hasPrefix("//") {
+                continue
+            }
+            let components = line.split(separator: "|", omittingEmptySubsequences: false).map {
+                String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            var id: String?
+            var weight: Double?
+            var text = line
+
+            if components.count >= 3 {
+                id = components[0].isEmpty ? nil : components[0]
+                if let parsedWeight = parseRuntimeWeight(components[1]) {
+                    weight = parsedWeight
+                }
+                text = components.dropFirst(2).joined(separator: " | ")
+            } else if components.count == 2 {
+                if let parsedWeight = parseRuntimeWeight(components[0]) {
+                    weight = parsedWeight
+                    text = components[1]
+                } else {
+                    id = components[0].isEmpty ? nil : components[0]
+                    text = components[1]
+                }
+            }
+
+            let cleaned = sanitizeRuntimeTextLine(text)
+            if cleaned.isEmpty {
+                continue
+            }
+            parsed.append(HarnessRuntimeScriptCandidate(id: id, text: cleaned, weight: weight))
+        }
+
+        if parsed.isEmpty && !raw.isEmpty {
+            let fallbackID = "\(bankHint)-1"
+            let cleaned = sanitizeRuntimeTextLine(raw)
+            if !cleaned.isEmpty {
+                parsed.append(HarnessRuntimeScriptCandidate(id: fallbackID, text: cleaned, weight: 0.7))
+            }
+        }
+
+        return dedupeRuntimeScriptCandidates(parsed)
+    }
+
+    private func parseRuntimeWeight(_ value: Any?) -> Double? {
+        if let number = value as? Double {
+            return Self.clamp01(number)
+        }
+        if let number = value as? Int {
+            return Self.clamp01(Double(number))
+        }
+        if let number = value as? NSNumber {
+            return Self.clamp01(number.doubleValue)
+        }
+        if let text = value as? String, let number = Double(text) {
+            return Self.clamp01(number)
+        }
+        return nil
+    }
+
+    private func sanitizeRuntimeTextLine(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+([,.;!?])", with: "$1", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func dedupeRuntimeScriptCandidates(
+        _ input: [HarnessRuntimeScriptCandidate]
+    ) -> [HarnessRuntimeScriptCandidate] {
+        var seen: Set<String> = []
+        var output: [HarnessRuntimeScriptCandidate] = []
+        output.reserveCapacity(input.count)
+        for candidate in input {
+            let key = candidate.text.lowercased()
+            if seen.contains(key) {
+                continue
+            }
+            seen.insert(key)
+            output.append(candidate)
+        }
+        return output
     }
 
     private func resolveModelBundleURL(from selectedURL: URL) -> URL? {
@@ -5935,6 +7239,36 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         modelHealthSummary = report.summary
         modelChecks = report.checks
         modelRuntimeFailures = report.runtimeFailureCount
+    }
+
+    private func applyBackendTextRuntimeStatus(_ status: HarnessTextRuntimeStatusPayload) {
+        backendTextRuntimeStatus = status
+        backendTextStrictCount = status.strictCount
+        backendTextLooseCount = status.looseCount
+        backendTextStrictSource = status.strictSource
+        backendTextLooseSource = status.looseSource
+        backendTextWarnings = status.warnings
+        if let model = status.modelHealth {
+            backendTextModelSummary = "\(model.active ? "ACTIVE" : "NOGO") · \(model.summary)"
+        } else {
+            backendTextModelSummary = "Backend model status unavailable"
+        }
+        if let semantic = status.semantic {
+            backendTextSemanticModeSelection = semantic.mode
+            let health = semantic.enabled ? "enabled" : "disabled"
+            let modelName = semantic.model ?? "none"
+            backendTextSemanticSummary = "\(semantic.mode.rawValue.uppercased()) · \(health) · \(modelName)"
+            if let remoteConfigured = semantic.apiKeyConfigured {
+                backendTextSemanticAPIKeyConfiguredRemote = remoteConfigured
+            }
+            if let model = semantic.model?.trimmingCharacters(in: .whitespacesAndNewlines), !model.isEmpty {
+                backendTextSemanticModelInput = model
+                UserDefaults.standard.set(model, forKey: Self.backendTextSemanticModelDefaultsKey)
+            }
+        } else {
+            backendTextSemanticSummary = "Semantic mode OFF"
+            backendTextSemanticAPIKeyConfiguredRemote = nil
+        }
     }
 
     // MARK: - HOTAS controls
@@ -7017,9 +8351,17 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         selectedSampleID = selectedID
         guard let sampleURL = samplePackEntries[selectedID] else { return }
 
-        let gain = min(0.9, max(0.18, 0.18 + (max(0.05, velocity) * 0.55)))
+        let gain = min(
+            0.95,
+            max(0.14, 0.16 + (max(0.05, velocity) * 0.48) + (dynamicAudioDensity * 0.22))
+        )
         do {
             try quadAudioEngine.triggerSample(url: sampleURL, gain: gain)
+            triggerDynamicLayeredAccents(
+                baseIndex: safeIndex,
+                candidateIDs: candidateIDs,
+                baseGain: gain
+            )
             recordSoundManipulationFocus(
                 lane: "PUSH PAD SLOT \(slot)",
                 value: gain,
@@ -7040,8 +8382,45 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         }
     }
 
+    private func triggerDynamicLayeredAccents(
+        baseIndex: Int,
+        candidateIDs: [String],
+        baseGain: Double
+    ) {
+        guard currentHOTASOutputModeID() == .dynamic else { return }
+        let layers = min(4, max(1, dynamicAudioLayerCount))
+        guard layers > 1 else { return }
+
+        let density = Self.clamp01(dynamicAudioDensity)
+        let step = max(1, Int(((1 - density) * 2.0).rounded(.down)) + 1)
+        let layerDelaySeconds = max(0.02, 0.10 - (density * 0.07))
+
+        for layer in 1 ..< layers {
+            let direction = layer % 2 == 0 ? -1 : 1
+            let candidateIndex = min(
+                max(0, baseIndex + (direction * step * layer)),
+                candidateIDs.count - 1
+            )
+            guard candidateIndex != baseIndex else { continue }
+            let sampleID = candidateIDs[candidateIndex]
+            guard let sampleURL = samplePackEntries[sampleID] else { continue }
+
+            let layerGain = min(
+                0.72,
+                max(0.07, baseGain * (0.66 - (Double(layer) * 0.12) + (density * 0.16)))
+            )
+            let delay = layerDelaySeconds * Double(layer)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                try? self.quadAudioEngine.triggerSample(url: sampleURL, gain: layerGain)
+            }
+        }
+    }
+
     private func maybeDispatchPushPadEchoToPhone(sampleID: String, gain: Double, sourceID: String) {
-        let probability = min(0.2, max(0, pushPhonePadEchoProbability))
+        let legacyProbability = min(0.2, max(0, pushPhonePadEchoProbability))
+        let macroProbability = min(0.35, max(0, dynamicEchoMacro * 0.35))
+        let probability = max(legacyProbability, macroProbability)
         guard probability > 0 else { return }
         guard phoneAudioGateCommitted else { return }
         guard !phoneAudioAvailableDevices.isEmpty else { return }
@@ -7223,9 +8602,15 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
         selectedSampleID = selectedID
         guard let sampleURL = samplePackEntries[selectedID] else { return }
 
-        let gain = min(0.9, max(0.18, 0.18 + (velocity * 0.55)))
+        let gain = min(0.95, max(0.14, 0.16 + (velocity * 0.48) + (dynamicAudioDensity * 0.22)))
         do {
             try quadAudioEngine.triggerSample(url: sampleURL, gain: gain)
+            triggerDynamicLayeredAccents(
+                baseIndex: safeIndex,
+                candidateIDs: candidateIDs,
+                baseGain: gain
+            )
+            maybeDispatchPushPadEchoToPhone(sampleID: selectedID, gain: gain, sourceID: "midi")
             recordSoundManipulationFocus(
                 lane: "MIDI PAD NOTE \(note)",
                 value: gain,
@@ -7253,7 +8638,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             activeOutputMode: currentHOTASOutputModeID(),
             phoneChoirModeActive: hotasPhoneChoirContextActive,
             allowStaticVideoOverride: hotasStaticVideoOverrideEnabled,
-            staticVisualClutchActive: hotasStaticVisualOverrideHeld
+            rightStickRouteMode: rightStickRouteMode
         )
     }
 
@@ -7957,6 +9342,53 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             return
         }
 
+        if kind == "voice_publisher_announce",
+           let payload = json["data"],
+           let data = try? JSONSerialization.data(withJSONObject: payload),
+           let decoded = try? JSONDecoder().decode(HarnessVoicePublisherAnnouncePayload.self, from: data) {
+            if let error = decoded.error, !error.isEmpty {
+                stopVoicePublisherTrack(trackID: decoded.trackId)
+                pushStatus(StatusLineEvent(
+                    message: "VOICE PUBLISHER \(decoded.trackId) NOGO: \(error)",
+                    severity: .warn,
+                    timestamp: Date()
+                ))
+            } else if decoded.active, let ingest = decoded.ingest {
+                if let note = Self.parseVoicePublisherNote(trackID: decoded.trackId),
+                   announcedVoicePublisherNotes.contains(note) {
+                    let source = sourceForVoicePublisherTrack(trackID: decoded.trackId, note: note)
+                    voiceRTPPublisher.upsertTrack(
+                        trackID: decoded.trackId,
+                        note: note,
+                        ingest: VoiceRTPIngestEndpoint(
+                            ip: ingest.ip,
+                            port: ingest.port,
+                            payloadType: ingest.payloadType,
+                            ssrc: ingest.ssrc,
+                            clockRate: ingest.clockRate,
+                            channels: ingest.channels
+                        ),
+                        source: source
+                    )
+                    pushStatus(StatusLineEvent(
+                        message: "VOICE PUBLISHER \(decoded.trackId) \(sourceDescription(for: source)) RTP \(ingest.ip):\(ingest.port) PT\(ingest.payloadType) SSRC \(ingest.ssrc)",
+                        severity: .info,
+                        timestamp: Date()
+                    ))
+                } else {
+                    stopVoicePublisherTrack(trackID: decoded.trackId)
+                    pushStatus(StatusLineEvent(
+                        message: "VOICE PUBLISHER \(decoded.trackId) skipped: note inactive",
+                        severity: .warn,
+                        timestamp: Date()
+                    ))
+                }
+            } else {
+                stopVoicePublisherTrack(trackID: decoded.trackId)
+            }
+            return
+        }
+
         if kind == "keyboard_state",
            let payload = json["data"],
            let data = try? JSONSerialization.data(withJSONObject: payload),
@@ -7973,6 +9405,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             keyboardPatchName = decoded.patch.patchName ?? keyboardPatchName
             keyboardPatchBank = decoded.patch.bank
             keyboardPatchProgram = decoded.patch.program
+            syncMIDITransportClock()
             return
         }
 
@@ -7984,6 +9417,7 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             keyboardPatchName = decoded.patchName ?? keyboardPatchName
             keyboardPatchBank = decoded.bank
             keyboardPatchProgram = decoded.program
+            sendCurrentPatchToMIDIHost()
             return
         }
 
@@ -8007,6 +9441,14 @@ final class ConductorHarnessViewModel: ObservableObject, ControlActionRouting {
             if state != snapshotState {
                 state = snapshotState
             }
+            return
+        }
+
+        if kind == "text_runtime_status",
+           let payload = json["data"],
+           let data = try? JSONSerialization.data(withJSONObject: payload),
+           let decoded = try? JSONDecoder().decode(HarnessTextRuntimeStatusPayload.self, from: data) {
+            applyBackendTextRuntimeStatus(decoded)
         }
     }
 }

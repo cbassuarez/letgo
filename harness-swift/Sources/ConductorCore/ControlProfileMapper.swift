@@ -4,25 +4,25 @@ public struct ControlRuntimeContext: Equatable, Sendable {
     public var activeOutputMode: FlightOutputModeID
     public var phoneChoirModeActive: Bool
     public var allowStaticVideoOverride: Bool
-    public var staticVisualClutchActive: Bool
+    public var rightStickRouteMode: RightStickRouteModeID
 
     public static let neutral = ControlRuntimeContext(
         activeOutputMode: .off,
         phoneChoirModeActive: false,
         allowStaticVideoOverride: true,
-        staticVisualClutchActive: false
+        rightStickRouteMode: .base
     )
 
     public init(
         activeOutputMode: FlightOutputModeID,
         phoneChoirModeActive: Bool,
         allowStaticVideoOverride: Bool,
-        staticVisualClutchActive: Bool
+        rightStickRouteMode: RightStickRouteModeID
     ) {
         self.activeOutputMode = activeOutputMode
         self.phoneChoirModeActive = phoneChoirModeActive
         self.allowStaticVideoOverride = allowStaticVideoOverride
-        self.staticVisualClutchActive = staticVisualClutchActive
+        self.rightStickRouteMode = rightStickRouteMode
     }
 }
 
@@ -43,6 +43,8 @@ public final class ControlProfileMapper {
     private var ultrachunkOverlayEnabled = false
     private var roleAxisThresholdLatched: [String: Bool] = [:]
     private var holdCaptureStartedAt: [ControlRole: TimeInterval] = [:]
+    private var clutchLastTapAt: TimeInterval?
+    private var clutchLastEmitAt: TimeInterval?
 
     public init(profile: ControlProfile) {
         self.profile = profile
@@ -59,6 +61,8 @@ public final class ControlProfileMapper {
         ultrachunkOverlayEnabled = false
         roleAxisThresholdLatched.removeAll()
         holdCaptureStartedAt.removeAll()
+        clutchLastTapAt = nil
+        clutchLastEmitAt = nil
     }
 
     public func map(
@@ -95,34 +99,55 @@ public final class ControlProfileMapper {
                 return scalarAction(signal: signal, action: .setChoirFieldSpread(normalized))
             }
             if context.activeOutputMode == .dynamic {
-                return scalarAction(signal: signal, action: .setDynamicBinSelection(normalized))
+                return rightStickRouteActions(
+                    signal: signal,
+                    context: context,
+                    baseAction: .setDynamicBinSelection(normalized),
+                    audioAction: .setDynamicAudioSurfX(normalized)
+                )
             }
-            if shouldRouteStaticVisualOverride(in: context) {
-                return vectorPatch(signal: signal, patch: ParamVectorPatch(spatialX: normalized))
-            }
-            return scalarAction(signal: signal, action: .setStaticSampleMorph(normalized))
+            return rightStickRouteActions(
+                signal: signal,
+                context: context,
+                baseAction: .setStaticSampleMorph(normalized),
+                audioAction: .setDynamicAudioSurfX(normalized)
+            )
         case .rightStickY:
             if context.phoneChoirModeActive {
                 return scalarAction(signal: signal, action: .setChoirFieldDepth(normalized))
             }
             if context.activeOutputMode == .dynamic {
-                return scalarAction(signal: signal, action: .setCutCadence(normalized))
+                return rightStickRouteActions(
+                    signal: signal,
+                    context: context,
+                    baseAction: .setCutCadence(normalized),
+                    audioAction: .setDynamicAudioSurfY(normalized)
+                )
             }
-            if shouldRouteStaticVisualOverride(in: context) {
-                return vectorPatch(signal: signal, patch: ParamVectorPatch(audioGain: normalized))
-            }
-            return scalarAction(signal: signal, action: .setStaticArticulation(normalized))
+            return rightStickRouteActions(
+                signal: signal,
+                context: context,
+                baseAction: .setStaticArticulation(normalized),
+                audioAction: .setDynamicAudioSurfY(normalized)
+            )
         case .rightStickTwist:
             if context.phoneChoirModeActive {
                 return scalarAction(signal: signal, action: .setChoirFieldDetune(normalized))
             }
             if context.activeOutputMode == .dynamic {
-                return scalarAction(signal: signal, action: .setCompositorBlend(normalized))
+                return rightStickRouteActions(
+                    signal: signal,
+                    context: context,
+                    baseAction: .setCompositorBlend(normalized),
+                    audioAction: .setDynamicAudioSurfZ(normalized)
+                )
             }
-            if shouldRouteStaticVisualOverride(in: context) {
-                return vectorPatch(signal: signal, patch: ParamVectorPatch(compositeBias: normalized))
-            }
-            return scalarAction(signal: signal, action: .setStaticTimbre(normalized))
+            return rightStickRouteActions(
+                signal: signal,
+                context: context,
+                baseAction: .setStaticTimbre(normalized),
+                audioAction: .setDynamicAudioSurfZ(normalized)
+            )
         case .rightThumbX:
             guard shouldEmitVectorPatch(in: context) else { return [] }
             return vectorPatch(signal: signal, patch: ParamVectorPatch(spatialY: normalized))
@@ -156,6 +181,19 @@ public final class ControlProfileMapper {
             )
 
         case .rightTrigger1:
+            if context.activeOutputMode == .dynamic {
+                if signal.kind == .button {
+                    switch signal.phase {
+                    case .began:
+                        return [.setDynamicTextSurf(1)]
+                    case .ended:
+                        return [.setDynamicTextSurf(0)]
+                    case .changed:
+                        return []
+                    }
+                }
+                return scalarAction(signal: signal, action: .setDynamicTextSurf(normalized))
+            }
             return effectsActions(
                 role: binding.role,
                 chain: .a,
@@ -164,6 +202,9 @@ public final class ControlProfileMapper {
             )
 
         case .rightTrigger2:
+            if context.activeOutputMode == .dynamic {
+                return signal.phase == .began ? [.triggerDynamicTextBurst] : []
+            }
             return effectsActions(
                 role: binding.role,
                 chain: .b,
@@ -184,9 +225,15 @@ public final class ControlProfileMapper {
             return [.armOutputMode(mode)]
 
         case .leftAuxThrottle:
+            if context.activeOutputMode == .dynamic {
+                return scalarAction(signal: signal, action: .setDynamicAudioDensity(normalized))
+            }
             return scalarAction(signal: signal, action: .setTextProbability(normalized))
 
         case .leftSecondThrottle:
+            if context.activeOutputMode == .dynamic {
+                return scalarAction(signal: signal, action: .setDynamicEchoMacro(normalized))
+            }
             return scalarAction(signal: signal, action: .setTextProbability(normalized))
 
         case .leftHatUp:
@@ -197,6 +244,9 @@ public final class ControlProfileMapper {
             return signal.phase == .began ? [.queueTimelineStep("ending")] : []
 
         case .leftPlaybackButton:
+            if context.activeOutputMode == .dynamic {
+                return signal.phase == .began ? [.toggleDynamicTextMute] : []
+            }
             return signal.phase == .began ? [.togglePreviewPlayback] : []
 
         case .leftModeRotary:
@@ -222,6 +272,14 @@ public final class ControlProfileMapper {
             return [.setSampleBank(bank, domain: domain)]
 
         case .leftRotary1Decrease:
+            if context.activeOutputMode == .dynamic {
+                return effectsActions(
+                    role: binding.role,
+                    chain: .a,
+                    signal: signal,
+                    intensity: normalized
+                )
+            }
             if signal.kind == .axis || binding.kind == .axis {
                 return scalarAction(signal: signal, action: .setStrictLooseBlend(normalized))
             }
@@ -236,14 +294,26 @@ public final class ControlProfileMapper {
             return blendStepActions(signal: signal, delta: 0.08)
 
         case .leftRotary2Axis:
+            if context.activeOutputMode == .dynamic {
+                return effectsActions(
+                    role: binding.role,
+                    chain: .b,
+                    signal: signal,
+                    intensity: normalized
+                )
+            }
             return scalarAction(signal: signal, action: .setVisualVariance(normalized))
 
-        case .leftBottomToggle1, .leftBottomToggle2:
-            return signal.phase == .began ? [.queueTimelineStep("preshow")] : []
-        case .leftBottomToggle3, .leftBottomToggle4:
-            return signal.phase == .began ? [.queueTimelineStep("introduction")] : []
+        case .leftBottomToggle1:
+            return signal.phase == .began ? [.armMainStaticScene(1)] : []
+        case .leftBottomToggle2:
+            return signal.phase == .began ? [.armMainStaticScene(2)] : []
+        case .leftBottomToggle3:
+            return signal.phase == .began ? [.armMainStaticScene(3)] : []
+        case .leftBottomToggle4:
+            return signal.phase == .began ? [.armMainStaticScene(4)] : []
         case .leftBottomToggle5, .leftBottomToggle6:
-            return signal.phase == .began ? [.queueTimelineStep("ending")] : []
+            return signal.phase == .began ? [.armMainDynamicMode] : []
 
         case .leftArmToggleUp:
             return signal.phase == .began ? [.setMasterArm(isArmed: true)] : []
@@ -270,7 +340,7 @@ public final class ControlProfileMapper {
             return toggleDirectionalActions(centered: centered)
 
         case .leftStaticVisualClutch:
-            return clutchActions(signal: signal)
+            return clutchTapActions(signal: signal)
         }
     }
 
@@ -514,23 +584,39 @@ public final class ControlProfileMapper {
         !(context.activeOutputMode == .static && !context.allowStaticVideoOverride)
     }
 
-    private func shouldRouteStaticVisualOverride(in context: ControlRuntimeContext) -> Bool {
-        context.activeOutputMode == .static
-            && context.allowStaticVideoOverride
-            && context.staticVisualClutchActive
+    private func rightStickRouteActions(
+        signal: ControlSignal,
+        context: ControlRuntimeContext,
+        baseAction: ControlAction,
+        audioAction: ControlAction
+    ) -> [ControlAction] {
+        guard signal.phase == .began || signal.phase == .changed else { return [] }
+        switch context.rightStickRouteMode {
+        case .base:
+            return [baseAction]
+        case .audioOnly:
+            return [audioAction]
+        case .dualWrite:
+            return [baseAction, audioAction]
+        }
     }
 
-    private func clutchActions(signal: ControlSignal) -> [ControlAction] {
-        switch signal.phase {
-        case .began:
-            return [.setStaticVisualOverrideHold(true)]
-        case .ended:
-            return [.setStaticVisualOverrideHold(false)]
-        case .changed:
-            if signal.kind == .axis || signal.kind == .hat {
-                return [.setStaticVisualOverrideHold(signal.normalizedValue > 0.5)]
-            }
+    private func clutchTapActions(signal: ControlSignal) -> [ControlAction] {
+        guard signal.phase == .began else { return [] }
+        let now = signal.timestamp
+        let debounceWindow: TimeInterval = 0.05
+        let doubleClickWindow: TimeInterval = 0.28
+
+        if let lastEmitAt = clutchLastEmitAt, now - lastEmitAt < debounceWindow {
             return []
         }
+        clutchLastEmitAt = now
+
+        if let lastTapAt = clutchLastTapAt, now - lastTapAt <= doubleClickWindow {
+            clutchLastTapAt = nil
+            return [.setRightStickRouteMode(.dualWrite)]
+        }
+        clutchLastTapAt = now
+        return [.cycleRightStickRouteMode]
     }
 }

@@ -6,11 +6,14 @@ protocol ControlActionRouting: AnyObject {
     var isLatchArmed: Bool { get }
     var phoneAudioGateArmed: Bool { get }
     var hotasPhoneChoirContextActive: Bool { get }
+    var canUseMainSceneControlsFromControl: Bool { get }
 
     @discardableResult
     func acceptActiveProposalFromControl() -> MLProposalDecision
     func startEngineFromControl()
     func stopEngineFromControl()
+    func cycleRightStickRouteModeFromControl()
+    func setRightStickRouteModeFromControl(_ mode: RightStickRouteModeID)
     func canTakeArmedTimelineStep() -> Bool
     func takeArmedTimelineStep()
     func fireOutputGO()
@@ -18,8 +21,20 @@ protocol ControlActionRouting: AnyObject {
     func patchVector(_ patch: ParamVectorPatch)
     func armOutputMode(_ mode: FlightOutputMode)
     func armTransportLane(_ laneId: String)
+    @discardableResult
+    func armMainStaticSceneFromControl(_ sceneIndex: Int) -> Bool
+    @discardableResult
+    func armMainDynamicModeFromControl() -> Bool
     func queueTimelineStepFromControl(_ laneId: String)
     func setDynamicBinSelectionFromControl(_ value: Double)
+    func setDynamicAudioSurfXFromControl(_ value: Double)
+    func setDynamicAudioSurfYFromControl(_ value: Double)
+    func setDynamicAudioSurfZFromControl(_ value: Double)
+    func setDynamicAudioDensityFromControl(_ value: Double)
+    func setDynamicEchoMacroFromControl(_ value: Double)
+    func setDynamicTextSurfFromControl(_ value: Double)
+    func triggerDynamicTextBurstFromControl()
+    func toggleDynamicTextMuteFromControl()
     func setCutCadenceFromControl(_ value: Double)
     func setCompositorBlendFromControl(_ value: Double)
     func setStaticVisualOverrideHoldFromControl(_ isHeld: Bool)
@@ -90,6 +105,14 @@ final class ControlActionRouter {
             delegate.stopEngineFromControl()
             return .applied
 
+        case .cycleRightStickRouteMode:
+            delegate.cycleRightStickRouteModeFromControl()
+            return .applied
+
+        case .setRightStickRouteMode(let mode):
+            delegate.setRightStickRouteModeFromControl(mode)
+            return .applied
+
         case .patchVector(let patch):
             delegate.patchVector(patch)
             return .applied
@@ -102,12 +125,62 @@ final class ControlActionRouter {
             delegate.armTransportLane(laneId)
             return .applied
 
+        case .armMainStaticScene(let sceneIndex):
+            guard delegate.canUseMainSceneControlsFromControl else {
+                return .blocked(reason: "main scene controls require MAIN state")
+            }
+            guard delegate.armMainStaticSceneFromControl(sceneIndex) else {
+                return .blocked(reason: "main static scene \(sceneIndex) unavailable")
+            }
+            return .applied
+
+        case .armMainDynamicMode:
+            guard delegate.canUseMainSceneControlsFromControl else {
+                return .blocked(reason: "main scene controls require MAIN state")
+            }
+            guard delegate.armMainDynamicModeFromControl() else {
+                return .blocked(reason: "main dynamic arm failed")
+            }
+            return .applied
+
         case .queueTimelineStep(let laneId):
             delegate.queueTimelineStepFromControl(laneId)
             return .applied
 
         case .setDynamicBinSelection(let value):
             delegate.setDynamicBinSelectionFromControl(value)
+            return .applied
+
+        case .setDynamicAudioSurfX(let value):
+            delegate.setDynamicAudioSurfXFromControl(value)
+            return .applied
+
+        case .setDynamicAudioSurfY(let value):
+            delegate.setDynamicAudioSurfYFromControl(value)
+            return .applied
+
+        case .setDynamicAudioSurfZ(let value):
+            delegate.setDynamicAudioSurfZFromControl(value)
+            return .applied
+
+        case .setDynamicAudioDensity(let value):
+            delegate.setDynamicAudioDensityFromControl(value)
+            return .applied
+
+        case .setDynamicEchoMacro(let value):
+            delegate.setDynamicEchoMacroFromControl(value)
+            return .applied
+
+        case .setDynamicTextSurf(let value):
+            delegate.setDynamicTextSurfFromControl(value)
+            return .applied
+
+        case .triggerDynamicTextBurst:
+            delegate.triggerDynamicTextBurstFromControl()
+            return .applied
+
+        case .toggleDynamicTextMute:
+            delegate.toggleDynamicTextMuteFromControl()
             return .applied
 
         case .setCutCadence(let value):

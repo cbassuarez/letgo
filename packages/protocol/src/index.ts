@@ -455,12 +455,26 @@ export type PhoneAudioCommandKind =
 
 export type PhoneAudioPriority = "high" | "medium" | "low";
 export type VoiceStreamCodec = "opus" | "aac" | "pcm";
+export type VoiceStreamTransport = "hls" | "webrtc";
 export type StreamLifecycleStatus =
   | "subscribed"
   | "unsubscribed"
   | "underrun"
   | "track_lost"
   | "fallback_group";
+
+export interface SFUIceServerConfig {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+
+export interface VoiceStreamWebRTCDescriptor {
+  roomId: string;
+  streamId: string;
+  publisherId?: string;
+  iceServers?: SFUIceServerConfig[];
+}
 
 export interface PhoneAudioRenderHints {
   zoneId?: string;
@@ -477,9 +491,11 @@ export interface VoiceStreamDescriptor {
   sessionId: string;
   token?: string;
   codec: VoiceStreamCodec;
+  transport?: VoiceStreamTransport;
   expiresAt: number;
   streamUrl?: string;
   fallbackGroup?: string;
+  webrtc?: VoiceStreamWebRTCDescriptor;
 }
 
 export interface GroupStemDescriptor {
@@ -487,8 +503,10 @@ export interface GroupStemDescriptor {
   sessionId: string;
   token?: string;
   codec: VoiceStreamCodec;
+  transport?: VoiceStreamTransport;
   expiresAt: number;
   streamUrl?: string;
+  webrtc?: VoiceStreamWebRTCDescriptor;
 }
 
 export interface PhoneAudioCommandPayload {
@@ -590,6 +608,89 @@ export interface GroupStemStopPayload {
   issuedAt: number;
 }
 
+export interface VoiceStreamSubscribePayload {
+  commandId: string;
+  hashedId: string;
+  voiceId: string;
+  trackId: string;
+  sessionId: string;
+  requestType: "init" | "connect" | "consume" | "resume";
+  transportId?: string;
+  rtpCapabilities?: Record<string, unknown>;
+  dtlsParameters?: Record<string, unknown>;
+  consumerId?: string;
+  issuedAt: number;
+}
+
+export interface VoiceStreamSubscribedPayload {
+  commandId: string;
+  hashedId: string;
+  voiceId: string;
+  trackId: string;
+  sessionId: string;
+  requestType: VoiceStreamSubscribePayload["requestType"];
+  transportId?: string;
+  routerRtpCapabilities?: Record<string, unknown>;
+  transportOptions?: {
+    id: string;
+    iceParameters: Record<string, unknown>;
+    iceCandidates: Array<Record<string, unknown>>;
+    dtlsParameters: Record<string, unknown>;
+  };
+  consumerOptions?: {
+    id: string;
+    producerId: string;
+    kind: "audio" | "video";
+    rtpParameters: Record<string, unknown>;
+    type: string;
+  };
+  consumerId?: string;
+  issuedAt: number;
+}
+
+export interface VoiceStreamUnsubscribePayload {
+  commandId: string;
+  hashedId: string;
+  voiceId: string;
+  trackId: string;
+  sessionId: string;
+  reason?: "manual" | "note_off" | "expired" | "failover";
+  issuedAt: number;
+}
+
+export interface VoiceStreamIceCandidatePayload {
+  commandId: string;
+  hashedId: string;
+  voiceId: string;
+  trackId: string;
+  sessionId: string;
+  transportId?: string;
+  candidate: string;
+  sdpMid?: string;
+  sdpMLineIndex?: number;
+  issuedAt: number;
+}
+
+export interface VoicePublisherAnnouncePayload {
+  publisherId: string;
+  sessionId: string;
+  trackId: string;
+  codec: VoiceStreamCodec;
+  active: boolean;
+  ingest?: {
+    ip: string;
+    port: number;
+    rtcpPort?: number;
+    payloadType: number;
+    ssrc: number;
+    mimeType: string;
+    clockRate: number;
+    channels: number;
+  };
+  error?: string;
+  updatedAt: number;
+}
+
 export interface CrowdPickWindowPayload {
   id: string;
   title: string;
@@ -653,6 +754,60 @@ export interface TextScenePayload {
     minContrast: number;
     minDurationMs: number;
   };
+}
+
+export type TextSemanticMode = "off" | "openai";
+
+export interface RuntimeScriptCandidate {
+  id?: string;
+  text: string;
+  weight?: number;
+}
+
+export interface TextModelHealthPayload {
+  active: boolean;
+  summary: string;
+  modelPath: string | null;
+  source: "none" | "path" | "inline";
+  sourceLabel?: string | null;
+  version?: string | null;
+  lastLoadedAt: number | null;
+  runtimeFailures: number;
+}
+
+export interface TextRuntimeStatusPayload {
+  updatedAt: number;
+  strictCount: number;
+  looseCount: number;
+  strictSource: string;
+  looseSource: string;
+  warnings: string[];
+  modelHealth: TextModelHealthPayload | null;
+  semantic: {
+    mode: TextSemanticMode;
+    enabled: boolean;
+    provider: "openai" | "none";
+    model: string | null;
+    apiKeyConfigured?: boolean;
+    refreshMs: number;
+    ttlMs: number;
+    timeoutMs: number;
+    cacheEntries: number;
+    inFlight: number;
+    lastSuccessAt: number | null;
+    lastError: string | null;
+  } | null;
+}
+
+export interface TextRuntimeUpdatePayload {
+  requestStatus?: boolean;
+  reload?: boolean;
+  strictCandidates?: RuntimeScriptCandidate[];
+  looseCandidates?: RuntimeScriptCandidate[];
+  modelPayloadJSON?: string;
+  semanticMode?: TextSemanticMode;
+  semanticApiKey?: string | null;
+  semanticModel?: string;
 }
 
 export interface PhoneAudioPoolStatePayload {
@@ -789,10 +944,17 @@ export interface WireEnvelope<T = unknown> {
     | "voice_stream_stop"
     | "group_stem_start"
     | "group_stem_stop"
+    | "voice_stream_subscribe"
+    | "voice_stream_subscribed"
+    | "voice_stream_unsubscribe"
+    | "voice_stream_ice"
+    | "voice_publisher_announce"
     | "crowd_pick_window"
     | "crowd_pick_vote"
     | "crowd_pick_result"
     | "text_scene"
+    | "text_runtime_status"
+    | "text_runtime_update"
     | "phone_audio_pool_state"
     | "push_deck_event"
     | "push_pad_labels"

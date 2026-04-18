@@ -267,15 +267,170 @@ public struct HarnessKeyboardPatchChangePayload: Codable, Equatable {
     }
 }
 
+public enum HarnessTextSemanticMode: String, Codable, Equatable, CaseIterable {
+    case off
+    case openai
+}
+
+public struct HarnessRuntimeScriptCandidate: Codable, Equatable {
+    public let id: String?
+    public let text: String
+    public let weight: Double?
+
+    public init(id: String? = nil, text: String, weight: Double? = nil) {
+        self.id = id
+        self.text = text
+        self.weight = weight
+    }
+}
+
+public struct HarnessTextModelHealthPayload: Codable, Equatable {
+    public let active: Bool
+    public let summary: String
+    public let modelPath: String?
+    public let source: String
+    public let sourceLabel: String?
+    public let version: String?
+    public let lastLoadedAt: Double?
+    public let runtimeFailures: Int
+
+    public init(
+        active: Bool,
+        summary: String,
+        modelPath: String?,
+        source: String,
+        sourceLabel: String? = nil,
+        version: String? = nil,
+        lastLoadedAt: Double? = nil,
+        runtimeFailures: Int
+    ) {
+        self.active = active
+        self.summary = summary
+        self.modelPath = modelPath
+        self.source = source
+        self.sourceLabel = sourceLabel
+        self.version = version
+        self.lastLoadedAt = lastLoadedAt
+        self.runtimeFailures = runtimeFailures
+    }
+}
+
+public struct HarnessTextSemanticStatusPayload: Codable, Equatable {
+    public let mode: HarnessTextSemanticMode
+    public let enabled: Bool
+    public let provider: String
+    public let model: String?
+    public let apiKeyConfigured: Bool?
+    public let refreshMs: Double
+    public let ttlMs: Double
+    public let timeoutMs: Double
+    public let cacheEntries: Int
+    public let inFlight: Int
+    public let lastSuccessAt: Double?
+    public let lastError: String?
+
+    public init(
+        mode: HarnessTextSemanticMode,
+        enabled: Bool,
+        provider: String,
+        model: String? = nil,
+        apiKeyConfigured: Bool? = nil,
+        refreshMs: Double,
+        ttlMs: Double,
+        timeoutMs: Double,
+        cacheEntries: Int,
+        inFlight: Int,
+        lastSuccessAt: Double? = nil,
+        lastError: String? = nil
+    ) {
+        self.mode = mode
+        self.enabled = enabled
+        self.provider = provider
+        self.model = model
+        self.apiKeyConfigured = apiKeyConfigured
+        self.refreshMs = refreshMs
+        self.ttlMs = ttlMs
+        self.timeoutMs = timeoutMs
+        self.cacheEntries = cacheEntries
+        self.inFlight = inFlight
+        self.lastSuccessAt = lastSuccessAt
+        self.lastError = lastError
+    }
+}
+
+public struct HarnessTextRuntimeStatusPayload: Codable, Equatable {
+    public let updatedAt: Double
+    public let strictCount: Int
+    public let looseCount: Int
+    public let strictSource: String
+    public let looseSource: String
+    public let warnings: [String]
+    public let modelHealth: HarnessTextModelHealthPayload?
+    public let semantic: HarnessTextSemanticStatusPayload?
+
+    public init(
+        updatedAt: Double,
+        strictCount: Int,
+        looseCount: Int,
+        strictSource: String,
+        looseSource: String,
+        warnings: [String] = [],
+        modelHealth: HarnessTextModelHealthPayload? = nil,
+        semantic: HarnessTextSemanticStatusPayload? = nil
+    ) {
+        self.updatedAt = updatedAt
+        self.strictCount = strictCount
+        self.looseCount = looseCount
+        self.strictSource = strictSource
+        self.looseSource = looseSource
+        self.warnings = warnings
+        self.modelHealth = modelHealth
+        self.semantic = semantic
+    }
+}
+
+public struct HarnessTextRuntimeUpdatePayload: Codable, Equatable {
+    public let requestStatus: Bool?
+    public let reload: Bool?
+    public let strictCandidates: [HarnessRuntimeScriptCandidate]?
+    public let looseCandidates: [HarnessRuntimeScriptCandidate]?
+    public let modelPayloadJSON: String?
+    public let semanticMode: HarnessTextSemanticMode?
+    public let semanticApiKey: String?
+    public let semanticModel: String?
+
+    public init(
+        requestStatus: Bool? = nil,
+        reload: Bool? = nil,
+        strictCandidates: [HarnessRuntimeScriptCandidate]? = nil,
+        looseCandidates: [HarnessRuntimeScriptCandidate]? = nil,
+        modelPayloadJSON: String? = nil,
+        semanticMode: HarnessTextSemanticMode? = nil,
+        semanticApiKey: String? = nil,
+        semanticModel: String? = nil
+    ) {
+        self.requestStatus = requestStatus
+        self.reload = reload
+        self.strictCandidates = strictCandidates
+        self.looseCandidates = looseCandidates
+        self.modelPayloadJSON = modelPayloadJSON
+        self.semanticMode = semanticMode
+        self.semanticApiKey = semanticApiKey
+        self.semanticModel = semanticModel
+    }
+}
+
 public struct HarnessVoiceStreamDescriptor: Codable, Equatable {
     public let voiceId: String
     public let trackId: String
     public let sessionId: String
     public let token: String?
     public let codec: String
+    public let transport: String?
     public let expiresAt: Double
     public let streamUrl: String?
     public let fallbackGroup: String?
+    public let webrtc: HarnessVoiceStreamWebRTCDescriptor?
 
     public init(
         voiceId: String,
@@ -283,18 +438,22 @@ public struct HarnessVoiceStreamDescriptor: Codable, Equatable {
         sessionId: String,
         token: String? = nil,
         codec: String,
+        transport: String? = nil,
         expiresAt: Double,
         streamUrl: String? = nil,
-        fallbackGroup: String? = nil
+        fallbackGroup: String? = nil,
+        webrtc: HarnessVoiceStreamWebRTCDescriptor? = nil
     ) {
         self.voiceId = voiceId
         self.trackId = trackId
         self.sessionId = sessionId
         self.token = token
         self.codec = codec
+        self.transport = transport
         self.expiresAt = expiresAt
         self.streamUrl = streamUrl
         self.fallbackGroup = fallbackGroup
+        self.webrtc = webrtc
     }
 }
 
@@ -303,23 +462,60 @@ public struct HarnessGroupStemDescriptor: Codable, Equatable {
     public let sessionId: String
     public let token: String?
     public let codec: String
+    public let transport: String?
     public let expiresAt: Double
     public let streamUrl: String?
+    public let webrtc: HarnessVoiceStreamWebRTCDescriptor?
 
     public init(
         groupId: String,
         sessionId: String,
         token: String? = nil,
         codec: String,
+        transport: String? = nil,
         expiresAt: Double,
-        streamUrl: String? = nil
+        streamUrl: String? = nil,
+        webrtc: HarnessVoiceStreamWebRTCDescriptor? = nil
     ) {
         self.groupId = groupId
         self.sessionId = sessionId
         self.token = token
         self.codec = codec
+        self.transport = transport
         self.expiresAt = expiresAt
         self.streamUrl = streamUrl
+        self.webrtc = webrtc
+    }
+}
+
+public struct HarnessVoiceStreamWebRTCDescriptor: Codable, Equatable {
+    public struct IceServer: Codable, Equatable {
+        public let urls: [String]
+        public let username: String?
+        public let credential: String?
+
+        public init(urls: [String], username: String? = nil, credential: String? = nil) {
+            self.urls = urls
+            self.username = username
+            self.credential = credential
+        }
+    }
+
+    public let roomId: String
+    public let streamId: String
+    public let publisherId: String?
+    public let iceServers: [IceServer]?
+
+    public init(
+        roomId: String,
+        streamId: String,
+        publisherId: String? = nil,
+        iceServers: [IceServer]? = nil
+    ) {
+        self.roomId = roomId
+        self.streamId = streamId
+        self.publisherId = publisherId
+        self.iceServers = iceServers
     }
 }
 
@@ -420,5 +616,215 @@ public struct HarnessGroupStemStopPayload: Codable, Equatable {
         self.groupId = groupId
         self.reason = reason
         self.issuedAt = issuedAt
+    }
+}
+
+public struct HarnessVoiceStreamSubscribePayload: Codable, Equatable {
+    public let commandId: String
+    public let hashedId: String
+    public let voiceId: String
+    public let trackId: String
+    public let sessionId: String
+    public let requestType: String
+    public let transportId: String?
+    public let rtpCapabilities: [String: String]?
+    public let dtlsParameters: [String: String]?
+    public let consumerId: String?
+    public let issuedAt: Double
+
+    public init(
+        commandId: String,
+        hashedId: String,
+        voiceId: String,
+        trackId: String,
+        sessionId: String,
+        requestType: String,
+        transportId: String? = nil,
+        rtpCapabilities: [String: String]? = nil,
+        dtlsParameters: [String: String]? = nil,
+        consumerId: String? = nil,
+        issuedAt: Double
+    ) {
+        self.commandId = commandId
+        self.hashedId = hashedId
+        self.voiceId = voiceId
+        self.trackId = trackId
+        self.sessionId = sessionId
+        self.requestType = requestType
+        self.transportId = transportId
+        self.rtpCapabilities = rtpCapabilities
+        self.dtlsParameters = dtlsParameters
+        self.consumerId = consumerId
+        self.issuedAt = issuedAt
+    }
+}
+
+public struct HarnessVoiceStreamSubscribedPayload: Codable, Equatable {
+    public let commandId: String
+    public let hashedId: String
+    public let voiceId: String
+    public let trackId: String
+    public let sessionId: String
+    public let requestType: String
+    public let transportId: String?
+    public let routerRtpCapabilities: [String: String]?
+    public let transportOptions: [String: String]?
+    public let consumerOptions: [String: String]?
+    public let consumerId: String?
+    public let issuedAt: Double
+
+    public init(
+        commandId: String,
+        hashedId: String,
+        voiceId: String,
+        trackId: String,
+        sessionId: String,
+        requestType: String,
+        transportId: String? = nil,
+        routerRtpCapabilities: [String: String]? = nil,
+        transportOptions: [String: String]? = nil,
+        consumerOptions: [String: String]? = nil,
+        consumerId: String? = nil,
+        issuedAt: Double
+    ) {
+        self.commandId = commandId
+        self.hashedId = hashedId
+        self.voiceId = voiceId
+        self.trackId = trackId
+        self.sessionId = sessionId
+        self.requestType = requestType
+        self.transportId = transportId
+        self.routerRtpCapabilities = routerRtpCapabilities
+        self.transportOptions = transportOptions
+        self.consumerOptions = consumerOptions
+        self.consumerId = consumerId
+        self.issuedAt = issuedAt
+    }
+}
+
+public struct HarnessVoiceStreamUnsubscribePayload: Codable, Equatable {
+    public let commandId: String
+    public let hashedId: String
+    public let voiceId: String
+    public let trackId: String
+    public let sessionId: String
+    public let reason: String?
+    public let issuedAt: Double
+
+    public init(
+        commandId: String,
+        hashedId: String,
+        voiceId: String,
+        trackId: String,
+        sessionId: String,
+        reason: String? = nil,
+        issuedAt: Double
+    ) {
+        self.commandId = commandId
+        self.hashedId = hashedId
+        self.voiceId = voiceId
+        self.trackId = trackId
+        self.sessionId = sessionId
+        self.reason = reason
+        self.issuedAt = issuedAt
+    }
+}
+
+public struct HarnessVoiceStreamIceCandidatePayload: Codable, Equatable {
+    public let commandId: String
+    public let hashedId: String
+    public let voiceId: String
+    public let trackId: String
+    public let sessionId: String
+    public let transportId: String?
+    public let candidate: String
+    public let sdpMid: String?
+    public let sdpMLineIndex: Int?
+    public let issuedAt: Double
+
+    public init(
+        commandId: String,
+        hashedId: String,
+        voiceId: String,
+        trackId: String,
+        sessionId: String,
+        transportId: String? = nil,
+        candidate: String,
+        sdpMid: String? = nil,
+        sdpMLineIndex: Int? = nil,
+        issuedAt: Double
+    ) {
+        self.commandId = commandId
+        self.hashedId = hashedId
+        self.voiceId = voiceId
+        self.trackId = trackId
+        self.sessionId = sessionId
+        self.transportId = transportId
+        self.candidate = candidate
+        self.sdpMid = sdpMid
+        self.sdpMLineIndex = sdpMLineIndex
+        self.issuedAt = issuedAt
+    }
+}
+
+public struct HarnessVoicePublisherAnnouncePayload: Codable, Equatable {
+    public struct Ingest: Codable, Equatable {
+        public let ip: String
+        public let port: Int
+        public let rtcpPort: Int?
+        public let payloadType: Int
+        public let ssrc: Int
+        public let mimeType: String
+        public let clockRate: Int
+        public let channels: Int
+
+        public init(
+            ip: String,
+            port: Int,
+            rtcpPort: Int? = nil,
+            payloadType: Int,
+            ssrc: Int,
+            mimeType: String,
+            clockRate: Int,
+            channels: Int
+        ) {
+            self.ip = ip
+            self.port = port
+            self.rtcpPort = rtcpPort
+            self.payloadType = payloadType
+            self.ssrc = ssrc
+            self.mimeType = mimeType
+            self.clockRate = clockRate
+            self.channels = channels
+        }
+    }
+
+    public let publisherId: String
+    public let sessionId: String
+    public let trackId: String
+    public let codec: String
+    public let active: Bool
+    public let ingest: Ingest?
+    public let error: String?
+    public let updatedAt: Double
+
+    public init(
+        publisherId: String,
+        sessionId: String,
+        trackId: String,
+        codec: String,
+        active: Bool,
+        ingest: Ingest? = nil,
+        error: String? = nil,
+        updatedAt: Double
+    ) {
+        self.publisherId = publisherId
+        self.sessionId = sessionId
+        self.trackId = trackId
+        self.codec = codec
+        self.active = active
+        self.ingest = ingest
+        self.error = error
+        self.updatedAt = updatedAt
     }
 }

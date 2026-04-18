@@ -45,6 +45,7 @@
 		8ED3D37D6D7518F84853876C /* ControlProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 333F4E6DF516A146C08DBAC1 /* ControlProfile.swift */; };
 		8F8CDC84F0139DCDB55F7784 /* FlightLogTape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D8C42FC26460491C825EB7D /* FlightLogTape.swift */; };
 		9DCFF92465B04D57A7CA99C7 /* ControlActionRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A9A0633AA0F280514570416 /* ControlActionRouter.swift */; };
+		8C4F2A5A2F114B61A7E7D882 /* VoiceRTPPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54D1B8A34A6E4CB59D2F1071 /* VoiceRTPPublisher.swift */; };
 		A0B3B9452C3F7CD9D72EC668 /* SafetyMonitorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0B0C206605B1BEF659B7D6 /* SafetyMonitorView.swift */; };
 		A1512DD9525CE8FE8D3C2165 /* ConductorHarnessViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD918E63BA355AEB23BC9CED /* ConductorHarnessViewModel.swift */; };
 		A2F1E64B01471D0D83509057 /* VideoOutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 475E84A1AAE7DF014BD33ABB /* VideoOutView.swift */; };
@@ -117,6 +118,7 @@
 		3FAB7954B05948384D635096 /* ReplayRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplayRecorder.swift; sourceTree = "<group>"; };
 		475E84A1AAE7DF014BD33ABB /* VideoOutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoOutView.swift; sourceTree = "<group>"; };
 		56C926477647D701DA7EFC75 /* ControlSources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlSources.swift; sourceTree = "<group>"; };
+		54D1B8A34A6E4CB59D2F1071 /* VoiceRTPPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRTPPublisher.swift; sourceTree = "<group>"; };
 		5805F38E6A2108591D11869E /* IBMPlexMono-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "IBMPlexMono-Bold.ttf"; sourceTree = "<group>"; };
 		5F1784CD907BC515895336F4 /* MIDIEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIEngine.swift; sourceTree = "<group>"; };
 		63B515EC3144337578B2A6CE /* ConductorHarnessApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConductorHarnessApp.swift; sourceTree = "<group>"; };
@@ -206,6 +208,7 @@
 				7271560C784B692203AD9160 /* TelemetryHub.swift */,
 				D5E04A3068D796CAFEDC9602 /* TextSelectionEngine.swift */,
 				F0F98F8E5504303A653CBF14 /* TimelineTransport.swift */,
+				54D1B8A34A6E4CB59D2F1071 /* VoiceRTPPublisher.swift */,
 				7C457CBBF2C0230C05F897BC /* WebSocketConductorClient.swift */,
 			);
 			name = ConductorCore;
@@ -350,7 +353,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1430;
+				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					084677AAAA136BA2E000ECC9 = {
 						ProvisioningStyle = Automatic;
@@ -467,6 +470,7 @@
 				FC3DA306A0AF96F0F68ED484 /* TelemetryHub.swift in Sources */,
 				4B664746EE9EF3033C8E4DBA /* TextSelectionEngine.swift in Sources */,
 				AC8901894FCB414F8A1B0D70 /* TimelineTransport.swift in Sources */,
+				8C4F2A5A2F114B61A7E7D882 /* VoiceRTPPublisher.swift in Sources */,
 				B92D506F8B052348498E348E /* WebSocketConductorClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

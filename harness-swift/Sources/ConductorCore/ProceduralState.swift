@@ -81,6 +81,10 @@ public struct ProgramProceduralState: Codable, Equatable, Sendable {
     public var strictLooseBlend: Double
     public var visualVariance: Double
     public var crowdSteeringLevel: Double
+    public var promptInfluence: Double?
+    public var directPickInfluence: Double?
+    public var echoProbabilityGlobal: Double?
+    public var echoProbabilityByStem: [String: Double]?
     public var performerVector: ParamVector
     public var audienceVector: ParamVector
     public var textBlend: TextBlendState
@@ -102,6 +106,10 @@ public struct ProgramProceduralState: Codable, Equatable, Sendable {
         strictLooseBlend: Double,
         visualVariance: Double,
         crowdSteeringLevel: Double,
+        promptInfluence: Double? = nil,
+        directPickInfluence: Double? = nil,
+        echoProbabilityGlobal: Double? = nil,
+        echoProbabilityByStem: [String: Double]? = nil,
         performerVector: ParamVector,
         audienceVector: ParamVector
     ) {
@@ -121,6 +129,12 @@ public struct ProgramProceduralState: Codable, Equatable, Sendable {
         self.strictLooseBlend = clamp01(strictLooseBlend)
         self.visualVariance = clamp01(visualVariance)
         self.crowdSteeringLevel = clamp01(crowdSteeringLevel)
+        self.promptInfluence = promptInfluence.map(clamp01)
+        self.directPickInfluence = directPickInfluence.map(clamp01)
+        self.echoProbabilityGlobal = echoProbabilityGlobal.map(clamp01)
+        self.echoProbabilityByStem = echoProbabilityByStem?.reduce(into: [String: Double]()) { result, element in
+            result[element.key] = clamp01(element.value)
+        }
         self.performerVector = performerVector
         self.audienceVector = audienceVector
         self.textBlend = TextBlendState(
@@ -147,6 +161,15 @@ public struct ProgramProceduralState: Codable, Equatable, Sendable {
             strictLooseBlend: 0.5,
             visualVariance: 0.5,
             crowdSteeringLevel: 0,
+            promptInfluence: 0,
+            directPickInfluence: 0,
+            echoProbabilityGlobal: 0,
+            echoProbabilityByStem: [
+                "pads": 0,
+                "hotas": 0,
+                "choir": 0,
+                "fx": 0
+            ],
             performerVector: .neutral,
             audienceVector: .neutral
         )

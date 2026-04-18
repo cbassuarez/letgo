@@ -36,8 +36,11 @@ import {
   type GroupStemStopPayload,
   type KeyboardPatchChangePayload,
   type KeyboardStatePayload,
+  type VoicePublisherAnnouncePayload,
   type PushDeckMLParamKey,
   type TextBlendState,
+  type TextRuntimeStatusPayload,
+  type TextRuntimeUpdatePayload,
   type SyncPacket,
   type TextScenePayload,
   type TransitionMode,
@@ -45,6 +48,10 @@ import {
   type SplitLayout,
   type VoiceStreamStartPayload,
   type VoiceStreamStopPayload,
+  type VoiceStreamSubscribePayload,
+  type VoiceStreamSubscribedPayload,
+  type VoiceStreamUnsubscribePayload,
+  type VoiceStreamIceCandidatePayload,
   type VoiceStreamDescriptor,
   type WireEnvelope
 } from "@conductor/protocol";
@@ -70,6 +77,7 @@ import { PromptOrchestrator } from "../services/promptOrchestrator";
 import type { SessionStore } from "../stores/sessionStore";
 import { logger } from "../utils/logger";
 import { ManagedSFUCoordinator } from "../services/managedSfuCoordinator";
+import { MediasoupVoiceService } from "../services/mediasoupVoiceService";
 
 interface WsDependencies {
   config: AppConfig;
@@ -102,8 +110,10 @@ type HarnessInbound =
   | { kind: "phone_audio_command"; data: Partial<PhoneAudioCommandPayload> }
   | { kind: "keyboard_state"; data: Partial<KeyboardStatePayload> }
   | { kind: "keyboard_patch_change"; data: Partial<KeyboardPatchChangePayload> }
+  | { kind: "voice_publisher_announce"; data: Partial<VoicePublisherAnnouncePayload> }
   | { kind: "push_pad_labels"; data: Partial<PushPadLabelsPayload> }
   | { kind: "text_scene"; data: Partial<TextScenePayload> & { cueId?: string } }
+  | { kind: "text_runtime_update"; data: Partial<TextRuntimeUpdatePayload> }
   | { kind: "procedural_state"; data: Partial<ProgramProceduralState> }
   | { kind: "telemetry"; data: Record<string, unknown> };
 
@@ -115,6 +125,9 @@ type DeviceInbound =
   | { kind: "permissions"; data: { audio?: boolean; geolocation?: boolean; motion?: boolean } }
   | { kind: "ack"; data: CueActivationAckPayload }
   | { kind: "phone_audio_ack"; data: Partial<PhoneAudioAckPayload> }
+  | { kind: "voice_stream_subscribe"; data: Partial<VoiceStreamSubscribePayload> }
+  | { kind: "voice_stream_unsubscribe"; data: Partial<VoiceStreamUnsubscribePayload> }
+  | { kind: "voice_stream_ice"; data: Partial<VoiceStreamIceCandidatePayload> }
   | { kind: "push_deck_event"; data: Partial<PushDeckEventPayload> }
   | { kind: "crowd_pick_vote"; data: Partial<CrowdPickVotePayload> }
   | { kind: "prompt_response"; data: Partial<PromptResponsePayload> };
@@ -155,6 +168,58 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     sessionPrefix: deps.config.CONDUCTOR_MANAGED_SFU_SESSION_PREFIX,
     tokenSecret: deps.config.CONDUCTOR_MANAGED_SFU_TOKEN_SECRET
   });
+  const parseIceServers = (): Array<{ urls: string | string[]; username?: string; credential?: string }> => {
+    const raw = deps.config.CONDUCTOR_SFU_ICE_SERVERS_JSON;
+    if (!raw || raw.trim().length === 0) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      const servers: Array<{ urls: string | string[]; username?: string; credential?: string }> = [];
+      for (const entry of parsed) {
+        const record =
+          entry && typeof entry === "object" && !Array.isArray(entry)
+            ? (entry as Record<string, unknown>)
+            : null;
+        if (!record || (!Array.isArray(record.urls) && typeof record.urls !== "string")) {
+          continue;
+        }
+        const urls = Array.isArray(record.urls)
+          ? record.urls.filter((url): url is string => typeof url === "string" && url.trim().length > 0)
+          : record.urls;
+        const server: { urls: string | string[]; username?: string; credential?: string } = {
+          urls
+        };
+        if (typeof record.username === "string" && record.username.trim().length > 0) {
+          server.username = record.username;
+        }
+        if (typeof record.credential === "string" && record.credential.trim().length > 0) {
+          server.credential = record.credential;
+        }
+        servers.push(server);
+      }
+      return servers;
+    } catch {
+      logger.warn("failed to parse CONDUCTOR_SFU_ICE_SERVERS_JSON");
+      return [];
+    }
+  };
+  const mediasoupVoiceService = new MediasoupVoiceService({
+    enabled:
+      deps.config.CONDUCTOR_SFU_ENABLED ||
+      deps.config.CONDUCTOR_VOICE_STREAM_TRANSPORT === "webrtc",
+    roomId: deps.config.CONDUCTOR_SFU_ROOM_ID,
+    listenIp: deps.config.CONDUCTOR_SFU_LISTEN_IP,
+    announcedIp: deps.config.CONDUCTOR_SFU_ANNOUNCED_IP,
+    rtcMinPort: deps.config.CONDUCTOR_SFU_RTC_MIN_PORT,
+    rtcMaxPort: deps.config.CONDUCTOR_SFU_RTC_MAX_PORT,
+    maxSubscribers: Math.max(1, deps.config.CONDUCTOR_SFU_MAX_SUBSCRIBERS),
+    iceServers: parseIceServers()
+  });
+  await mediasoupVoiceService.start();
   const maxConcurrentVoiceStreams = Math.max(1, Math.min(64, deps.config.CONDUCTOR_VOICE_STREAM_MAX_CONCURRENT));
   const activeVoiceStreamsByNote = new Map<number, Map<string, VoiceStreamDescriptor>>();
   const activeGroupStemByTarget = new Map<string, GroupStemDescriptor>();
@@ -217,6 +282,21 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     mainStatic: "showStreamMainStatic",
     mainDynamic: "showStreamMainDynamic",
     ending: "showStreamEnding"
+  };
+  const voicePublisherSessionId = `${deps.config.CONDUCTOR_MANAGED_SFU_SESSION_PREFIX}-voice`;
+  const normalizeVoiceDescriptorForTransport = (
+    descriptor: VoiceStreamDescriptor,
+    note: number
+  ): VoiceStreamDescriptor => {
+    if (!mediasoupVoiceService.isEnabled()) {
+      return descriptor;
+    }
+    return {
+      ...descriptor,
+      sessionId: voicePublisherSessionId,
+      trackId: `note-${Math.max(0, Math.min(127, Math.round(note)))}`,
+      codec: "opus"
+    };
   };
 
   const normalizeStreamURL = (value: unknown): string | null => {
@@ -1133,6 +1213,43 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         return;
       }
 
+      if (inbound.kind === "voice_publisher_announce") {
+        const publisherId =
+          typeof inbound.data.publisherId === "string" && inbound.data.publisherId.trim().length > 0
+            ? inbound.data.publisherId.trim()
+            : "harness";
+        const sessionId =
+          typeof inbound.data.sessionId === "string" && inbound.data.sessionId.trim().length > 0
+            ? inbound.data.sessionId.trim()
+            : `${deps.config.CONDUCTOR_MANAGED_SFU_SESSION_PREFIX}-sess-${Math.floor(Date.now() / 1_000)}`;
+        const trackId =
+          typeof inbound.data.trackId === "string" && inbound.data.trackId.trim().length > 0
+            ? inbound.data.trackId.trim()
+            : "main";
+        const codec =
+          inbound.data.codec === "aac" || inbound.data.codec === "pcm" || inbound.data.codec === "opus"
+            ? inbound.data.codec
+            : "opus";
+        const active = inbound.data.active !== false;
+        const announced = await mediasoupVoiceService.announcePublisher({
+          publisherId,
+          sessionId,
+          trackId,
+          codec,
+          active,
+          updatedAt:
+            typeof inbound.data.updatedAt === "number" && Number.isFinite(inbound.data.updatedAt)
+              ? inbound.data.updatedAt
+              : Date.now()
+        });
+        broadcastToHarness({
+          kind: "voice_publisher_announce",
+          data: announced,
+          sentAt: Date.now()
+        } satisfies WireEnvelope<VoicePublisherAnnouncePayload>);
+        return;
+      }
+
       if (inbound.kind === "push_pad_labels") {
         const labels = normalizePushPadLabelsPayload(inbound.data);
         if (!labels) {
@@ -1156,6 +1273,87 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         };
         deps.audioOpsStateHub.setTextScene(merged);
         broadcastTextScene(merged);
+        return;
+      }
+
+      if (inbound.kind === "text_runtime_update") {
+        let didMutate = false;
+        const strictCandidates = parseRuntimeScriptCandidates(inbound.data.strictCandidates);
+        const looseCandidates = parseRuntimeScriptCandidates(inbound.data.looseCandidates);
+        if (strictCandidates || looseCandidates) {
+          deps.textSceneComposer.setRuntimeScriptBanks({
+            strictCandidates: strictCandidates ?? undefined,
+            looseCandidates: looseCandidates ?? undefined,
+            sourceLabel: "harness-runtime"
+          });
+          didMutate = true;
+        }
+
+        if (typeof inbound.data.modelPayloadJSON === "string" && inbound.data.modelPayloadJSON.trim().length > 0) {
+          try {
+            const parsedModel = JSON.parse(inbound.data.modelPayloadJSON);
+            const result = deps.textSceneComposer.setRuntimeModelPayload(parsedModel, "harness-runtime");
+            if (!result.ok) {
+              broadcastToHarness({
+                kind: "error",
+                data: {
+                  message: `text runtime model rejected: ${result.reason}`
+                },
+                sentAt: Date.now()
+              } satisfies WireEnvelope);
+            } else {
+              didMutate = true;
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "unknown parse error";
+            broadcastToHarness({
+              kind: "error",
+              data: {
+                message: `text runtime model JSON parse failed: ${message}`
+              },
+              sentAt: Date.now()
+            } satisfies WireEnvelope);
+          }
+        }
+
+        const nextSemanticMode =
+          inbound.data.semanticMode === "off" || inbound.data.semanticMode === "openai"
+            ? inbound.data.semanticMode
+            : undefined;
+        const nextSemanticApiKey =
+          inbound.data.semanticApiKey === null
+            ? null
+            : typeof inbound.data.semanticApiKey === "string"
+              ? inbound.data.semanticApiKey
+              : undefined;
+        const nextSemanticModel =
+          typeof inbound.data.semanticModel === "string" ? inbound.data.semanticModel : undefined;
+        if (
+          nextSemanticMode !== undefined ||
+          nextSemanticApiKey !== undefined ||
+          nextSemanticModel !== undefined
+        ) {
+          deps.textSceneComposer.configureSemanticRuntime({
+            mode: nextSemanticMode,
+            openAiApiKey: nextSemanticApiKey,
+            openAiModel: nextSemanticModel
+          });
+          didMutate = true;
+        }
+
+        if (inbound.data.reload) {
+          deps.textSceneComposer.reloadScriptBanks(true);
+          deps.textSceneComposer.reloadModelRuntime(true);
+          didMutate = true;
+        }
+
+        if (didMutate) {
+          composeAndBroadcastTextScene(true, latestCue?.cueId);
+        }
+
+        if (didMutate || inbound.data.requestStatus) {
+          broadcastTextRuntimeStatus();
+        }
         return;
       }
 
@@ -1250,6 +1448,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       const pool = deps.phoneAudioPool.removeDevice(hashedId);
       choirAllocator.removeDevice(hashedId);
       clearVoiceStreamsForDevice(hashedId);
+      mediasoupVoiceService.closeSubscriber(hashedId);
       clearPendingPushEventsForDevice(hashedId);
       publishPhonePoolState(pool);
     });
@@ -1626,6 +1825,109 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         return;
       }
 
+      if (inbound.kind === "voice_stream_subscribe") {
+        const requestType = inbound.data.requestType;
+        if (
+          requestType !== "init" &&
+          requestType !== "connect" &&
+          requestType !== "consume" &&
+          requestType !== "resume"
+        ) {
+          send(socket, {
+            kind: "error",
+            data: {
+              message: "voice_stream_subscribe rejected: invalid request type"
+            },
+            sentAt: Date.now()
+          } satisfies WireEnvelope);
+          return;
+        }
+
+        const payload: VoiceStreamSubscribePayload = {
+          commandId:
+            typeof inbound.data.commandId === "string" && inbound.data.commandId.trim().length > 0
+              ? inbound.data.commandId
+              : `voice-sub-${Date.now()}`,
+          hashedId,
+          voiceId:
+            typeof inbound.data.voiceId === "string" && inbound.data.voiceId.trim().length > 0
+              ? inbound.data.voiceId
+              : "voice",
+          trackId:
+            typeof inbound.data.trackId === "string" && inbound.data.trackId.trim().length > 0
+              ? inbound.data.trackId
+              : "track",
+          sessionId:
+            typeof inbound.data.sessionId === "string" && inbound.data.sessionId.trim().length > 0
+              ? inbound.data.sessionId
+              : `${deps.config.CONDUCTOR_MANAGED_SFU_SESSION_PREFIX}-sess`,
+          requestType,
+          transportId:
+            typeof inbound.data.transportId === "string" && inbound.data.transportId.trim().length > 0
+              ? inbound.data.transportId
+              : undefined,
+          rtpCapabilities: asRecord(inbound.data.rtpCapabilities) ?? undefined,
+          dtlsParameters: asRecord(inbound.data.dtlsParameters) ?? undefined,
+          consumerId:
+            typeof inbound.data.consumerId === "string" && inbound.data.consumerId.trim().length > 0
+              ? inbound.data.consumerId
+              : undefined,
+          issuedAt:
+            typeof inbound.data.issuedAt === "number" && Number.isFinite(inbound.data.issuedAt)
+              ? inbound.data.issuedAt
+              : Date.now()
+        };
+
+        const response = await mediasoupVoiceService.handleSubscribe(payload);
+        if (!response) {
+          send(socket, {
+            kind: "error",
+            data: {
+              message: "voice_stream_subscribe rejected: unavailable"
+            },
+            sentAt: Date.now()
+          } satisfies WireEnvelope);
+          return;
+        }
+
+        send(socket, {
+          kind: "voice_stream_subscribed",
+          data: response,
+          sentAt: Date.now()
+        } satisfies WireEnvelope<VoiceStreamSubscribedPayload>);
+        return;
+      }
+
+      if (inbound.kind === "voice_stream_unsubscribe") {
+        mediasoupVoiceService.handleUnsubscribe({
+          hashedId,
+          voiceId:
+            typeof inbound.data.voiceId === "string" && inbound.data.voiceId.trim().length > 0
+              ? inbound.data.voiceId
+              : undefined,
+          trackId:
+            typeof inbound.data.trackId === "string" && inbound.data.trackId.trim().length > 0
+              ? inbound.data.trackId
+              : undefined
+        });
+        return;
+      }
+
+      if (inbound.kind === "voice_stream_ice") {
+        mediasoupVoiceService.handleIceCandidate({
+          hashedId,
+          transportId:
+            typeof inbound.data.transportId === "string" && inbound.data.transportId.trim().length > 0
+              ? inbound.data.transportId
+              : undefined,
+          candidate:
+            typeof inbound.data.candidate === "string" && inbound.data.candidate.trim().length > 0
+              ? inbound.data.candidate
+              : undefined
+        });
+        return;
+      }
+
       if (inbound.kind === "telemetry") {
         await deps.replayService.record({
           type: "telemetry",
@@ -1799,6 +2101,29 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     broadcastTextScene(scene);
   }
 
+  function buildTextRuntimeStatusPayload(): TextRuntimeStatusPayload {
+    const runtime = deps.textSceneComposer.runtimeStatus();
+    return {
+      updatedAt: runtime.updatedAt,
+      strictCount: runtime.strictCount,
+      looseCount: runtime.looseCount,
+      strictSource: runtime.strictSource,
+      looseSource: runtime.looseSource,
+      warnings: runtime.warnings,
+      modelHealth: runtime.modelHealth,
+      semantic: runtime.semantic
+    };
+  }
+
+  function broadcastTextRuntimeStatus(): void {
+    const envelope = {
+      kind: "text_runtime_status",
+      data: buildTextRuntimeStatusPayload(),
+      sentAt: Date.now()
+    } satisfies WireEnvelope<TextRuntimeStatusPayload>;
+    broadcastToHarness(envelope);
+  }
+
   function enrichPhoneAudioPoolState(pool: PhoneAudioPoolStatePayload): PhoneAudioPoolStatePayload {
     const telemetry = choirAllocator.telemetry(pool.activeVoices);
     return {
@@ -1850,6 +2175,14 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       data: ops.proceduralState ?? effectiveProceduralState,
       sentAt: Date.now()
     } satisfies WireEnvelope<ProgramProceduralState>);
+
+    if (role === "harness") {
+      send(socket, {
+        kind: "text_runtime_status",
+        data: buildTextRuntimeStatusPayload(),
+        sentAt: Date.now()
+      } satisfies WireEnvelope<TextRuntimeStatusPayload>);
+    }
 
     if (role === "device") {
       if (lastPushPadLabels) {
@@ -1931,11 +2264,13 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         const noteStreamMap = activeVoiceStreamsByNote.get(note) ?? new Map<string, VoiceStreamDescriptor>();
 
         for (const targetHashedId of voiceTargets) {
-          const descriptor = managedSfuCoordinator.buildVoiceDescriptor({
+          const rawDescriptor = managedSfuCoordinator.buildVoiceDescriptor({
             hashedId: targetHashedId,
             note,
             commandId: command.commandId
           });
+          const baseDescriptor = normalizeVoiceDescriptorForTransport(rawDescriptor, note);
+          const descriptor = mediasoupVoiceService.decorateVoiceDescriptor(baseDescriptor);
           noteStreamMap.set(targetHashedId, descriptor);
           streamByTarget[targetHashedId] = descriptor;
           voiceStreamStarts.push({
@@ -1951,10 +2286,11 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         activeVoiceStreamsByNote.set(note, noteStreamMap);
 
         if (overflowTargets.length > 0) {
-          fallbackGroup = managedSfuCoordinator.buildGroupDescriptor({
+          const baseGroup = managedSfuCoordinator.buildGroupDescriptor({
             groupId: "phone-choir-group",
             commandId: command.commandId
           });
+          fallbackGroup = mediasoupVoiceService.decorateGroupDescriptor(baseGroup);
           for (const targetHashedId of overflowTargets) {
             activeGroupStemByTarget.set(targetHashedId, fallbackGroup);
           }
@@ -2249,11 +2585,13 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
 
     if (targetHashedIds.length > 0) {
       const nextTarget = targetHashedIds[0];
-      const descriptor = managedSfuCoordinator.buildVoiceDescriptor({
+      const rawDescriptor = managedSfuCoordinator.buildVoiceDescriptor({
         hashedId: nextTarget,
         note: pending.note,
         commandId: command.commandId
       });
+      const baseDescriptor = normalizeVoiceDescriptorForTransport(rawDescriptor, pending.note);
+      const descriptor = mediasoupVoiceService.decorateVoiceDescriptor(baseDescriptor);
       const map = activeVoiceStreamsByNote.get(pending.note) ?? new Map<string, VoiceStreamDescriptor>();
       map.set(nextTarget, descriptor);
       activeVoiceStreamsByNote.set(pending.note, map);
@@ -2527,6 +2865,38 @@ const decodeCloseReason = (reason: Buffer): string => {
     return "";
   }
   return reason.toString("utf8");
+};
+
+const parseRuntimeScriptCandidates = (
+  value: unknown
+): Array<{ id?: string; text: string; weight?: number }> | null => {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const parsed: Array<{ id?: string; text: string; weight?: number }> = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const text = typeof record.text === "string" ? record.text : null;
+    if (!text || text.trim().length === 0) {
+      continue;
+    }
+    const id = typeof record.id === "string" && record.id.trim().length > 0 ? record.id.trim() : undefined;
+    const weight =
+      typeof record.weight === "number" && Number.isFinite(record.weight)
+        ? record.weight
+        : typeof record.weight === "string" && Number.isFinite(Number(record.weight))
+          ? Number(record.weight)
+          : undefined;
+    parsed.push({
+      id,
+      text,
+      weight
+    });
+  }
+  return parsed;
 };
 
 const toCompositorMode = (value: unknown): CompositorMode => {

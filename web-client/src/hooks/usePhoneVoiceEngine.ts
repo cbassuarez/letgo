@@ -4,15 +4,25 @@ import type {
   PhoneAudioAckPayload,
   PhoneAudioCommandPayload,
   VoiceStreamDescriptor,
+  VoiceStreamIceCandidatePayload,
   VoiceStreamStartPayload,
-  VoiceStreamStopPayload
+  VoiceStreamStopPayload,
+  VoiceStreamSubscribePayload,
+  VoiceStreamSubscribedPayload,
+  VoiceStreamUnsubscribePayload
 } from "@conductor/protocol";
 import { useCallback, useEffect, useRef } from "react";
+import { Device as MediasoupDevice } from "mediasoup-client";
 
 interface UsePhoneVoiceEngineInput {
   enabled: boolean;
   hashedId: string;
   onAck: (payload: PhoneAudioAckPayload) => void;
+  sendVoiceStreamSubscribe: (
+    payload: VoiceStreamSubscribePayload
+  ) => Promise<VoiceStreamSubscribedPayload | null>;
+  sendVoiceStreamUnsubscribe: (payload: VoiceStreamUnsubscribePayload) => void;
+  sendVoiceStreamIce: (payload: VoiceStreamIceCandidatePayload) => void;
   onRequiredCapabilityFailure?: (capability: "audio" | "motion", detail?: string) => void;
 }
 
@@ -51,6 +61,9 @@ export const usePhoneVoiceEngine = ({
   enabled,
   hashedId,
   onAck,
+  sendVoiceStreamSubscribe,
+  sendVoiceStreamUnsubscribe,
+  sendVoiceStreamIce,
   onRequiredCapabilityFailure
 }: UsePhoneVoiceEngineInput) => {
   const localSynthFallbackEnabledRef = useRef<boolean>(isLocalSynthFallbackEnabled());
@@ -63,6 +76,36 @@ export const usePhoneVoiceEngine = ({
   const voiceIdByTrackIdRef = useRef<Map<string, string>>(new Map());
   const voiceIdByNoteRef = useRef<Map<number, string>>(new Map());
   const activeGroupStreamsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const mediasoupDeviceRef = useRef<MediasoupDevice | null>(null);
+  const mediasoupRecvTransportRef = useRef<{
+    id: string;
+    transport: {
+      close: () => void;
+      consume: (options: Record<string, unknown>) => Promise<{ id: string; track: MediaStreamTrack; close: () => void }>;
+      on: (
+        event: "connect",
+        handler: (
+          params: { dtlsParameters: Record<string, unknown> },
+          callback: () => void,
+          errback: (error: Error) => void
+        ) => void
+      ) => void;
+    } | null;
+  }>({ id: "", transport: null });
+  const mediasoupConsumersByVoiceIdRef = useRef<
+    Map<
+      string,
+      {
+        consumerId: string;
+        trackId: string;
+        sessionId: string;
+        consumer: { close: () => void };
+        element: HTMLAudioElement;
+        note?: number;
+      }
+    >
+  >(new Map());
+  const voiceSubscribeSeqRef = useRef(0);
 
   const reportAudioCapabilityFailure = useCallback(
     (error: unknown, fallbackDetail: string): void => {
@@ -96,6 +139,16 @@ export const usePhoneVoiceEngine = ({
         element.src = "";
       }
       activeGroupStreamsRef.current.clear();
+      for (const [, entry] of mediasoupConsumersByVoiceIdRef.current.entries()) {
+        entry.consumer.close();
+        entry.element.pause();
+        entry.element.srcObject = null;
+      }
+      mediasoupConsumersByVoiceIdRef.current.clear();
+      mediasoupRecvTransportRef.current.transport?.close();
+      mediasoupRecvTransportRef.current.transport = null;
+      mediasoupRecvTransportRef.current.id = "";
+      mediasoupDeviceRef.current = null;
     };
   }, []);
 
@@ -210,7 +263,22 @@ export const usePhoneVoiceEngine = ({
     voiceStreamsByVoiceIdRef.current.clear();
     voiceIdByTrackIdRef.current.clear();
     voiceIdByNoteRef.current.clear();
-  }, []);
+    for (const [voiceId, entry] of mediasoupConsumersByVoiceIdRef.current.entries()) {
+      entry.consumer.close();
+      entry.element.pause();
+      entry.element.srcObject = null;
+      sendVoiceStreamUnsubscribe({
+        commandId: `voice-unsub-${Date.now()}`,
+        hashedId,
+        voiceId,
+        trackId: entry.trackId,
+        sessionId: entry.sessionId,
+        reason: "manual",
+        issuedAt: Date.now()
+      });
+    }
+    mediasoupConsumersByVoiceIdRef.current.clear();
+  }, [hashedId, sendVoiceStreamUnsubscribe]);
 
   const stopAllGroupStreams = useCallback(() => {
     for (const [, element] of activeGroupStreamsRef.current.entries()) {
@@ -347,17 +415,40 @@ export const usePhoneVoiceEngine = ({
         return;
       }
 
+      const mediasoupEntry = mediasoupConsumersByVoiceIdRef.current.get(voiceId);
+      if (mediasoupEntry) {
+        mediasoupEntry.consumer.close();
+        mediasoupEntry.element.pause();
+        mediasoupEntry.element.srcObject = null;
+        mediasoupConsumersByVoiceIdRef.current.delete(voiceId);
+        voiceIdByTrackIdRef.current.delete(mediasoupEntry.trackId);
+        if (typeof mediasoupEntry.note === "number") {
+          voiceIdByNoteRef.current.delete(mediasoupEntry.note);
+        }
+        sendVoiceStreamUnsubscribe({
+          commandId: payload.commandId,
+          hashedId,
+          voiceId,
+          trackId: mediasoupEntry.trackId,
+          sessionId: mediasoupEntry.sessionId,
+          reason: (payload.reason as VoiceStreamUnsubscribePayload["reason"]) ?? "manual",
+          issuedAt: Date.now()
+        });
+      }
+
       const entry = voiceStreamsByVoiceIdRef.current.get(voiceId);
-      if (!entry) {
+      if (!entry && !mediasoupEntry) {
         return;
       }
 
-      entry.element.pause();
-      entry.element.src = "";
-      voiceStreamsByVoiceIdRef.current.delete(voiceId);
-      voiceIdByTrackIdRef.current.delete(entry.descriptor.trackId);
-      if (typeof entry.note === "number") {
-        voiceIdByNoteRef.current.delete(entry.note);
+      if (entry) {
+        entry.element.pause();
+        entry.element.src = "";
+        voiceStreamsByVoiceIdRef.current.delete(voiceId);
+        voiceIdByTrackIdRef.current.delete(entry.descriptor.trackId);
+        if (typeof entry.note === "number") {
+          voiceIdByNoteRef.current.delete(entry.note);
+        }
       }
 
       onAck({
@@ -368,11 +459,11 @@ export const usePhoneVoiceEngine = ({
         streamStatus: "fallback_group",
         streamReason: payload.reason,
         voiceId,
-        trackId: entry.descriptor.trackId,
+        trackId: entry?.descriptor.trackId ?? mediasoupEntry?.trackId,
         receivedAt: Date.now()
       });
     },
-    [hashedId, onAck]
+    [hashedId, onAck, sendVoiceStreamUnsubscribe]
   );
 
   const startGroupStem = useCallback(
@@ -459,6 +550,287 @@ export const usePhoneVoiceEngine = ({
       });
     },
     [hashedId, onAck]
+  );
+
+  const nextVoiceSubscribeCommandId = useCallback((voiceId: string, suffix: string): string => {
+    voiceSubscribeSeqRef.current += 1;
+    return `vsub-${Date.now()}-${voiceSubscribeSeqRef.current}-${voiceId}-${suffix}`;
+  }, []);
+
+  const ensureMediasoupTransport = useCallback(
+    async (
+      commandId: string,
+      descriptor: VoiceStreamDescriptor
+    ): Promise<
+      | {
+          transportId: string;
+          transport: {
+            consume: (options: Record<string, unknown>) => Promise<{
+              id: string;
+              track: MediaStreamTrack;
+              close: () => void;
+            }>;
+          };
+          device: MediasoupDevice;
+        }
+      | null
+    > => {
+      if (!descriptor.webrtc) {
+        return null;
+      }
+
+      const existingTransport = mediasoupRecvTransportRef.current.transport;
+      const existingId = mediasoupRecvTransportRef.current.id;
+      const existingDevice = mediasoupDeviceRef.current;
+      if (existingTransport && existingId && existingDevice) {
+        return {
+          transportId: existingId,
+          transport: existingTransport,
+          device: existingDevice
+        };
+      }
+
+      const initCommandId = nextVoiceSubscribeCommandId(descriptor.voiceId, "init");
+      const initResponse = await sendVoiceStreamSubscribe({
+        commandId: initCommandId,
+        hashedId,
+        voiceId: descriptor.voiceId,
+        trackId: descriptor.trackId,
+        sessionId: descriptor.sessionId,
+        requestType: "init",
+        issuedAt: Date.now()
+      });
+
+      if (
+        !initResponse ||
+        initResponse.requestType !== "init" ||
+        !initResponse.transportId ||
+        !initResponse.routerRtpCapabilities ||
+        !initResponse.transportOptions
+      ) {
+        onAck({
+          commandId,
+          hashedId,
+          ok: false,
+          detail: "voice_transport_init_failed",
+          streamStatus: "track_lost",
+          streamReason: "transport_init_failed",
+          voiceId: descriptor.voiceId,
+          trackId: descriptor.trackId,
+          receivedAt: Date.now()
+        });
+        return null;
+      }
+
+      const device = mediasoupDeviceRef.current ?? new MediasoupDevice();
+      if (!mediasoupDeviceRef.current) {
+        await device.load({
+          routerRtpCapabilities: initResponse.routerRtpCapabilities as never
+        });
+        mediasoupDeviceRef.current = device;
+      }
+
+      const transport = device.createRecvTransport(initResponse.transportOptions as never);
+
+      transport.on("connect", ({ dtlsParameters }, callback, errback) => {
+        const connectCommandId = nextVoiceSubscribeCommandId(descriptor.voiceId, "connect");
+        void sendVoiceStreamSubscribe({
+          commandId: connectCommandId,
+          hashedId,
+          voiceId: descriptor.voiceId,
+          trackId: descriptor.trackId,
+          sessionId: descriptor.sessionId,
+          requestType: "connect",
+          transportId: initResponse.transportId,
+          dtlsParameters: dtlsParameters as Record<string, unknown>,
+          issuedAt: Date.now()
+        })
+          .then((connected) => {
+            if (!connected || connected.requestType !== "connect") {
+              errback(new Error("voice_transport_connect_failed"));
+              return;
+            }
+            callback();
+          })
+          .catch((error: unknown) => {
+            errback(error instanceof Error ? error : new Error("voice_transport_connect_failed"));
+          });
+      });
+
+      transport.on("connectionstatechange", (state: string) => {
+        if (state === "failed" || state === "disconnected" || state === "closed") {
+          onAck({
+            commandId,
+            hashedId,
+            ok: false,
+            detail: `voice_transport_${state}`,
+            streamStatus: "underrun",
+            streamReason: state,
+            voiceId: descriptor.voiceId,
+            trackId: descriptor.trackId,
+            receivedAt: Date.now()
+          });
+        }
+      });
+
+      mediasoupRecvTransportRef.current.id = initResponse.transportId;
+      mediasoupRecvTransportRef.current.transport = transport as unknown as {
+        close: () => void;
+        consume: (options: Record<string, unknown>) => Promise<{
+          id: string;
+          track: MediaStreamTrack;
+          close: () => void;
+        }>;
+        on: (
+          event: "connect",
+          handler: (
+            params: { dtlsParameters: Record<string, unknown> },
+            callback: () => void,
+            errback: (error: Error) => void
+          ) => void
+        ) => void;
+      };
+
+      return {
+        transportId: initResponse.transportId,
+        transport: mediasoupRecvTransportRef.current.transport,
+        device
+      };
+    },
+    [hashedId, nextVoiceSubscribeCommandId, onAck, sendVoiceStreamSubscribe]
+  );
+
+  const startVoiceStreamViaMediasoup = useCallback(
+    async (
+      descriptor: VoiceStreamDescriptor,
+      commandId: string,
+      options?: {
+        note?: number;
+      }
+    ): Promise<boolean> => {
+      if (!descriptor.webrtc) {
+        return false;
+      }
+
+      const existing = mediasoupConsumersByVoiceIdRef.current.get(descriptor.voiceId);
+      if (existing && existing.trackId === descriptor.trackId) {
+        return true;
+      }
+      if (existing) {
+        existing.consumer.close();
+        existing.element.pause();
+        existing.element.src = "";
+        mediasoupConsumersByVoiceIdRef.current.delete(descriptor.voiceId);
+      }
+
+      const transportContext = await ensureMediasoupTransport(commandId, descriptor);
+      if (!transportContext) {
+        return false;
+      }
+
+      const consumeCommandId = nextVoiceSubscribeCommandId(descriptor.voiceId, "consume");
+      const consumeResponse = await sendVoiceStreamSubscribe({
+        commandId: consumeCommandId,
+        hashedId,
+        voiceId: descriptor.voiceId,
+        trackId: descriptor.trackId,
+        sessionId: descriptor.sessionId,
+        requestType: "consume",
+        transportId: transportContext.transportId,
+        rtpCapabilities: transportContext.device.rtpCapabilities as Record<string, unknown>,
+        issuedAt: Date.now()
+      });
+
+      if (!consumeResponse || consumeResponse.requestType !== "consume" || !consumeResponse.consumerOptions) {
+        onAck({
+          commandId,
+          hashedId,
+          ok: false,
+          detail: "voice_consume_failed",
+          streamStatus: "track_lost",
+          streamReason: "consume_failed",
+          voiceId: descriptor.voiceId,
+          trackId: descriptor.trackId,
+          receivedAt: Date.now()
+        });
+        return false;
+      }
+
+      const consumer = await transportContext.transport.consume(consumeResponse.consumerOptions);
+      const stream = new MediaStream([consumer.track]);
+      const element = new Audio();
+      element.autoplay = true;
+      element.preload = "auto";
+      element.crossOrigin = "anonymous";
+      element.setAttribute("playsinline", "true");
+      element.srcObject = stream;
+
+      try {
+        await element.play();
+      } catch (error) {
+        reportAudioCapabilityFailure(error, "voice_consumer_play_failed");
+        consumer.close();
+        element.srcObject = null;
+        onAck({
+          commandId,
+          hashedId,
+          ok: false,
+          detail: error instanceof Error ? error.message : "voice_consumer_play_failed",
+          streamStatus: "track_lost",
+          streamReason: "consumer_play_failed",
+          voiceId: descriptor.voiceId,
+          trackId: descriptor.trackId,
+          receivedAt: Date.now()
+        });
+        return false;
+      }
+
+      mediasoupConsumersByVoiceIdRef.current.set(descriptor.voiceId, {
+        consumerId: consumer.id,
+        trackId: descriptor.trackId,
+        sessionId: descriptor.sessionId,
+        consumer,
+        element,
+        note: options?.note
+      });
+      voiceIdByTrackIdRef.current.set(descriptor.trackId, descriptor.voiceId);
+      if (typeof options?.note === "number") {
+        voiceIdByNoteRef.current.set(options.note, descriptor.voiceId);
+      }
+
+      const resumeCommandId = nextVoiceSubscribeCommandId(descriptor.voiceId, "resume");
+      await sendVoiceStreamSubscribe({
+        commandId: resumeCommandId,
+        hashedId,
+        voiceId: descriptor.voiceId,
+        trackId: descriptor.trackId,
+        sessionId: descriptor.sessionId,
+        requestType: "resume",
+        transportId: transportContext.transportId,
+        consumerId: consumeResponse.consumerId ?? consumer.id,
+        issuedAt: Date.now()
+      });
+
+      onAck({
+        commandId,
+        hashedId,
+        ok: true,
+        detail: "stream_started_webrtc",
+        streamStatus: "subscribed",
+        voiceId: descriptor.voiceId,
+        trackId: descriptor.trackId,
+        receivedAt: Date.now()
+      });
+      return true;
+    },
+    [
+      ensureMediasoupTransport,
+      hashedId,
+      nextVoiceSubscribeCommandId,
+      onAck,
+      reportAudioCapabilityFailure,
+      sendVoiceStreamSubscribe
+    ]
   );
 
   const renderLocalCommand = useCallback(
@@ -618,9 +990,17 @@ export const usePhoneVoiceEngine = ({
         }
 
         if (streamDescriptor) {
-          const startState = await startVoiceStream(streamDescriptor, command.commandId, {
-            note: command.note
-          });
+          let startState: "started" | "already_started" | "failed";
+          if (streamDescriptor.transport === "webrtc" || streamDescriptor.webrtc) {
+            const started = await startVoiceStreamViaMediasoup(streamDescriptor, command.commandId, {
+              note: command.note
+            });
+            startState = started ? "started" : "failed";
+          } else {
+            startState = await startVoiceStream(streamDescriptor, command.commandId, {
+              note: command.note
+            });
+          }
           if (startState !== "failed") {
             return;
           }
@@ -663,6 +1043,7 @@ export const usePhoneVoiceEngine = ({
       hashedId,
       onAck,
       renderLocalCommand,
+      startVoiceStreamViaMediasoup,
       startVoiceStream,
       stopAllGroupStreams,
       stopAllVoiceStreams,
@@ -677,9 +1058,13 @@ export const usePhoneVoiceEngine = ({
       if (!enabled || !payload || payload.hashedId !== hashedId) {
         return;
       }
+      if (payload.stream.transport === "webrtc" || payload.stream.webrtc) {
+        await startVoiceStreamViaMediasoup(payload.stream, payload.commandId, { note: payload.note });
+        return;
+      }
       await startVoiceStream(payload.stream, payload.commandId, { note: payload.note });
     },
-    [enabled, hashedId, startVoiceStream]
+    [enabled, hashedId, startVoiceStream, startVoiceStreamViaMediasoup]
   );
 
   const handleVoiceStreamStop = useCallback(

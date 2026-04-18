@@ -302,16 +302,40 @@ private extension ControlAction {
             return "engine_start"
         case .stopEngine:
             return "engine_stop"
+        case .cycleRightStickRouteMode:
+            return "right_stick_route_cycle"
+        case .setRightStickRouteMode(let mode):
+            return "right_stick_route_\(mode.rawValue)"
         case .patchVector:
             return "patch_vector"
         case .armOutputMode(let mode):
             return "arm_mode_\(mode.rawValue)"
         case .armTransportLane(let laneId):
             return "arm_lane_\(laneId)"
+        case .armMainStaticScene(let sceneIndex):
+            return "main_static_scene_\(sceneIndex)"
+        case .armMainDynamicMode:
+            return "main_dynamic_on"
         case .queueTimelineStep(let laneId):
             return "queue_\(laneId)"
         case .setDynamicBinSelection:
             return "dynamic_bin"
+        case .setDynamicAudioSurfX:
+            return "dynamic_audio_surf_x"
+        case .setDynamicAudioSurfY:
+            return "dynamic_audio_surf_y"
+        case .setDynamicAudioSurfZ:
+            return "dynamic_audio_surf_z"
+        case .setDynamicAudioDensity:
+            return "dynamic_audio_density"
+        case .setDynamicEchoMacro:
+            return "dynamic_echo_macro"
+        case .setDynamicTextSurf:
+            return "dynamic_text_surf"
+        case .triggerDynamicTextBurst:
+            return "dynamic_text_burst"
+        case .toggleDynamicTextMute:
+            return "dynamic_text_mute_toggle"
         case .setCutCadence:
             return "cut_cadence"
         case .setCompositorBlend:
@@ -372,6 +396,12 @@ private extension ControlAction {
         case .startEngine, .stopEngine:
             return nil
         case .setDynamicBinSelection(let value),
+             .setDynamicAudioSurfX(let value),
+             .setDynamicAudioSurfY(let value),
+             .setDynamicAudioSurfZ(let value),
+             .setDynamicAudioDensity(let value),
+             .setDynamicEchoMacro(let value),
+             .setDynamicTextSurf(let value),
              .setCutCadence(let value),
              .setCompositorBlend(let value),
              .setStaticSampleMorph(let value),
@@ -389,6 +419,12 @@ private extension ControlAction {
             return held ? 1 : 0
         case .setEffectsChain(_, _, let intensity):
             return intensity
+        case .triggerDynamicTextBurst:
+            return 1
+        case .toggleDynamicTextMute:
+            return nil
+        case .cycleRightStickRouteMode, .setRightStickRouteMode:
+            return nil
         case .toggleUltrachunkOverlay:
             return nil
         case .patchVector(let patch):

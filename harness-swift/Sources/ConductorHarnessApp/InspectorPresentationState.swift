@@ -23,6 +23,7 @@ enum InspectorModalTab: String, CaseIterable, Identifiable, Sendable {
     case link
     case media
     case coreML
+    case textRuntime
     case controls
     case hudDebug
     case actionStream
@@ -37,6 +38,8 @@ enum InspectorModalTab: String, CaseIterable, Identifiable, Sendable {
             return "Media"
         case .coreML:
             return "CoreML"
+        case .textRuntime:
+            return "Text Runtime"
         case .controls:
             return "Controls"
         case .hudDebug:

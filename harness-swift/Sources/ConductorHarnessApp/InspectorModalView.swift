@@ -25,6 +25,10 @@ struct InspectorModalView: View {
                     .tabItem { Text("CoreML") }
                     .tag(InspectorModalTab.coreML)
 
+                textRuntimeTab
+                    .tabItem { Text("Text Runtime") }
+                    .tag(InspectorModalTab.textRuntime)
+
                 controlsTab
                     .tabItem { Text("Controls") }
                     .tag(InspectorModalTab.controls)
@@ -250,20 +254,50 @@ struct InspectorModalView: View {
                 inspectorSection("INPUT MODES") {
                     let rightRole: String = {
                         if model.hotasPhoneChoirContextActive {
-                            return "CHOIR FIELD"
+                            return "CHOIR FIELD (MASKED)"
                         }
-                        if model.effectiveOutputMode == .static {
-                            return model.hotasStaticVisualOverrideHeld ? "VISUAL OVERRIDE (CLUTCH)" : "AUDIO MACRO"
+
+                        switch model.rightStickRouteMode {
+                        case .base:
+                            switch model.effectiveOutputMode {
+                            case .dynamic:
+                                return "DYNAMIC VIDEO"
+                            case .static:
+                                return "STATIC FIELD"
+                            case .interstitial:
+                                return "INTERSTITIAL FIELD"
+                            case .off:
+                                return "IDLE"
+                            }
+                        case .audioOnly:
+                            return "ULTRACHUNK AUDIO"
+                        case .dualWrite:
+                            switch model.effectiveOutputMode {
+                            case .dynamic:
+                                return "VIDEO + AUDIO"
+                            case .static:
+                                return "STATIC + AUDIO"
+                            case .interstitial:
+                                return "INTERSTITIAL + AUDIO"
+                            case .off:
+                                return "AUDIO (IDLE)"
+                            }
                         }
-                        if model.effectiveOutputMode == .dynamic {
-                            return "DYNAMIC VIDEO"
+                    }()
+                    let routeLabel: String = {
+                        switch model.rightStickRouteMode {
+                        case .base:
+                            return "BASE"
+                        case .audioOnly:
+                            return "AUDIO"
+                        case .dualWrite:
+                            return "DUAL"
                         }
-                        return "VECTOR PATCH"
                     }()
                     inspectorRow("MIDI", model.midiInputStatus)
                     inspectorRow("HOTAS", model.hotasInputStatus)
                     inspectorRow("Right Stick Role", rightRole)
-                    inspectorRow("Clutch", model.hotasStaticVisualOverrideHeld ? "HELD" : "OFF")
+                    inspectorRow("Route", routeLabel)
                     inspectorRow("Profile", model.hotasProfileName)
                     inspectorRow("Last Signal", model.hotasLastSignalSummary)
                     inspectorRow("Missing Required", model.hotasMissingRequiredRoles.isEmpty ? "none" : model.hotasMissingRequiredRoles.map(\.rawValue).joined(separator: ", "))
@@ -359,6 +393,136 @@ struct InspectorModalView: View {
                     inspectorRow("Headroom", String(format: "%.2f", model.stateDevelopmentMetrics.headroom))
                     inspectorRow("Safety", String(format: "%.2f", model.stateDevelopmentMetrics.safetyContext))
                     inspectorRow("Last Decision", model.lastMLProposalDecision?.rawValue.uppercased() ?? "-")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+
+    private var textRuntimeTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                inspectorSection("BACKEND TEXT RUNTIME") {
+                    inspectorRow(
+                        "Updated",
+                        model.backendTextRuntimeStatus.map { formatEpochMillis($0.updatedAt) } ?? "never"
+                    )
+                    inspectorRow("Strict", "\(model.backendTextStrictCount) · \(model.backendTextStrictSource)")
+                    inspectorRow("Loose", "\(model.backendTextLooseCount) · \(model.backendTextLooseSource)")
+                    inspectorRow("Model", model.backendTextModelSummary)
+                    inspectorRow("Semantic", model.backendTextSemanticSummary)
+                    if !model.backendTextWarnings.isEmpty {
+                        ForEach(Array(model.backendTextWarnings.enumerated()), id: \.offset) { _, warning in
+                            Text("WARN · \(warning)")
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundStyle(Color(red: 1, green: 0.78, blue: 0.4))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        Button("Refresh Status") {
+                            model.requestBackendTextRuntimeStatus()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Reload Runtime") {
+                            model.reloadBackendTextRuntime()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                inspectorSection("SEMANTIC GENERATOR") {
+                    Picker("Semantic Mode", selection: $model.backendTextSemanticModeSelection) {
+                        ForEach(HarnessTextSemanticMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue.uppercased()).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    TextField("OpenAI Model", text: $model.backendTextSemanticModelInput)
+                        .textFieldStyle(.roundedBorder)
+
+                    SecureField("OpenAI API Key", text: $model.backendTextSemanticAPIKeyInput)
+                        .textFieldStyle(.roundedBorder)
+
+                    inspectorRow(
+                        "Keychain",
+                        model.backendTextSemanticAPIKeySaved ? "saved" : "none"
+                    )
+                    inspectorRow(
+                        "Backend Key",
+                        model.backendTextSemanticAPIKeyConfiguredRemote.map { $0 ? "configured" : "missing" } ?? "unknown"
+                    )
+
+                    if let semantic = model.backendTextRuntimeStatus?.semantic {
+                        inspectorRow("Provider", semantic.provider)
+                        inspectorRow("Model", semantic.model ?? "none")
+                        inspectorRow("Cache", "\(semantic.cacheEntries) entries · \(semantic.inFlight) in flight")
+                        inspectorRow("TTL", "\(Int(semantic.ttlMs))ms")
+                        inspectorRow("Refresh", "\(Int(semantic.refreshMs))ms")
+                        inspectorRow(
+                            "Last Success",
+                            semantic.lastSuccessAt.map(formatEpochMillis) ?? "none"
+                        )
+                        inspectorRow("Last Error", semantic.lastError ?? "none")
+                    } else {
+                        inspectorRow("Status", "Semantic runtime unavailable")
+                    }
+
+                    HStack(spacing: 8) {
+                        Button("Apply Semantic Config") {
+                            model.applyBackendTextSemanticModeSelection()
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button("Clear API Key") {
+                            model.clearBackendTextSemanticAPIKey()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                inspectorSection("SCRIPT BANKS") {
+                    inspectorRow("Imported Strict", model.backendTextImportedStrictLabel)
+                    inspectorRow("Imported Loose", model.backendTextImportedLooseLabel)
+                    HStack(spacing: 8) {
+                        Button("Import Strict…") {
+                            model.importBackendStrictScriptBankFromDisk()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Import Loose…") {
+                            model.importBackendLooseScriptBankFromDisk()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    Button("Push Loaded Banks") {
+                        model.pushBackendTextRuntimeConfiguration(
+                            pushStrict: true,
+                            pushLoose: true,
+                            pushModel: false
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                inspectorSection("MODEL PAYLOAD") {
+                    inspectorRow("Imported Model", model.backendTextImportedModelLabel)
+                    Button("Import Backend Model JSON…") {
+                        model.importBackendTextModelFromDisk()
+                    }
+                    .buttonStyle(.bordered)
+                    Button("Push Full Runtime (Banks + Model)") {
+                        model.pushBackendTextRuntimeConfiguration(
+                            pushStrict: true,
+                            pushLoose: true,
+                            pushModel: true
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -508,6 +672,11 @@ struct InspectorModalView: View {
     private func shortTimestamp(_ timestamp: TimeInterval) -> String {
         Date(timeIntervalSince1970: timestamp)
             .formatted(date: .omitted, time: .standard)
+    }
+
+    private func formatEpochMillis(_ timestampMs: Double) -> String {
+        Date(timeIntervalSince1970: timestampMs / 1_000)
+            .formatted(date: .abbreviated, time: .standard)
     }
 
     private func color(for severity: HUDEventSeverity) -> Color {

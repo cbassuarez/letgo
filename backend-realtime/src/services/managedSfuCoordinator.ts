@@ -82,6 +82,7 @@ export class ManagedSFUCoordinator {
       sessionId,
       token,
       codec: this.voiceCodec,
+      transport: "hls",
       expiresAt,
       streamUrl,
       fallbackGroup: "phone-choir-group"
@@ -103,6 +104,7 @@ export class ManagedSFUCoordinator {
       sessionId,
       token,
       codec: this.groupCodec,
+      transport: "hls",
       expiresAt,
       streamUrl
     };

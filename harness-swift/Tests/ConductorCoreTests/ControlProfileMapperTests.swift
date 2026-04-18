@@ -43,7 +43,7 @@ final class ControlProfileMapperTests: XCTestCase {
         XCTAssertTrue(holdStatic.isEmpty)
     }
 
-    func testBottomToggleQueuesTimelineStep() {
+    func testBottomToggleArmsMainStaticScene() {
         var profile = ControlProfile.defaultX56StrictLive
         profile.bindings = [ControlBinding(
             role: .leftBottomToggle3,
@@ -53,9 +53,24 @@ final class ControlProfileMapperTests: XCTestCase {
         )]
 
         let mapper = ControlProfileMapper(profile: profile)
-        let actions = mapper.map(signal: button("btn:22"), laneIDs: ["preshow", "introduction", "ending"])
+        let actions = mapper.map(signal: button("btn:22"), laneIDs: ["preshow", "introduction", "ending", "main-01"])
 
-        XCTAssertEqual(actions, [.queueTimelineStep("introduction")])
+        XCTAssertEqual(actions, [.armMainStaticScene(3)])
+    }
+
+    func testBottomToggleFiveArmsMainDynamicMode() {
+        var profile = ControlProfile.defaultX56StrictLive
+        profile.bindings = [ControlBinding(
+            role: .leftBottomToggle5,
+            controlID: "btn:24",
+            sourceKind: .hotas,
+            kind: .button
+        )]
+
+        let mapper = ControlProfileMapper(profile: profile)
+        let actions = mapper.map(signal: button("btn:24"), laneIDs: ["main-01"])
+
+        XCTAssertEqual(actions, [.armMainDynamicMode])
     }
 
     func testUltrachunkOverlayToggleMapsToControlAction() {
@@ -104,7 +119,7 @@ final class ControlProfileMapperTests: XCTestCase {
                 activeOutputMode: .static,
                 phoneChoirModeActive: false,
                 allowStaticVideoOverride: true,
-                staticVisualClutchActive: false
+                rightStickRouteMode: .base
             )
         )
 
@@ -128,7 +143,7 @@ final class ControlProfileMapperTests: XCTestCase {
                 activeOutputMode: .dynamic,
                 phoneChoirModeActive: false,
                 allowStaticVideoOverride: true,
-                staticVisualClutchActive: false
+                rightStickRouteMode: .base
             )
         )
 
@@ -152,7 +167,7 @@ final class ControlProfileMapperTests: XCTestCase {
                 activeOutputMode: .dynamic,
                 phoneChoirModeActive: false,
                 allowStaticVideoOverride: true,
-                staticVisualClutchActive: false
+                rightStickRouteMode: .base
             )
         )
 
@@ -197,7 +212,7 @@ final class ControlProfileMapperTests: XCTestCase {
                 activeOutputMode: .off,
                 phoneChoirModeActive: true,
                 allowStaticVideoOverride: true,
-                staticVisualClutchActive: false
+                rightStickRouteMode: .base
             )
         )
 
@@ -249,14 +264,14 @@ final class ControlProfileMapperTests: XCTestCase {
                 activeOutputMode: .static,
                 phoneChoirModeActive: false,
                 allowStaticVideoOverride: false,
-                staticVisualClutchActive: false
+                rightStickRouteMode: .base
             )
         )
 
         XCTAssertEqual(actions, [.setStaticSampleMorph(0.77)])
     }
 
-    func testStaticModeClutchRoutesRightStickToVisualOverridePatch() {
+    func testStaticModeAudioRouteMapsRightStickToAudioSurf() {
         var profile = ControlProfile.defaultX56StrictLive
         profile.bindings = [ControlBinding(
             role: .rightStickX,
@@ -273,11 +288,35 @@ final class ControlProfileMapperTests: XCTestCase {
                 activeOutputMode: .static,
                 phoneChoirModeActive: false,
                 allowStaticVideoOverride: true,
-                staticVisualClutchActive: true
+                rightStickRouteMode: .audioOnly
             )
         )
 
-        XCTAssertEqual(actions, [.patchVector(ParamVectorPatch(spatialX: 0.77))])
+        XCTAssertEqual(actions, [.setDynamicAudioSurfX(0.77)])
+    }
+
+    func testStaticModeDualRouteMapsRightStickToVideoAndAudio() {
+        var profile = ControlProfile.defaultX56StrictLive
+        profile.bindings = [ControlBinding(
+            role: .rightStickX,
+            controlID: "gd:x",
+            sourceKind: .hotas,
+            kind: .axis
+        )]
+
+        let mapper = ControlProfileMapper(profile: profile)
+        let actions = mapper.map(
+            signal: axis("gd:x", value: 0.77),
+            laneIDs: [],
+            context: ControlRuntimeContext(
+                activeOutputMode: .static,
+                phoneChoirModeActive: false,
+                allowStaticVideoOverride: true,
+                rightStickRouteMode: .dualWrite
+            )
+        )
+
+        XCTAssertEqual(actions, [.setStaticSampleMorph(0.77), .setDynamicAudioSurfX(0.77)])
     }
 
     func testToggleDirectionalHoldProducesChoirActions() {
@@ -399,7 +438,49 @@ final class ControlProfileMapperTests: XCTestCase {
             ),
             laneIDs: []
         )
-        XCTAssertEqual(leftActions, [.setStaticVisualOverrideHold(true)])
+        XCTAssertEqual(leftActions, [.cycleRightStickRouteMode])
+    }
+
+    func testStaticVisualClutchDoubleTapEntersDualWriteRoute() {
+        var profile = ControlProfile.defaultX56StrictLive
+        profile.bindings = [ControlBinding(
+            role: .leftStaticVisualClutch,
+            controlID: "btn:2",
+            sourceKind: .hotas,
+            kind: .button
+        )]
+
+        let mapper = ControlProfileMapper(profile: profile)
+
+        let first = mapper.map(
+            signal: ControlSignal(
+                controlID: "btn:2",
+                kind: .button,
+                phase: .began,
+                normalizedValue: 1,
+                rawValue: 1,
+                timestamp: 10.0,
+                sourceDeviceID: "hotas:left",
+                sourceKind: .hotas
+            ),
+            laneIDs: []
+        )
+        XCTAssertEqual(first, [.cycleRightStickRouteMode])
+
+        let second = mapper.map(
+            signal: ControlSignal(
+                controlID: "btn:2",
+                kind: .button,
+                phase: .began,
+                normalizedValue: 1,
+                rawValue: 1,
+                timestamp: 10.2,
+                sourceDeviceID: "hotas:left",
+                sourceKind: .hotas
+            ),
+            laneIDs: []
+        )
+        XCTAssertEqual(second, [.setRightStickRouteMode(.dualWrite)])
     }
 
     func testDeviceAwareBindingFallsBackToLogicalDeviceAfterReplug() {

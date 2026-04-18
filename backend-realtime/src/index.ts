@@ -20,6 +20,8 @@ import { ReplayService } from "./services/replayService";
 import { ShowOrchestrator } from "./services/showOrchestrator";
 import { SyncService } from "./services/syncService";
 import { TextSceneComposerService } from "./services/textSceneComposer";
+import { TextDirectorModelRuntime } from "./services/textDirectorModel";
+import { TextSemanticGeneratorRuntime } from "./services/textSemanticGenerator";
 import {
   GoogleSheetsLogbookStore,
   MemoryLogbookStore
@@ -41,7 +43,27 @@ const bootstrap = async (): Promise<void> => {
   const lightingField = new CrowdLightingField();
   const phoneAudioPool = new PhoneAudioPoolService();
   const crowdPickPulse = new CrowdPickPulseService();
-  const textSceneComposer = new TextSceneComposerService();
+  const textSceneComposer = new TextSceneComposerService({
+    bankRuntime: {
+      combinedPath: config.CONDUCTOR_TEXT_BANK_PATH,
+      strictPath: config.CONDUCTOR_TEXT_STRICT_BANK_PATH,
+      loosePath: config.CONDUCTOR_TEXT_LOOSE_BANK_PATH,
+      refreshMs: config.CONDUCTOR_TEXT_BANK_REFRESH_MS
+    },
+    modelRuntime: new TextDirectorModelRuntime({
+      modelPath: config.CONDUCTOR_TEXT_DIRECTOR_MODEL_PATH,
+      refreshMs: config.CONDUCTOR_TEXT_DIRECTOR_MODEL_REFRESH_MS
+    }),
+    semanticRuntime: new TextSemanticGeneratorRuntime({
+      mode: config.CONDUCTOR_TEXT_SEMANTIC_MODE,
+      openAiApiKey:
+        config.CONDUCTOR_TEXT_SEMANTIC_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY,
+      openAiModel: config.CONDUCTOR_TEXT_SEMANTIC_OPENAI_MODEL,
+      refreshMs: config.CONDUCTOR_TEXT_SEMANTIC_REFRESH_MS,
+      ttlMs: config.CONDUCTOR_TEXT_SEMANTIC_TTL_MS,
+      timeoutMs: config.CONDUCTOR_TEXT_SEMANTIC_TIMEOUT_MS
+    })
+  });
   const audioOpsStateHub = new AudioOpsStateHub();
 
   const sessionStore = config.REDIS_URL

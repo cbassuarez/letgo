@@ -234,18 +234,28 @@ public final class AudioRouter {
             mScope: scope,
             mElement: kAudioObjectPropertyElementMain
         )
-        var unmanagedString: Unmanaged<CFString>?
-        var dataSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        var dataSize = UInt32(MemoryLayout<CFString?>.size)
+        let rawPointer = UnsafeMutableRawPointer.allocate(
+            byteCount: Int(dataSize),
+            alignment: MemoryLayout<CFString?>.alignment
+        )
+        let typedPointer = rawPointer.bindMemory(to: CFString?.self, capacity: 1)
+        typedPointer.initialize(repeating: nil, count: 1)
+        defer {
+            typedPointer.deinitialize(count: 1)
+            rawPointer.deallocate()
+        }
+
         let status = AudioObjectGetPropertyData(
             deviceID,
             &address,
             0,
             nil,
             &dataSize,
-            &unmanagedString
+            rawPointer
         )
         guard status == noErr else { return nil }
-        guard let unmanagedString else { return nil }
-        return unmanagedString.takeRetainedValue() as String
+        guard let cfString = typedPointer.pointee else { return nil }
+        return cfString as String
     }
 }

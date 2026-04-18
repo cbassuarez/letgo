@@ -65,7 +65,17 @@ final class ControlActionRouterTests: XCTestCase {
         let delegate = RouterDelegateMock()
         let router = ControlActionRouter(delegate: delegate, commitCooldownSeconds: 0)
 
+        router.route(.cycleRightStickRouteMode)
+        router.route(.setRightStickRouteMode(.dualWrite))
         router.route(.setDynamicBinSelection(0.77))
+        router.route(.setDynamicAudioSurfX(0.11))
+        router.route(.setDynamicAudioSurfY(0.22))
+        router.route(.setDynamicAudioSurfZ(0.33))
+        router.route(.setDynamicAudioDensity(0.46))
+        router.route(.setDynamicEchoMacro(0.57))
+        router.route(.setDynamicTextSurf(0.68))
+        router.route(.triggerDynamicTextBurst)
+        router.route(.toggleDynamicTextMute)
         router.route(.setCutCadence(0.63))
         router.route(.setCompositorBlend(0.28))
         router.route(.setStaticVisualOverrideHold(true))
@@ -80,7 +90,17 @@ final class ControlActionRouterTests: XCTestCase {
         router.route(.setStrictLooseBlend(0.91))
         router.route(.setVisualVariance(0.22))
 
+        XCTAssertEqual(delegate.routeModeCycleCount, 1)
+        XCTAssertEqual(delegate.routeMode, .dualWrite)
         XCTAssertEqual(delegate.dynamicBinSelection, 0.77)
+        XCTAssertEqual(delegate.dynamicAudioSurfX, 0.11)
+        XCTAssertEqual(delegate.dynamicAudioSurfY, 0.22)
+        XCTAssertEqual(delegate.dynamicAudioSurfZ, 0.33)
+        XCTAssertEqual(delegate.dynamicAudioDensity, 0.46)
+        XCTAssertEqual(delegate.dynamicEchoMacro, 0.57)
+        XCTAssertEqual(delegate.dynamicTextSurf, 0.68)
+        XCTAssertEqual(delegate.dynamicTextBurstCount, 1)
+        XCTAssertEqual(delegate.dynamicTextMuteToggleCount, 1)
         XCTAssertEqual(delegate.cutCadence, 0.63)
         XCTAssertEqual(delegate.compositorBlend, 0.28)
         XCTAssertEqual(delegate.staticVisualOverrideHeld, true)
@@ -118,6 +138,33 @@ final class ControlActionRouterTests: XCTestCase {
         let blocked = router.route(.acceptActiveProposal)
         XCTAssertEqual(blocked, .blocked(reason: "no active proposal"))
     }
+
+    func testMainSceneStaticControlRequiresMainState() {
+        let delegate = RouterDelegateMock()
+        let router = ControlActionRouter(delegate: delegate, commitCooldownSeconds: 0)
+
+        delegate.canUseMainSceneControlsFromControlStorage = false
+        let blocked = router.route(.armMainStaticScene(2))
+        XCTAssertEqual(blocked, .blocked(reason: "main scene controls require MAIN state"))
+        XCTAssertEqual(delegate.mainStaticSceneArmRequests, [])
+    }
+
+    func testMainSceneStaticAndDynamicActionsRouteWhenInMainState() {
+        let delegate = RouterDelegateMock()
+        let router = ControlActionRouter(delegate: delegate, commitCooldownSeconds: 0)
+
+        delegate.canUseMainSceneControlsFromControlStorage = true
+        delegate.allowMainStaticSceneArm = true
+        delegate.allowMainDynamicArm = true
+
+        let staticResult = router.route(.armMainStaticScene(4))
+        let dynamicResult = router.route(.armMainDynamicMode)
+
+        XCTAssertEqual(staticResult, .applied)
+        XCTAssertEqual(dynamicResult, .applied)
+        XCTAssertEqual(delegate.mainStaticSceneArmRequests, [4])
+        XCTAssertEqual(delegate.mainDynamicArmCount, 1)
+    }
 }
 
 @MainActor
@@ -142,6 +189,14 @@ private final class RouterDelegateMock: ControlActionRouting {
     var sampleBankDomain: SampleBankDomain = .main
     var effectsUpdates: [EffectsUpdate] = []
     var dynamicBinSelection: Double = 0
+    var dynamicAudioSurfX: Double = 0
+    var dynamicAudioSurfY: Double = 0
+    var dynamicAudioSurfZ: Double = 0
+    var dynamicAudioDensity: Double = 0
+    var dynamicEchoMacro: Double = 0
+    var dynamicTextSurf: Double = 0
+    var dynamicTextBurstCount = 0
+    var dynamicTextMuteToggleCount = 0
     var cutCadence: Double = 0
     var compositorBlend: Double = 0
     var staticVisualOverrideHeld = false
@@ -157,15 +212,25 @@ private final class RouterDelegateMock: ControlActionRouting {
     var visualVariance: Double = 0
     var ultrachunkOverlayToggleCount = 0
     var proposalDecision: MLProposalDecision = .blocked
+    var routeModeCycleCount = 0
+    var routeMode: RightStickRouteModeID = .base
+    var canUseMainSceneControlsFromControlStorage = false
+    var allowMainStaticSceneArm = false
+    var allowMainDynamicArm = false
+    var mainStaticSceneArmRequests: [Int] = []
+    var mainDynamicArmCount = 0
 
     var isLatchArmed: Bool { isLatchArmedStorage }
     var phoneAudioGateArmed: Bool { phoneAudioGateArmedStorage }
     var hotasPhoneChoirContextActive: Bool { hotasPhoneChoirContextActiveStorage }
+    var canUseMainSceneControlsFromControl: Bool { canUseMainSceneControlsFromControlStorage }
 
     @discardableResult
     func acceptActiveProposalFromControl() -> MLProposalDecision { proposalDecision }
     func startEngineFromControl() { startEngineCount += 1 }
     func stopEngineFromControl() { stopEngineCount += 1 }
+    func cycleRightStickRouteModeFromControl() { routeModeCycleCount += 1 }
+    func setRightStickRouteModeFromControl(_ mode: RightStickRouteModeID) { routeMode = mode }
     func canTakeArmedTimelineStep() -> Bool { canTakeArmedTimeline }
     func takeArmedTimelineStep() { timelineTakeCount += 1 }
     func fireOutputGO() { outputGoCount += 1 }
@@ -173,8 +238,24 @@ private final class RouterDelegateMock: ControlActionRouting {
     func patchVector(_ patch: ParamVectorPatch) { _ = patch }
     func armOutputMode(_ mode: FlightOutputMode) { _ = mode }
     func armTransportLane(_ laneId: String) { _ = laneId }
+    func armMainStaticSceneFromControl(_ sceneIndex: Int) -> Bool {
+        mainStaticSceneArmRequests.append(sceneIndex)
+        return allowMainStaticSceneArm
+    }
+    func armMainDynamicModeFromControl() -> Bool {
+        mainDynamicArmCount += 1
+        return allowMainDynamicArm
+    }
     func queueTimelineStepFromControl(_ laneId: String) { _ = laneId }
     func setDynamicBinSelectionFromControl(_ value: Double) { dynamicBinSelection = value }
+    func setDynamicAudioSurfXFromControl(_ value: Double) { dynamicAudioSurfX = value }
+    func setDynamicAudioSurfYFromControl(_ value: Double) { dynamicAudioSurfY = value }
+    func setDynamicAudioSurfZFromControl(_ value: Double) { dynamicAudioSurfZ = value }
+    func setDynamicAudioDensityFromControl(_ value: Double) { dynamicAudioDensity = value }
+    func setDynamicEchoMacroFromControl(_ value: Double) { dynamicEchoMacro = value }
+    func setDynamicTextSurfFromControl(_ value: Double) { dynamicTextSurf = value }
+    func triggerDynamicTextBurstFromControl() { dynamicTextBurstCount += 1 }
+    func toggleDynamicTextMuteFromControl() { dynamicTextMuteToggleCount += 1 }
     func setCutCadenceFromControl(_ value: Double) { cutCadence = value }
     func setCompositorBlendFromControl(_ value: Double) { compositorBlend = value }
     func setStaticVisualOverrideHoldFromControl(_ isHeld: Bool) { staticVisualOverrideHeld = isHeld }

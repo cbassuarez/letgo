@@ -37,6 +37,7 @@ final class VufineHUDSnapshotTests: XCTestCase {
             activeSampleBank: 2,
             activeChoirSampleBank: 3,
             hotasPhoneChoirContextActive: true,
+            rightStickRouteMode: .base,
             hotasStaticVisualOverrideHeld: false,
             effectsChainState: EffectsChainState(
                 chainAActive: true,

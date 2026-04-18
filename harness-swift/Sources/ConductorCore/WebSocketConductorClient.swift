@@ -48,10 +48,14 @@ public final class WebSocketConductorClient: NSObject {
         "\"kind\":\"voice_stream_stop\"",
         "\"kind\":\"group_stem_start\"",
         "\"kind\":\"group_stem_stop\"",
+        "\"kind\":\"voice_stream_subscribed\"",
+        "\"kind\":\"voice_stream_ice\"",
+        "\"kind\":\"voice_publisher_announce\"",
         "\"kind\":\"keyboard_state\"",
         "\"kind\":\"keyboard_patch_change\"",
         "\"kind\":\"show_snapshot\"",
         "\"kind\":\"audio_features\"",
+        "\"kind\":\"text_runtime_status\"",
         "\"kind\":\"push_deck_event\"",
         "\"kind\":\"procedural_state\""
     ]

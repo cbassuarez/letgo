@@ -63,6 +63,7 @@ struct VufineHUDSnapshot: Equatable {
         let activeSampleBank: Int
         let activeChoirSampleBank: Int
         let hotasPhoneChoirContextActive: Bool
+        let rightStickRouteMode: RightStickRouteModeID
         let hotasStaticVisualOverrideHeld: Bool
         let effectsChainState: EffectsChainState
         let activeEffectsPreset: EffectsChainPreset
@@ -143,15 +144,52 @@ struct VufineHUDSnapshot: Equatable {
         let ultrachunkLine = "ULTRACHUNK layer \(input.hotasUltrachunkOverlayEnabled ? "ON" : "OFF")  speed \(Self.decimal(input.ultrachunkControlFrame.speed))  gran \(Self.decimal(input.ultrachunkGranularity))  int \(Self.decimal(input.ultrachunkIntensity))  twist \(input.ultrachunkDSPState.twistLane.rawValue.uppercased())  p \(input.ultrachunkPrimarySampleID ?? "-")  s \(input.ultrachunkSecondarySampleID ?? "-")"
         let rightStickRole: String
         if input.hotasPhoneChoirContextActive {
-            rightStickRole = "CHOIR FIELD"
-        } else if input.effectiveOutputMode == .static {
-            rightStickRole = input.hotasStaticVisualOverrideHeld ? "VISUAL OVERRIDE (CLUTCH)" : "ULTRACHUNK AUDIO"
-        } else if input.effectiveOutputMode == .off {
-            rightStickRole = "ULTRACHUNK AUDIO (IDLE)"
+            rightStickRole = "CHOIR FIELD (MASKED)"
         } else {
-            rightStickRole = "ULTRACHUNK AUDIO"
+            switch input.rightStickRouteMode {
+            case .base:
+                switch input.effectiveOutputMode {
+                case .dynamic:
+                    rightStickRole = "DYNAMIC VIDEO"
+                case .static:
+                    rightStickRole = "STATIC FIELD"
+                case .interstitial:
+                    rightStickRole = "INTERSTITIAL FIELD"
+                case .off:
+                    rightStickRole = "IDLE"
+                }
+            case .audioOnly:
+                rightStickRole = "ULTRACHUNK AUDIO"
+            case .dualWrite:
+                switch input.effectiveOutputMode {
+                case .dynamic:
+                    rightStickRole = "VIDEO + AUDIO"
+                case .static:
+                    rightStickRole = "STATIC + AUDIO"
+                case .interstitial:
+                    rightStickRole = "INTERSTITIAL + AUDIO"
+                case .off:
+                    rightStickRole = "AUDIO (IDLE)"
+                }
+            }
         }
-        let controlRoleLine = "CTRL RIGHT[\(rightStickRole)]  LEFT[BANK/CUE/TRANSPORT]  CLUTCH \(input.hotasStaticVisualOverrideHeld ? "HELD" : "OFF")  UC \(input.hotasUltrachunkOverlayEnabled ? "ON" : "OFF")"
+        let routeLabel: String = {
+            switch input.rightStickRouteMode {
+            case .base:
+                return "BASE"
+            case .audioOnly:
+                return "AUDIO"
+            case .dualWrite:
+                return "DUAL"
+            }
+        }()
+        let routeLine: String = {
+            if input.hotasPhoneChoirContextActive {
+                return "\(routeLabel) MASKED"
+            }
+            return routeLabel
+        }()
+        let controlRoleLine = "CTRL RIGHT[\(rightStickRole)]  LEFT[BANK/CUE/TRANSPORT]  ROUTE \(routeLine)  UC \(input.hotasUltrachunkOverlayEnabled ? "ON" : "OFF")"
         let proceduralLine = "PROC clip \(clip)  cad \(Self.decimal(procedural.cutCadence))  tr \(procedural.transitionMode.rawValue)  comp \(procedural.compositorPreset.rawValue)  split \(procedural.splitLayout.rawValue)  fade \(Self.decimal(procedural.fade))"
         let textBlendLine = "TEXT p \(Self.decimal(procedural.textProbability))  strict \(Self.decimal(procedural.strictLooseBlend))  loose \(Self.decimal(procedural.textBlend.looseRatio))  var \(Self.decimal(procedural.visualVariance))  crowd \(Self.decimal(procedural.crowdSteeringLevel))"
         let vectorLine = "VECTOR x \(Self.decimal(input.vector.spatialX))  y \(Self.decimal(input.vector.spatialY))  z \(Self.decimal(input.vector.spatialZ))  gain \(Self.decimal(input.vector.audioGain))  comp \(Self.decimal(input.vector.compositeBias))  text \(Self.decimal(input.vector.textAmount))"
@@ -474,6 +512,7 @@ extension ConductorHarnessViewModel {
             activeSampleBank: activeSampleBank,
             activeChoirSampleBank: activeChoirSampleBank,
             hotasPhoneChoirContextActive: hotasPhoneChoirContextActive,
+            rightStickRouteMode: rightStickRouteMode,
             hotasStaticVisualOverrideHeld: hotasStaticVisualOverrideHeld,
             effectsChainState: effectsChainState,
             activeEffectsPreset: activeEffectsPreset,

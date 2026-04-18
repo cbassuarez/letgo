@@ -16,6 +16,12 @@ public enum EffectsChainID: String, Codable, CaseIterable, Sendable {
     case b
 }
 
+public enum RightStickRouteModeID: String, Codable, CaseIterable, Sendable {
+    case base
+    case audioOnly = "audio_only"
+    case dualWrite = "dual_write"
+}
+
 public struct EffectsChainState: Equatable, Codable, Sendable {
     public var chainAActive: Bool
     public var chainAIntensity: Double
@@ -58,11 +64,23 @@ public enum ControlAction: Equatable, Sendable {
     case acceptActiveProposal
     case startEngine
     case stopEngine
+    case cycleRightStickRouteMode
+    case setRightStickRouteMode(RightStickRouteModeID)
     case patchVector(ParamVectorPatch)
     case armOutputMode(FlightOutputModeID)
     case armTransportLane(String)
+    case armMainStaticScene(Int)
+    case armMainDynamicMode
     case queueTimelineStep(String)
     case setDynamicBinSelection(Double)
+    case setDynamicAudioSurfX(Double)
+    case setDynamicAudioSurfY(Double)
+    case setDynamicAudioSurfZ(Double)
+    case setDynamicAudioDensity(Double)
+    case setDynamicEchoMacro(Double)
+    case setDynamicTextSurf(Double)
+    case triggerDynamicTextBurst
+    case toggleDynamicTextMute
     case setCutCadence(Double)
     case setCompositorBlend(Double)
     case setStaticVisualOverrideHold(Bool)

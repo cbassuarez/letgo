@@ -341,6 +341,9 @@ export const DeviceRoute = (): JSX.Element => {
   const {
     sendCrowdPickVote,
     sendPhoneAudioAck,
+    sendVoiceStreamSubscribe,
+    sendVoiceStreamUnsubscribe,
+    sendVoiceStreamIce,
     sendPermissions,
     sendZoneUpdate,
     sendParticipantVector,
@@ -363,6 +366,9 @@ export const DeviceRoute = (): JSX.Element => {
     enabled: permissionsDone && session.phoneAudioPoolState.gateCommitted,
     hashedId,
     onAck: sendPhoneAudioAck,
+    sendVoiceStreamSubscribe,
+    sendVoiceStreamUnsubscribe,
+    sendVoiceStreamIce,
     onRequiredCapabilityFailure: (capability) => {
       if (capability === "audio" || capability === "motion") {
         invalidateRequiredPermissions(capability);

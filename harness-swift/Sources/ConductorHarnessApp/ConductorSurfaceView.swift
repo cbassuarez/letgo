@@ -1103,7 +1103,7 @@ struct ConductorSurfaceView: View {
                         Text("Bank \(model.activeSampleBank) · FX A \(model.effectsChainState.chainAActive ? "ON" : "OFF") · FX B \(model.effectsChainState.chainBActive ? "ON" : "OFF")")
                             .font(ConsoleTheme.telemetryFont(size: 9))
                             .foregroundStyle(Color.white.opacity(0.5))
-                        Text("Role \(rightStickRoleLabel) · Clutch \(model.hotasStaticVisualOverrideHeld ? "HELD" : "OFF")")
+                        Text("Role \(rightStickRoleLabel) · Route \(rightStickRouteModeLabel)")
                             .font(ConsoleTheme.telemetryFont(size: 9))
                             .foregroundStyle(Color.white.opacity(0.52))
                         Text("Ultrachunk overlay \(model.hotasUltrachunkOverlayEnabled ? "ON" : "OFF")")
@@ -1303,7 +1303,7 @@ struct ConductorSurfaceView: View {
                     }
 
                     HStack {
-                        Text("CLUTCH \(model.hotasStaticVisualOverrideHeld ? "HELD" : "OFF")")
+                        Text("ROUTE \(rightStickRouteModeLabel)")
                         Spacer()
                         Text("CTX \(model.hotasPhoneChoirContextActive ? "CHOIR" : "MAIN")")
                     }
@@ -1406,28 +1406,61 @@ struct ConductorSurfaceView: View {
 
     private var rightStickRoleLabel: String {
         if model.hotasPhoneChoirContextActive {
-            return "CHOIR FIELD"
+            return "CHOIR FIELD (MASKED)"
         }
-        if model.effectiveOutputMode == .static {
-            return model.hotasStaticVisualOverrideHeld ? "VISUAL OVERRIDE (CLUTCH)" : "ULTRACHUNK AUDIO"
+
+        switch model.rightStickRouteMode {
+        case .base:
+            switch model.effectiveOutputMode {
+            case .dynamic:
+                return "DYNAMIC VIDEO"
+            case .static:
+                return "STATIC FIELD"
+            case .interstitial:
+                return "INTERSTITIAL FIELD"
+            case .off:
+                return "IDLE"
+            }
+        case .audioOnly:
+            return "ULTRACHUNK AUDIO"
+        case .dualWrite:
+            switch model.effectiveOutputMode {
+            case .dynamic:
+                return "VIDEO + AUDIO"
+            case .static:
+                return "STATIC + AUDIO"
+            case .interstitial:
+                return "INTERSTITIAL + AUDIO"
+            case .off:
+                return "AUDIO (IDLE)"
+            }
         }
-        if model.effectiveOutputMode == .off {
-            return "ULTRACHUNK AUDIO (IDLE)"
+    }
+
+    private var rightStickRouteModeLabel: String {
+        switch model.rightStickRouteMode {
+        case .base:
+            return "BASE"
+        case .audioOnly:
+            return "AUDIO"
+        case .dualWrite:
+            return "DUAL"
         }
-        return "ULTRACHUNK AUDIO"
     }
 
     private var rightStickRoleColor: Color {
         if model.hotasPhoneChoirContextActive {
             return ConsoleTheme.lampBlue
         }
-        if model.effectiveOutputMode == .static {
-            return model.hotasStaticVisualOverrideHeld ? ConsoleTheme.lampAmber : ConsoleTheme.lampGreen
-        }
-        if model.effectiveOutputMode == .dynamic {
+
+        switch model.rightStickRouteMode {
+        case .base:
             return ConsoleTheme.lampGreen
+        case .audioOnly:
+            return ConsoleTheme.lampAmber
+        case .dualWrite:
+            return ConsoleTheme.lampBlue
         }
-        return Color.white.opacity(0.6)
     }
 
     private var unhealthyChoirDeviceCount: Int {
@@ -2067,6 +2100,49 @@ private struct SetupSheet: View {
             )
 
             VStack(alignment: .leading, spacing: 8) {
+                Text("MIDI OUTPUT (ABLETON HOST LINK)")
+                    .font(ConsoleTheme.smallTagFont(size: 9))
+                    .tracking(1.2)
+                    .foregroundStyle(Color.white.opacity(0.55))
+
+                setupMenuRow(label: "MIDI Dest", selectedValue: selectedMIDIDestinationName) {
+                    if model.availableMIDIDestinations.isEmpty {
+                        Button("NO MIDI DESTINATIONS") {}
+                            .disabled(true)
+                    } else {
+                        ForEach(model.availableMIDIDestinations) { output in
+                            Button(output.name) {
+                                model.selectedMIDIDestinationID = output.id
+                            }
+                        }
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    setupActionButton("ARM OUT", variant: .primary, isDisabled: model.selectedMIDIDestinationID.isEmpty) {
+                        model.armMIDIDestination()
+                    }
+                    setupActionButton("DISARM OUT") {
+                        model.stopMIDIDestination()
+                    }
+                    setupActionButton("REFRESH IO") {
+                        model.refreshSetupInventory()
+                    }
+                }
+
+                Text(model.midiOutputStatus)
+                    .font(ConsoleTheme.telemetryFont(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.62))
+            }
+            .padding(10)
+            .background(ConsoleTheme.panelInnerFill)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(ConsoleTheme.panelStroke, lineWidth: 0.7)
+            )
+
+            VStack(alignment: .leading, spacing: 8) {
                 Text("HOTAS CONTROL")
                     .font(ConsoleTheme.smallTagFont(size: 9))
                     .tracking(1.2)
@@ -2229,6 +2305,10 @@ private struct SetupSheet: View {
 
     private var selectedMIDIInputName: String {
         model.selectedMIDIInputDisplayName
+    }
+
+    private var selectedMIDIDestinationName: String {
+        model.selectedMIDIDestinationDisplayName
     }
 
     @ViewBuilder
