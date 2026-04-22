@@ -13,6 +13,8 @@ import {
   type ShowSceneKey,
   type ShowSnapshotPayload,
   type ShowStreamMap,
+  type ShowCatalogClipEntry,
+  type ShowMediaCatalog,
   isCueCommand,
   type LightingStatePayload,
   normalizeVector,
@@ -78,6 +80,13 @@ import type { SessionStore } from "../stores/sessionStore";
 import { logger } from "../utils/logger";
 import { ManagedSFUCoordinator } from "../services/managedSfuCoordinator";
 import { MediasoupVoiceService } from "../services/mediasoupVoiceService";
+import {
+  findCatalogClipById,
+  inferCatalogUrlFromBaseUrl,
+  loadShowMediaCatalog,
+  pickCatalogClip,
+  streamMapFromCatalogStaticEntries
+} from "../services/showMediaCatalog";
 
 interface WsDependencies {
   config: AppConfig;
@@ -307,6 +316,23 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     return trimmed.length > 0 ? trimmed : null;
   };
 
+  const inferMediaMimeType = (mediaRef: string): string => {
+    const normalized = mediaRef.split(/[?#]/, 1)[0]?.toLowerCase() ?? "";
+    if (normalized.endsWith(".m3u8")) {
+      return "application/vnd.apple.mpegurl";
+    }
+    if (normalized.endsWith(".mp4") || normalized.endsWith(".m4v")) {
+      return "video/mp4";
+    }
+    if (normalized.endsWith(".mov")) {
+      return "video/quicktime";
+    }
+    if (normalized.endsWith(".webm")) {
+      return "video/webm";
+    }
+    return "application/octet-stream";
+  };
+
   const joinUrlPath = (base: string, path: string): string => {
     const normalizedBase = base.endsWith("/") ? base.slice(0, -1) : base;
     const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
@@ -421,12 +447,22 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     return map;
   };
 
-  const configuredStreamMap = (() => {
-    const defaultProductionBaseURL = "https://media.letgofilm.com/test-shots-v1";
-    const configuredBaseURL =
-      normalizeStreamURL(deps.config.CONDUCTOR_HLS_BASE_URL) ??
-      (deps.config.NODE_ENV === "production" ? defaultProductionBaseURL : null);
+  const defaultProductionCatalogURL = "https://media.letgofilm.com/show-raw-apr22-original/catalog.json";
+  const configuredBaseURL = normalizeStreamURL(deps.config.CONDUCTOR_HLS_BASE_URL);
+  const configuredCatalogURL =
+    normalizeStreamURL(deps.config.CONDUCTOR_HLS_CATALOG_URL) ??
+    (configuredBaseURL
+      ? inferCatalogUrlFromBaseUrl(configuredBaseURL)
+      : deps.config.NODE_ENV === "production"
+        ? defaultProductionCatalogURL
+        : null);
 
+  let loadedCatalog: ShowMediaCatalog | null = null;
+  if (configuredCatalogURL) {
+    loadedCatalog = await loadShowMediaCatalog(configuredCatalogURL);
+  }
+
+  const buildConfiguredStreamMap = (catalogStaticMap: ShowStreamMap = {}): ShowStreamMap => {
     const fromBaseURL: ShowStreamMap = configuredBaseURL
       ? {
           interstitial: joinUrlPath(configuredBaseURL, "interstitial/interstitial.m3u8"),
@@ -456,37 +492,34 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     }
 
     const rawMap = deps.config.CONDUCTOR_HLS_STREAM_MAP;
-    if (!rawMap) {
-      return {
-        ...fromBaseURL,
-        ...fromEnvFields
-      };
+    const fromJson: ShowStreamMap = {};
+    if (rawMap) {
+      try {
+        const parsed = JSON.parse(rawMap) as Record<string, unknown>;
+        for (const key of sceneKeys) {
+          const value = normalizeStreamURL(parsed[key]);
+          if (value) {
+            fromJson[key] = value;
+          }
+        }
+      } catch {
+        logger.warn("invalid CONDUCTOR_HLS_STREAM_MAP json", {
+          value: rawMap
+        });
+      }
     }
 
-    try {
-      const parsed = JSON.parse(rawMap) as Record<string, unknown>;
-      const fromJson: ShowStreamMap = {};
-      for (const key of sceneKeys) {
-        const value = normalizeStreamURL(parsed[key]);
-        if (value) {
-          fromJson[key] = value;
-        }
-      }
-      return {
-        ...fromBaseURL,
-        ...fromJson,
-        ...fromEnvFields
-      };
-    } catch {
-      logger.warn("invalid CONDUCTOR_HLS_STREAM_MAP json", {
-        value: rawMap
-      });
-      return {
-        ...fromBaseURL,
-        ...fromEnvFields
-      };
-    }
-  })();
+    return {
+      ...fromBaseURL,
+      ...catalogStaticMap,
+      ...fromJson,
+      ...fromEnvFields
+    };
+  };
+
+  let configuredStreamMap: ShowStreamMap = buildConfiguredStreamMap(
+    loadedCatalog ? streamMapFromCatalogStaticEntries(loadedCatalog) : {}
+  );
 
   const mergeStreamMaps = (base: ShowStreamMap, incoming: ShowStreamMap): ShowStreamMap => {
     if (Object.keys(incoming).length === 0) {
@@ -507,38 +540,33 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       outputMode.includes("interstitial") || outputMode === "off"
     );
     const explicit = parseSceneKey(payload.showActiveScene ?? payload.activeSceneKey);
-    const explicitAllowed =
-      explicit &&
-      ((cue.showState === "preshow" && explicit === "preshow") ||
-        (cue.showState === "introduction" && explicit === "introduction") ||
-        (cue.showState === "ending" && explicit === "ending") ||
-        (cue.showState === "main" && (explicit === "mainStatic" || explicit === "mainDynamic")) ||
-        (explicit === "interstitial" && interstitialActive) ||
-        ((cue.showState === "idle" || cue.showState === "hold" || cue.showState === "aborted" || cue.showState === "recovery") &&
-          explicit === "interstitial"));
-
-    if (explicitAllowed) {
+    if (explicit) {
+      if (explicit === "interstitial") {
+        return interstitialActive ? "interstitial" : null;
+      }
+      // Trust explicit scene hints from harness so mode commits can move
+      // off interstitial immediately, even before full stream maps resolve.
       return explicit;
     }
 
     if (cue.showState === "preshow") {
-      return streamMap.preshow ? "preshow" : null;
+      return "preshow";
     }
     if (cue.showState === "introduction") {
-      return streamMap.introduction ? "introduction" : null;
+      return "introduction";
     }
     if (cue.showState === "ending") {
-      return streamMap.ending ? "ending" : null;
+      return "ending";
     }
     if (interstitialActive && streamMap.interstitial) {
       return "interstitial";
     }
     if (cue.showState === "main") {
       if (outputMode.includes("dynamic")) {
-        return streamMap.mainDynamic ? "mainDynamic" : null;
+        return "mainDynamic";
       }
       if (outputMode.includes("static") || outputMode === "program") {
-        return streamMap.mainStatic ? "mainStatic" : null;
+        return "mainStatic";
       }
       return (streamMap.mainDynamic ? "mainDynamic" : null) ?? (streamMap.mainStatic ? "mainStatic" : null);
     }
@@ -547,7 +575,12 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
 
   const fallbackOutputForState = (
     showState: ShowState
-  ): Pick<CueCommand["payload"], "outputMode" | "showFixed" | "showDynamic" | "interstitialActive"> => {
+  ): {
+    outputMode: string;
+    showFixed: boolean;
+    showDynamic: boolean;
+    interstitialActive: boolean;
+  } => {
     switch (showState) {
       case "preshow":
       case "introduction":
@@ -603,6 +636,24 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   );
   let latestActiveScene: ShowSceneKey | null = inferActiveSceneFromCue(latestCue, latestStreamMap);
   let latestCueVersion = latestCue.version;
+  let latestCatalog: ShowMediaCatalog | null = loadedCatalog;
+  let latestCatalogVersion: string | null = latestCatalog?.version ?? null;
+  let latestInterstitialClipId: string | null = null;
+  let latestDynamicClipId: string | null = null;
+  const interstitialNoRepeatWindow = Math.max(0, Math.min(8, Math.round(deps.config.CONDUCTOR_INTERSTITIAL_NO_REPEAT)));
+  const dynamicSwitchQuantumMs = Math.max(
+    50,
+    Math.min(2_000, Math.round(deps.config.CONDUCTOR_DYNAMIC_SWITCH_QUANTUM_MS))
+  );
+  const orientationSwitchDebounceMs = Math.max(
+    50,
+    Math.min(2_000, Math.round(deps.config.CONDUCTOR_ORIENTATION_SWITCH_DEBOUNCE_MS))
+  );
+  let interstitialRecentClipIds: string[] = [];
+  let interstitialRotationTimer: NodeJS.Timeout | null = null;
+  let dynamicClipCommitTimer: NodeJS.Timeout | null = null;
+  let pendingDynamicClipId: string | null = null;
+  let catalogManagedDynamicClipIds = new Set<string>();
   const syncHealthByDevice = new Map<string, SyncHealthSample>();
   const activationDeltaSamplesMs: number[] = [];
   const activationMissSamplesMs: number[] = [];
@@ -631,6 +682,122 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     }
     return null;
   };
+
+  const clipByMasterUrl = (
+    clips: ShowCatalogClipEntry[],
+    masterUrl: string | undefined
+  ): ShowCatalogClipEntry | null => {
+    if (!masterUrl) {
+      return null;
+    }
+    return clips.find((clip) => clip.masterUrl === masterUrl) ?? null;
+  };
+
+  const interstitialCatalogClips = (): ShowCatalogClipEntry[] => latestCatalog?.interstitial ?? [];
+  const dynamicCatalogClips = (): ShowCatalogClipEntry[] => latestCatalog?.dynamic ?? [];
+
+  const dynamicManifestFromCatalog = (
+    catalog: ShowMediaCatalog | null
+  ): ProgramProceduralState["dynamicBinManifest"] => {
+    if (!catalog || catalog.dynamic.length === 0) {
+      return [];
+    }
+    return catalog.dynamic.map((clip) => ({
+      id: clip.clipId,
+      mediaRef: clip.masterUrl,
+      tags: Array.isArray(clip.tags) ? clip.tags.filter((tag): tag is string => typeof tag === "string") : [],
+      weight: Math.max(0, Number.isFinite(clip.weight) ? clip.weight : 1),
+      scopes: ["mainDynamic", "dynamic"]
+    }));
+  };
+
+  const syncDynamicManifestFromCatalog = (catalog: ShowMediaCatalog | null): void => {
+    const nextManifest = dynamicManifestFromCatalog(catalog);
+    if (nextManifest.length === 0) {
+      return;
+    }
+
+    const currentManifest = baseProceduralState.dynamicBinManifest;
+    const currentIsCatalogManaged =
+      currentManifest.length === 0 ||
+      (catalogManagedDynamicClipIds.size > 0 &&
+        currentManifest.every((clip) => catalogManagedDynamicClipIds.has(clip.id)));
+
+    if (!currentIsCatalogManaged) {
+      return;
+    }
+
+    const previousClipId = baseProceduralState.dynamicBinClipId;
+    const fallbackIndex = Math.max(0, Math.min(nextManifest.length - 1, baseProceduralState.dynamicBinIndex));
+    const nextIndexCandidate = previousClipId ? nextManifest.findIndex((clip) => clip.id === previousClipId) : -1;
+    const nextIndex = nextIndexCandidate >= 0 ? nextIndexCandidate : fallbackIndex;
+    const nextSelection =
+      nextManifest.length <= 1 ? 0 : nextIndex / Math.max(1, nextManifest.length - 1);
+    const nextClipId = nextManifest[nextIndex]?.id ?? null;
+
+    baseProceduralState = normalizeProceduralState(
+      {
+        ...baseProceduralState,
+        dynamicBinManifest: nextManifest,
+        dynamicBinIndex: nextIndex,
+        dynamicBinSelection: nextSelection,
+        dynamicBinClipId: nextClipId
+      },
+      baseProceduralState
+    );
+    effectiveProceduralState = normalizeProceduralState(
+      {
+        ...effectiveProceduralState,
+        dynamicBinManifest: nextManifest,
+        dynamicBinIndex: nextIndex,
+        dynamicBinSelection: nextSelection,
+        dynamicBinClipId: nextClipId
+      },
+      effectiveProceduralState
+    );
+    catalogManagedDynamicClipIds = new Set(nextManifest.map((clip) => clip.id));
+  };
+
+  const applyCatalog = (catalog: ShowMediaCatalog | null): void => {
+    latestCatalog = catalog;
+    latestCatalogVersion = catalog?.version ?? null;
+    configuredStreamMap = buildConfiguredStreamMap(
+      catalog ? streamMapFromCatalogStaticEntries(catalog) : {}
+    );
+    latestStreamMap = mergeStreamMaps(configuredStreamMap, latestStreamMap);
+    syncDynamicManifestFromCatalog(catalog);
+
+    const interstitialMatch = clipByMasterUrl(interstitialCatalogClips(), latestStreamMap.interstitial);
+    latestInterstitialClipId = interstitialMatch?.clipId ?? catalog?.interstitial[0]?.clipId ?? null;
+    interstitialRecentClipIds = latestInterstitialClipId ? [latestInterstitialClipId] : [];
+    const dynamicMatch = clipByMasterUrl(dynamicCatalogClips(), latestStreamMap.mainDynamic);
+    latestDynamicClipId = dynamicMatch?.clipId ?? catalog?.dynamic[0]?.clipId ?? null;
+  };
+
+  applyCatalog(latestCatalog);
+
+  let catalogRefreshTimer: NodeJS.Timeout | null = null;
+  const refreshCatalog = async (): Promise<void> => {
+    if (!configuredCatalogURL) {
+      return;
+    }
+    const next = await loadShowMediaCatalog(configuredCatalogURL);
+    if (!next) {
+      return;
+    }
+    if (latestCatalogVersion === next.version) {
+      return;
+    }
+    applyCatalog(next);
+    broadcastShowSnapshot();
+  };
+
+  if (configuredCatalogURL) {
+    catalogRefreshTimer = setInterval(() => {
+      void refreshCatalog();
+    }, 15_000);
+    catalogRefreshTimer.unref();
+  }
 
   const percentile = (values: number[], q: number): number => {
     if (values.length === 0) {
@@ -827,6 +994,34 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       configuredStreamMap,
       mergeStreamMaps(latestStreamMap, parseStreamMap(payload))
     );
+    const incomingCatalogVersion = typeof payload.showCatalogVersion === "string" ? payload.showCatalogVersion : null;
+    if (incomingCatalogVersion && incomingCatalogVersion.length > 0) {
+      latestCatalogVersion = incomingCatalogVersion;
+    }
+    const incomingInterstitialClipId =
+      typeof payload.showInterstitialClipId === "string" ? payload.showInterstitialClipId : null;
+    const incomingDynamicClipId =
+      typeof payload.showDynamicClipId === "string" ? payload.showDynamicClipId : null;
+    if (incomingInterstitialClipId) {
+      latestInterstitialClipId = incomingInterstitialClipId;
+      interstitialRecentClipIds.push(incomingInterstitialClipId);
+      if (interstitialRecentClipIds.length > 24) {
+        interstitialRecentClipIds.splice(0, interstitialRecentClipIds.length - 24);
+      }
+    } else {
+      const inferred = clipByMasterUrl(interstitialCatalogClips(), latestStreamMap.interstitial);
+      if (inferred?.clipId) {
+        latestInterstitialClipId = inferred.clipId;
+      }
+    }
+    if (incomingDynamicClipId) {
+      latestDynamicClipId = incomingDynamicClipId;
+    } else {
+      const inferred = clipByMasterUrl(dynamicCatalogClips(), latestStreamMap.mainDynamic);
+      if (inferred?.clipId) {
+        latestDynamicClipId = inferred.clipId;
+      }
+    }
     const activeScene = inferActiveSceneFromCue(cue, latestStreamMap);
     if (activeScene) {
       latestActiveScene = activeScene;
@@ -838,9 +1033,17 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   const buildShowSnapshotPayload = (): ShowSnapshotPayload => {
     const snapshot = deps.show.snapshot();
     const cuePayload = (latestCue.payload ?? {}) as Record<string, unknown>;
+    const cuePayloadWithMedia: Record<string, unknown> = {
+      ...cuePayload,
+      showInterstitialClipId: latestInterstitialClipId ?? undefined,
+      showDynamicClipId: latestDynamicClipId ?? undefined,
+      showCatalogVersion: latestCatalogVersion ?? undefined,
+      dynamicSwitchQuantumMs,
+      orientationSwitchDebounceMs
+    };
     latestStreamMap = mergeStreamMaps(
       configuredStreamMap,
-      mergeStreamMaps(latestStreamMap, parseStreamMap(cuePayload))
+      mergeStreamMaps(latestStreamMap, parseStreamMap(cuePayloadWithMedia))
     );
     const activeScene = inferActiveSceneFromCue(latestCue, latestStreamMap);
     if (activeScene) {
@@ -872,7 +1075,10 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       cueVersion: latestCueVersion,
       activeScene: latestActiveScene ?? undefined,
       streamMap: Object.keys(latestStreamMap).length > 0 ? latestStreamMap : undefined,
-      cuePayload,
+      showInterstitialClipId: latestInterstitialClipId ?? undefined,
+      showDynamicClipId: latestDynamicClipId ?? undefined,
+      showCatalogVersion: latestCatalogVersion ?? undefined,
+      cuePayload: cuePayloadWithMedia,
       authorityMode: promptOrchestrator.authorityMode(),
       promptPolicy: promptOrchestrator.policy(),
       cohortSalt: promptOrchestrator.currentCohortSalt(),
@@ -916,18 +1122,14 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         typeof timedPayload.outputMode === "string" && timedPayload.outputMode.trim().length > 0
           ? timedPayload.outputMode
           : outputFallback.outputMode,
-      showFixed:
-        typeof timedPayload.showFixed === "boolean"
-          ? timedPayload.showFixed
-          : outputFallback.showFixed,
-      showDynamic:
-        typeof timedPayload.showDynamic === "boolean"
-          ? timedPayload.showDynamic
-          : outputFallback.showDynamic,
-      interstitialActive:
-        typeof timedPayload.interstitialActive === "boolean"
-          ? timedPayload.interstitialActive
-          : outputFallback.interstitialActive,
+      showFixed: parseBoolean(timedPayload.showFixed, outputFallback.showFixed),
+      showDynamic: parseBoolean(timedPayload.showDynamic, outputFallback.showDynamic),
+      interstitialActive: parseBoolean(timedPayload.interstitialActive, outputFallback.interstitialActive),
+      showInterstitialClipId: latestInterstitialClipId,
+      showDynamicClipId: latestDynamicClipId,
+      showCatalogVersion: latestCatalogVersion,
+      dynamicSwitchQuantumMs,
+      orientationSwitchDebounceMs,
       showStreamMap: latestStreamMap
     };
 
@@ -944,7 +1146,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       const activeRef = latestStreamMap[latestActiveScene];
       if (activeRef) {
         nextPayload.showFixedMediaRef = activeRef;
-        nextPayload.showFixedMediaMime = "application/vnd.apple.mpegurl";
+        nextPayload.showFixedMediaMime = inferMediaMimeType(activeRef);
       }
     }
 
@@ -953,6 +1155,244 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       payload: nextPayload,
       version: latestCueVersion
     };
+  };
+
+  const clearInterstitialRotationTimer = (): void => {
+    if (interstitialRotationTimer) {
+      clearTimeout(interstitialRotationTimer);
+      interstitialRotationTimer = null;
+    }
+  };
+
+  const clearDynamicClipCommitTimer = (): void => {
+    if (dynamicClipCommitTimer) {
+      clearTimeout(dynamicClipCommitTimer);
+      dynamicClipCommitTimer = null;
+    }
+  };
+
+  const shouldRunInterstitialRoulette = (): boolean => {
+    if (latestActiveScene !== "interstitial") {
+      return false;
+    }
+    const payload = (latestCue.payload ?? {}) as Record<string, unknown>;
+    const engineRunning = parseBoolean(payload.engineRunning, latestCue.showState !== "idle");
+    return engineRunning;
+  };
+
+  const dispatchMediaCueUpdate = (
+    reason: string,
+    options: {
+      streamMapOverride?: ShowStreamMap;
+      payloadOverride?: Record<string, unknown>;
+      forceActiveScene?: ShowSceneKey;
+    }
+  ): CueCommand | null => {
+    const snapshot = deps.show.snapshot();
+    latestCueVersion = Math.max(latestCueVersion, latestCue.version) + 1;
+    latestStreamMap = mergeStreamMaps(
+      configuredStreamMap,
+      mergeStreamMaps(latestStreamMap, options.streamMapOverride ?? {})
+    );
+
+    const payloadBase = (latestCue.payload ?? {}) as Record<string, unknown>;
+    const payload: Record<string, unknown> = {
+      ...payloadBase,
+      cueVersion: latestCueVersion,
+      dynamicSwitchQuantumMs,
+      orientationSwitchDebounceMs,
+      showCatalogVersion: latestCatalogVersion ?? undefined,
+      showInterstitialClipId: latestInterstitialClipId ?? undefined,
+      showDynamicClipId: latestDynamicClipId ?? undefined,
+      showStreamMap: latestStreamMap,
+      ...options.payloadOverride
+    };
+
+    for (const key of sceneKeys) {
+      const value = latestStreamMap[key];
+      if (value) {
+        payload[streamPayloadFieldByScene[key]] = value;
+      }
+    }
+
+    const forcedScene = options.forceActiveScene;
+    if (forcedScene) {
+      payload.showActiveScene = forcedScene;
+      payload.activeSceneKey = forcedScene;
+      const activeRef = latestStreamMap[forcedScene];
+      if (activeRef) {
+        payload.showFixedMediaRef = activeRef;
+        payload.showFixedMediaMime = inferMediaMimeType(activeRef);
+      }
+    }
+
+    const cue: CueCommand = {
+      cueId: `media:${reason}:${latestCueVersion}:${Date.now()}`,
+      showState: latestCue.showState,
+      logicalTime: snapshot.logicalTime,
+      payload,
+      version: latestCueVersion,
+      action: "jump"
+    };
+
+    const dispatchedCue = broadcastCue(cue);
+    latestCue = dispatchedCue;
+    broadcastShowSnapshot();
+    return dispatchedCue;
+  };
+
+  const scheduleNextInterstitialRotation = (delayMs: number): void => {
+    clearInterstitialRotationTimer();
+    interstitialRotationTimer = setTimeout(() => {
+      if (!shouldRunInterstitialRoulette()) {
+        clearInterstitialRotationTimer();
+        return;
+      }
+      const selected = pickCatalogClip(
+        interstitialCatalogClips(),
+        interstitialRecentClipIds,
+        interstitialNoRepeatWindow
+      );
+      if (!selected) {
+        return;
+      }
+      latestInterstitialClipId = selected.clipId;
+      interstitialRecentClipIds.push(selected.clipId);
+      if (interstitialRecentClipIds.length > 32) {
+        interstitialRecentClipIds.splice(0, interstitialRecentClipIds.length - 32);
+      }
+
+      const dispatched = dispatchMediaCueUpdate("interstitial_roulette", {
+        streamMapOverride: {
+          interstitial: selected.masterUrl
+        },
+        payloadOverride: {
+          outputMode: "interstitial_loop",
+          showFixed: true,
+          showDynamic: false,
+          interstitialActive: true,
+          showInterstitialClipId: selected.clipId
+        },
+        forceActiveScene: "interstitial"
+      });
+      const leadMs = parseFiniteNumber(
+        dispatched?.leadMs ?? ((dispatched?.payload ?? {}) as Record<string, unknown>).leadMs
+      ) ?? 0;
+      const nextDelay = Math.max(500, selected.durationMs - Math.round(leadMs));
+      scheduleNextInterstitialRotation(nextDelay);
+    }, Math.max(250, Math.round(delayMs)));
+    interstitialRotationTimer.unref();
+  };
+
+  const ensureInterstitialRoulette = (): void => {
+    if (!shouldRunInterstitialRoulette()) {
+      clearInterstitialRotationTimer();
+      return;
+    }
+    if (interstitialRotationTimer) {
+      return;
+    }
+    const clips = interstitialCatalogClips();
+    if (clips.length === 0) {
+      return;
+    }
+
+    const currentClip =
+      findCatalogClipById(clips, latestInterstitialClipId) ??
+      clipByMasterUrl(clips, latestStreamMap.interstitial) ??
+      null;
+    if (!currentClip) {
+      scheduleNextInterstitialRotation(10);
+      return;
+    }
+    latestInterstitialClipId = currentClip.clipId;
+    interstitialRecentClipIds.push(currentClip.clipId);
+    if (interstitialRecentClipIds.length > 32) {
+      interstitialRecentClipIds.splice(0, interstitialRecentClipIds.length - 32);
+    }
+    const cuePayload = (latestCue.payload ?? {}) as Record<string, unknown>;
+    if (
+      latestStreamMap.interstitial !== currentClip.masterUrl ||
+      cuePayload.showInterstitialClipId !== currentClip.clipId
+    ) {
+      dispatchMediaCueUpdate("interstitial_seed", {
+        streamMapOverride: {
+          interstitial: currentClip.masterUrl
+        },
+        payloadOverride: {
+          outputMode: "interstitial_loop",
+          showFixed: true,
+          showDynamic: false,
+          interstitialActive: true,
+          showInterstitialClipId: currentClip.clipId
+        },
+        forceActiveScene: "interstitial"
+      });
+    }
+    scheduleNextInterstitialRotation(currentClip.durationMs);
+  };
+
+  const flushDynamicClipCommit = (): void => {
+    clearDynamicClipCommitTimer();
+    const targetClipId = pendingDynamicClipId;
+    pendingDynamicClipId = null;
+    if (!targetClipId) {
+      return;
+    }
+    const target = findCatalogClipById(dynamicCatalogClips(), targetClipId);
+    if (!target) {
+      return;
+    }
+    if (target.clipId === latestDynamicClipId && latestStreamMap.mainDynamic === target.masterUrl) {
+      return;
+    }
+    latestDynamicClipId = target.clipId;
+    dispatchMediaCueUpdate("dynamic_clip_commit", {
+      streamMapOverride: {
+        mainDynamic: target.masterUrl
+      },
+      payloadOverride: {
+        showDynamicClipId: target.clipId
+      }
+    });
+  };
+
+  const scheduleDynamicClipCommit = (clipId: string | null): void => {
+    if (!clipId) {
+      return;
+    }
+    pendingDynamicClipId = clipId;
+    if (dynamicClipCommitTimer) {
+      return;
+    }
+    const now = Date.now();
+    const quantum = Math.max(50, dynamicSwitchQuantumMs);
+    const remainder = now % quantum;
+    const delayMs = remainder === 0 ? quantum : quantum - remainder;
+    dynamicClipCommitTimer = setTimeout(() => {
+      flushDynamicClipCommit();
+    }, Math.max(5, delayMs));
+    dynamicClipCommitTimer.unref();
+  };
+
+  const updateMediaSchedulersAfterCue = (cue: CueCommand): void => {
+    const payload = (cue.payload ?? {}) as Record<string, unknown>;
+    latestCatalogVersion = typeof payload.showCatalogVersion === "string" ? payload.showCatalogVersion : latestCatalogVersion;
+    latestInterstitialClipId =
+      (typeof payload.showInterstitialClipId === "string" ? payload.showInterstitialClipId : latestInterstitialClipId) ??
+      clipByMasterUrl(interstitialCatalogClips(), latestStreamMap.interstitial)?.clipId ??
+      null;
+    latestDynamicClipId =
+      (typeof payload.showDynamicClipId === "string" ? payload.showDynamicClipId : latestDynamicClipId) ??
+      clipByMasterUrl(dynamicCatalogClips(), latestStreamMap.mainDynamic)?.clipId ??
+      null;
+    ensureInterstitialRoulette();
+    if (latestActiveScene === "mainDynamic") {
+      scheduleDynamicClipCommit(effectiveProceduralState.dynamicBinClipId ?? latestDynamicClipId);
+    } else {
+      clearDynamicClipCommitTimer();
+      pendingDynamicClipId = null;
+    }
   };
 
   deps.crowdPickPulse.tick(0, Date.now());
@@ -973,6 +1413,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
   });
   deps.audioOpsStateHub.setTextScene(initialScene);
   deps.audioOpsStateHub.setProceduralState(baseProceduralState);
+  ensureInterstitialRoulette();
 
   wsApp.get("/ws/harness", { websocket: true }, (socket) => {
     harnessSockets.add(socket);
@@ -1080,6 +1521,13 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       }
 
       if (inbound.kind === "procedural_state") {
+        if (
+          Array.isArray(inbound.data.dynamicBinManifest) &&
+          inbound.data.dynamicBinManifest.length > 0
+        ) {
+          // Explicit harness manifests opt out of catalog-managed dynamic bins.
+          catalogManagedDynamicClipIds.clear();
+        }
         baseProceduralState = normalizeProceduralState(inbound.data, baseProceduralState);
         composeAndBroadcastProceduralState();
         composeAndBroadcastTextScene(true);
@@ -1181,6 +1629,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
           patchName: keyboardPatch.patchName,
           bank: keyboardPatch.bank,
           program: keyboardPatch.program,
+          returnBusStrategy: latestKeyboardState?.patch.returnBusStrategy,
           updatedAt: keyboardPatch.updatedAt
         };
         if (latestKeyboardState) {
@@ -1690,10 +2139,20 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
         });
         broadcastAudienceVector(aggregate);
 
-        if (result.slotPick && baseProceduralState.dynamicBinManifest.length > 0) {
-          const preferredIndex = baseProceduralState.dynamicBinManifest.findIndex(
-            (clip) => clip.id === result.slotPick?.takeId || clip.id === result.slotPick?.slotId
-          );
+        const selectedChoice = resolvePromptChoiceToken(response);
+        const clipPromptAction =
+          result.action === "direct_slot_a" ||
+          result.action === "direct_slot_b" ||
+          result.action === "direct_take_next" ||
+          result.action === "clip_select" ||
+          result.action === "clip_tension" ||
+          result.action === "clip_release";
+
+        if (clipPromptAction && baseProceduralState.dynamicBinManifest.length > 0) {
+          const preferredIndex = baseProceduralState.dynamicBinManifest.findIndex((clip) => {
+            const clipId = clip.id.toLowerCase();
+            return clipId === selectedChoice;
+          });
           if (preferredIndex >= 0) {
             baseProceduralState = normalizeProceduralState(
               {
@@ -1703,6 +2162,19 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
                     ? 0
                     : preferredIndex / Math.max(1, baseProceduralState.dynamicBinManifest.length - 1),
                 dynamicBinIndex: preferredIndex
+              },
+              baseProceduralState
+            );
+          }
+        }
+
+        if (result.action === "blend_select") {
+          const selectedPreset = toPromptBlendPreset(selectedChoice, baseProceduralState.splitLayout);
+          if (selectedPreset) {
+            baseProceduralState = normalizeProceduralState(
+              {
+                ...baseProceduralState,
+                compositorPreset: selectedPreset
               },
               baseProceduralState
             );
@@ -1723,6 +2195,43 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
             },
             baseProceduralState
           );
+        }
+
+        if (result.action === "split_type") {
+          const requestedSplit = toPromptSplitLayout(selectedChoice);
+          if (requestedSplit) {
+            baseProceduralState = normalizeProceduralState(
+              {
+                ...baseProceduralState,
+                splitLayout: requestedSplit
+              },
+              baseProceduralState
+            );
+          }
+        }
+
+        if (result.action === "split_amount" && response.dragVector) {
+          const nextSplitAmount = clamp01Number(0.5 + response.dragVector.x * 0.35);
+          baseProceduralState = normalizeProceduralState(
+            {
+              ...baseProceduralState,
+              splitAmount: nextSplitAmount
+            },
+            baseProceduralState
+          );
+        }
+
+        if (result.action === "pip_position") {
+          const pipPosition = toPromptPipPosition(selectedChoice);
+          if (pipPosition) {
+            baseProceduralState = normalizeProceduralState(
+              {
+                ...baseProceduralState,
+                pipPosition
+              },
+              baseProceduralState
+            );
+          }
         }
 
         if (result.domain === "text") {
@@ -2009,7 +2518,9 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
       participantCount: audienceField.snapshot().participantCount,
       entropy: deps.lightingField.snapshot().entropy,
       audioFlux: lastAudioFeatures.flux,
-      connectedHashedIds: [...deviceSockets.keys()]
+      connectedHashedIds: [...deviceSockets.keys()],
+      availableDynamicClipIds: baseProceduralState.dynamicBinManifest.map((clip) => clip.id),
+      splitLayout: baseProceduralState.splitLayout
     });
     if (dispatches.length === 0) {
       return;
@@ -2076,6 +2587,9 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     );
     deps.audioOpsStateHub.setProceduralState(effectiveProceduralState);
     broadcastProceduralState(effectiveProceduralState);
+    if (latestActiveScene === "mainDynamic") {
+      scheduleDynamicClipCommit(effectiveProceduralState.dynamicBinClipId);
+    }
   }
 
   function composeAndBroadcastTextScene(force: boolean, cueIdOverride?: string): void {
@@ -2748,10 +3262,11 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
     });
   }
 
-  function broadcastCue(cue: CueCommand): void {
+  function broadcastCue(cue: CueCommand): CueCommand {
     const enriched = enrichCuePayload(cue);
     latestCue = enriched;
     syncCueMediaState(enriched);
+    updateMediaSchedulersAfterCue(enriched);
     const envelope = {
       kind: "cue",
       data: enriched,
@@ -2760,6 +3275,7 @@ export const registerWsRoutes = async (app: FastifyInstance, deps: WsDependencie
 
     broadcastToDevices(envelope);
     broadcastToHarness(envelope);
+    return enriched;
   }
 
   function broadcastShowSnapshot(): void {
@@ -3373,6 +3889,58 @@ const normalizePromptResponse = (value: Partial<PromptResponsePayload>): PromptR
   };
 };
 
+const normalizePromptChoiceToken = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/_/g, "-");
+
+const resolvePromptChoiceToken = (response: PromptResponsePayload): string => {
+  const candidate =
+    response.slotPick?.takeId ??
+    response.slotPick?.slotId ??
+    response.tapChoice ??
+    "";
+  return normalizePromptChoiceToken(candidate);
+};
+
+const toPromptBlendPreset = (choice: string, splitLayout: SplitLayout): CompositorPreset | null => {
+  if (choice === "normal" || choice === "blend") {
+    return "blend";
+  }
+  if (choice === "add" || choice === "lighter") {
+    return splitLayout === "pip" ? "blend" : "add";
+  }
+  if (choice === "exclusion") {
+    return "exclusion";
+  }
+  if (choice === "screen") {
+    return "screen";
+  }
+  return null;
+};
+
+const toPromptPipPosition = (choice: string): ProgramProceduralState["pipPosition"] | null => {
+  if (choice === "top-left" || choice === "top-right" || choice === "bottom-left" || choice === "bottom-right") {
+    return choice;
+  }
+  return null;
+};
+
+const toPromptSplitLayout = (choice: string): SplitLayout | null => {
+  if (choice === "split-2" || choice === "split2" || choice === "2-up") {
+    return "split-2";
+  }
+  if (choice === "split-3" || choice === "split3" || choice === "3-up") {
+    return "split-3";
+  }
+  if (choice === "split-4" || choice === "split4" || choice === "4-up" || choice === "grid") {
+    return "split-4";
+  }
+  return null;
+};
+
 const normalizeKeyboardHostLink = (value: unknown): KeyboardStatePayload["hostLink"] => {
   if (value === "online" || value === "connecting" || value === "degraded" || value === "offline") {
     return value;
@@ -3395,6 +3963,10 @@ const normalizeKeyboardPatchSnapshot = (
       : fallback?.patch.patchName;
   const bankRaw = typeof payload.bank === "number" ? payload.bank : fallback?.patch.bank ?? 0;
   const programRaw = typeof payload.program === "number" ? payload.program : fallback?.patch.program ?? 0;
+  const returnBusStrategy =
+    typeof payload.returnBusStrategy === "string" && payload.returnBusStrategy.trim().length > 0
+      ? payload.returnBusStrategy.trim()
+      : fallback?.patch.returnBusStrategy;
   const updatedAtRaw = typeof payload.updatedAt === "number" ? payload.updatedAt : Date.now();
 
   return {
@@ -3402,6 +3974,7 @@ const normalizeKeyboardPatchSnapshot = (
     patchName,
     bank: Math.max(0, Math.min(127, Math.round(bankRaw))),
     program: Math.max(0, Math.min(127, Math.round(programRaw))),
+    returnBusStrategy,
     updatedAt: updatedAtRaw
   };
 };
@@ -3543,6 +4116,8 @@ const createDefaultProceduralState = (performerVector: ParamVector): ProgramProc
   transitionMode: "cut",
   compositorPreset: "blend",
   splitLayout: "none",
+  splitAmount: 0.5,
+  pipPosition: "top-right",
   fade: 0,
   textProbability: 0.5,
   strictLooseBlend: 0.5,
@@ -3623,6 +4198,8 @@ const normalizeProceduralState = (
     transitionMode: toTransitionMode(input.transitionMode ?? current.transitionMode),
     compositorPreset: toCompositorPreset(input.compositorPreset ?? current.compositorPreset),
     splitLayout: toSplitLayout(input.splitLayout ?? current.splitLayout),
+    splitAmount: clamp01Number(typeof input.splitAmount === "number" ? input.splitAmount : current.splitAmount ?? 0.5),
+    pipPosition: toPipPosition(input.pipPosition ?? current.pipPosition),
     fade: clamp01Number(typeof input.fade === "number" ? input.fade : current.fade),
     textProbability,
     strictLooseBlend,
@@ -3714,7 +4291,7 @@ const applyAudienceSteeringAndVariance = (
     );
 
     const transitions: TransitionMode[] = ["cut", "crossfade", "fade", "stutter"];
-    const compositors: CompositorPreset[] = ["blend", "screen", "multiply", "mask", "pip", "stutter"];
+    const compositors: CompositorPreset[] = ["blend", "add", "exclusion", "screen", "multiply", "mask", "pip", "stutter"];
     const splits: SplitLayout[] = ["none", "split-2", "split-3", "split-4", "pip"];
 
     next = normalizeProceduralState(
@@ -3741,6 +4318,8 @@ const toTransitionMode = (value: unknown): TransitionMode => {
 const toCompositorPreset = (value: unknown): CompositorPreset => {
   if (
     value === "blend" ||
+    value === "add" ||
+    value === "exclusion" ||
     value === "multiply" ||
     value === "screen" ||
     value === "mask" ||
@@ -3757,4 +4336,11 @@ const toSplitLayout = (value: unknown): SplitLayout => {
     return value;
   }
   return "none";
+};
+
+const toPipPosition = (value: unknown): ProgramProceduralState["pipPosition"] => {
+  if (value === "top-left" || value === "top-right" || value === "bottom-left" || value === "bottom-right") {
+    return value;
+  }
+  return "top-right";
 };

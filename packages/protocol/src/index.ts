@@ -49,6 +49,29 @@ export type ShowSceneKey =
 
 export type ShowStreamMap = Partial<Record<ShowSceneKey, string>>;
 
+export interface ShowCatalogClipEntry {
+  clipId: string;
+  masterUrl: string;
+  durationMs: number;
+  weight: number;
+  tags?: string[];
+}
+
+export interface ShowCatalogStaticEntry {
+  slot: string;
+  scene?: ShowSceneKey;
+  masterUrl: string;
+  clipId?: string;
+}
+
+export interface ShowMediaCatalog {
+  version: string;
+  generatedAtMs: number;
+  interstitial: ShowCatalogClipEntry[];
+  dynamic: ShowCatalogClipEntry[];
+  static: ShowCatalogStaticEntry[];
+}
+
 export type InteractionAuthorityMode = "operator_hard_override_weighted";
 
 export interface PromptPolicyPayload {
@@ -84,6 +107,9 @@ export interface ShowSnapshotPayload {
   cueVersion?: number;
   activeScene?: ShowSceneKey;
   streamMap?: ShowStreamMap;
+  showInterstitialClipId?: string;
+  showDynamicClipId?: string;
+  showCatalogVersion?: string;
   cuePayload?: Record<string, unknown>;
   authorityMode?: InteractionAuthorityMode;
   promptPolicy?: PromptPolicyPayload;
@@ -146,12 +172,15 @@ export interface ParamVector {
 export type TransitionMode = "cut" | "crossfade" | "stutter" | "fade";
 export type CompositorPreset =
   | "blend"
+  | "add"
+  | "exclusion"
   | "multiply"
   | "screen"
   | "mask"
   | "pip"
   | "stutter";
 export type SplitLayout = "none" | "split-2" | "split-3" | "split-4" | "pip";
+export type PipPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
 export type PushDeckControlKind =
   | "pad_down"
@@ -246,6 +275,8 @@ export interface ProgramProceduralState {
   transitionMode: TransitionMode;
   compositorPreset: CompositorPreset;
   splitLayout: SplitLayout;
+  splitAmount?: number;
+  pipPosition?: PipPosition;
   fade: number;
   textProbability: number;
   strictLooseBlend: number;
@@ -391,6 +422,11 @@ export type PromptAction =
   | "layout_full"
   | "layout_pip"
   | "layout_split"
+  | "clip_select"
+  | "blend_select"
+  | "pip_position"
+  | "split_type"
+  | "split_amount"
   | "clip_tension"
   | "clip_release"
   | "direct_slot_a"
@@ -545,6 +581,7 @@ export interface KeyboardPatchSnapshot {
   patchName?: string;
   bank: number;
   program: number;
+  returnBusStrategy?: string;
   updatedAt: number;
 }
 
