@@ -272,27 +272,50 @@ const getViewportAspectRatio = (): number => {
   return window.innerWidth / window.innerHeight;
 };
 
-const selectBestLevel = (hls: Hls): void => {
-  const levels = hls.levels;
-  if (levels.length <= 1) {
-    return;
+const parsePositiveMs = (value: unknown, fallback: number): number => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(50, Math.min(2_000, Math.round(value)));
   }
-  const viewportAR = getViewportAspectRatio();
-  let bestIndex = 0;
-  let bestDiff = Infinity;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return Math.max(50, Math.min(2_000, Math.round(parsed)));
+    }
+  }
+  return fallback;
+};
+
+// Pinned to landscape; portrait variants aren't guaranteed to exist in every
+// master playlist, and we want deterministic selection regardless of viewport.
+const selectBestLevelIndex = (hls: Hls): number => {
+  const levels = hls.levels;
+  if (levels.length === 0) {
+    return -1;
+  }
+  if (levels.length === 1) {
+    return 0;
+  }
+  let bestIndex = -1;
+  let bestWidth = -1;
   for (let i = 0; i < levels.length; i++) {
     const level = levels[i];
-    if (!level.width || !level.height) {
+    if (!level.width || !level.height || level.width < level.height) {
       continue;
     }
-    const levelAR = level.width / level.height;
-    const diff = Math.abs(levelAR - viewportAR);
-    if (diff < bestDiff) {
-      bestDiff = diff;
+    if (level.width > bestWidth) {
+      bestWidth = level.width;
       bestIndex = i;
     }
   }
-  hls.currentLevel = bestIndex;
+  return bestIndex >= 0 ? bestIndex : 0;
+};
+
+const selectBestLevel = (hls: Hls): number => {
+  const bestIndex = selectBestLevelIndex(hls);
+  if (bestIndex >= 0) {
+    hls.currentLevel = bestIndex;
+  }
+  return bestIndex;
 };
 
 const isJsdomEnvironment = (): boolean =>
@@ -347,6 +370,9 @@ export const FixedVideoLayer = ({
   const ref = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const prewarmHlsRef = useRef<Hls | null>(null);
+  const orientationDebounceTimerRef = useRef<number | null>(null);
+  const orientationSwapTimerRef = useRef<number | null>(null);
+  const lastViewportOrientationRef = useRef<"landscape" | "portrait" | null>(null);
   const [videoReady, setVideoReady] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
 
@@ -389,6 +415,20 @@ export const FixedVideoLayer = ({
   const explicitMimeHint =
     normalizeUrl(payload.showFixedMediaMime) ??
     normalizeUrl(payload.showFixedMime);
+  const orientationSwitchDebounceMs = useMemo(() => {
+    const env = import.meta.env as Record<string, string | undefined>;
+    return parsePositiveMs(
+      payload.orientationSwitchDebounceMs,
+      parsePositiveMs(env.VITE_ORIENTATION_SWITCH_DEBOUNCE_MS, 250)
+    );
+  }, [payload]);
+  const orientationSwitchQuantumMs = useMemo(() => {
+    const env = import.meta.env as Record<string, string | undefined>;
+    return parsePositiveMs(
+      payload.dynamicSwitchQuantumMs,
+      parsePositiveMs(env.VITE_DYNAMIC_SWITCH_QUANTUM_MS, 250)
+    );
+  }, [payload]);
   const hlsSource = source ? looksLikeHlsSource(source, explicitMimeHint) : false;
   const pendingExplicitMimeHint =
     normalizeUrl(pendingPayload.showFixedMediaMime) ??
@@ -479,6 +519,15 @@ export const FixedVideoLayer = ({
   }, [pendingHlsSource, pendingSource, source]);
 
   useEffect(() => () => {
+    if (orientationDebounceTimerRef.current !== null) {
+      window.clearTimeout(orientationDebounceTimerRef.current);
+      orientationDebounceTimerRef.current = null;
+    }
+    if (orientationSwapTimerRef.current !== null) {
+      window.clearTimeout(orientationSwapTimerRef.current);
+      orientationSwapTimerRef.current = null;
+    }
+    lastViewportOrientationRef.current = null;
     if (hlsRef.current) {
       hlsRef.current.destroy();
       hlsRef.current = null;
@@ -534,6 +583,44 @@ export const FixedVideoLayer = ({
     });
     hlsRef.current = hls;
 
+    const resolveViewportOrientation = (): "landscape" | "portrait" =>
+      getViewportAspectRatio() >= 1 ? "landscape" : "portrait";
+
+    const scheduleOrientationHandoff = (): void => {
+      if (orientationDebounceTimerRef.current !== null) {
+        window.clearTimeout(orientationDebounceTimerRef.current);
+      }
+
+      orientationDebounceTimerRef.current = window.setTimeout(() => {
+        if (hlsRef.current !== hls) {
+          return;
+        }
+
+        const targetLevel = selectBestLevelIndex(hls);
+        if (targetLevel < 0) {
+          return;
+        }
+
+        // Prewarm the upcoming aspect variant before the quantized swap.
+        hls.nextLevel = targetLevel;
+        if (orientationSwapTimerRef.current !== null) {
+          window.clearTimeout(orientationSwapTimerRef.current);
+        }
+        const now = Date.now();
+        const quantum = Math.max(50, orientationSwitchQuantumMs);
+        const remainder = now % quantum;
+        const quantizedDelay = remainder === 0 ? quantum : quantum - remainder;
+
+        orientationSwapTimerRef.current = window.setTimeout(() => {
+          if (hlsRef.current !== hls) {
+            return;
+          }
+          hls.currentLevel = targetLevel;
+          lastViewportOrientationRef.current = resolveViewportOrientation();
+        }, Math.max(20, quantizedDelay));
+      }, Math.max(50, orientationSwitchDebounceMs));
+    };
+
     hls.on(Hls.Events.ERROR, (_event, data) => {
       if (!data.fatal) {
         return;
@@ -552,7 +639,11 @@ export const FixedVideoLayer = ({
     });
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      selectBestLevel(hls);
+      const initialLevel = selectBestLevel(hls);
+      if (initialLevel >= 0) {
+        hls.nextLevel = initialLevel;
+      }
+      lastViewportOrientationRef.current = resolveViewportOrientation();
       setVideoReady(true);
       setVideoFailed(false);
       onPlaybackReadyChange?.(true);
@@ -561,7 +652,7 @@ export const FixedVideoLayer = ({
     });
 
     const onResize = (): void => {
-      selectBestLevel(hls);
+      scheduleOrientationHandoff();
     };
     window.addEventListener("resize", onResize);
 
@@ -572,12 +663,28 @@ export const FixedVideoLayer = ({
 
     return () => {
       window.removeEventListener("resize", onResize);
+      if (orientationDebounceTimerRef.current !== null) {
+        window.clearTimeout(orientationDebounceTimerRef.current);
+        orientationDebounceTimerRef.current = null;
+      }
+      if (orientationSwapTimerRef.current !== null) {
+        window.clearTimeout(orientationSwapTimerRef.current);
+        orientationSwapTimerRef.current = null;
+      }
       hls.destroy();
       if (hlsRef.current === hls) {
         hlsRef.current = null;
       }
     };
-  }, [hlsSource, onPlaybackErrorChange, onPlaybackReadyChange, playbackBindingKey, source]);
+  }, [
+    hlsSource,
+    onPlaybackErrorChange,
+    onPlaybackReadyChange,
+    orientationSwitchDebounceMs,
+    orientationSwitchQuantumMs,
+    playbackBindingKey,
+    source
+  ]);
 
   useEffect(() => {
     const video = ref.current;
